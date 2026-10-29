@@ -37,7 +37,10 @@ export default async function Admin({ searchParams }) {
         <a href="/">← Home</a>
       </p>
 
-      {justConnected && <div className="banner ok">Jobber connected.</div>}
+      {justConnected && jobber.connected && <div className="banner ok">Jobber connected.</div>}
+      {justConnected && !jobber.connected && (
+        <div className="banner bad">Jobber sign-in finished, but no tokens are saved. Tap Connect Jobber again.</div>
+      )}
       {error && (
         <div className="banner bad">{ERRORS[error] || `Jobber connection failed: ${error}`}</div>
       )}
