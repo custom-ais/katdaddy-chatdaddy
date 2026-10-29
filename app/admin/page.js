@@ -1,4 +1,4 @@
-import { getJobberConnection } from '@/lib/jobberTokens';
+import { getJobberConnection, supabaseProject } from '@/lib/jobberTokens';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +28,7 @@ export default async function Admin({ searchParams }) {
   const justConnected = searchParams?.jobber === 'connected';
   const error = searchParams?.error;
   const jobber = await getJobberConnection();
+  const project = supabaseProject();
 
   return (
     <main>
@@ -48,12 +49,21 @@ export default async function Admin({ searchParams }) {
             <span className="ok">Connected.</span> Tokens last saved {when(jobber.updatedAt)}.
             They refresh on their own when the app calls Jobber.
           </p>
+        ) : jobber.missingTable ? (
+          <p style={{ marginTop: 0 }}>
+            <span className="bad">Database not set up.</span> The table <code>{jobber.table}</code>{' '}
+            is missing in Supabase project <code>{project || 'unknown'}</code>. Run{' '}
+            <code>supabase/{jobber.table}.sql</code> in that project&apos;s SQL editor, then reload.
+          </p>
         ) : (
           <p style={{ marginTop: 0 }}>
             <span className="bad">Not connected.</span>{' '}
             {jobber.error ? jobber.error : 'Sign in to Jobber and approve access.'}
           </p>
         )}
+        <p style={{ fontSize: '0.9rem', color: 'var(--muted)' }}>
+          Supabase project: <code>{project || 'not set'}</code>
+        </p>
         <a className="btn" href="/api/jobber/oauth/start">
           {jobber.connected ? 'Reconnect Jobber' : 'Connect Jobber'}
         </a>
