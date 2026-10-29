@@ -1,3 +1,5 @@
+import { getJobberConnection } from '@/lib/jobberTokens';
+
 export const dynamic = 'force-dynamic';
 
 const SETTINGS = [
@@ -5,14 +7,27 @@ const SETTINGS = [
   ['JOBBER_CLIENT_SECRET', 'Jobber client secret'],
   ['JOBBER_REDIRECT_URI', 'Jobber redirect URI'],
   ['NEXT_PUBLIC_APP_URL', 'App URL'],
-  ['DATABASE_URL', 'Database URL'],
   ['NEXT_PUBLIC_SUPABASE_URL', 'Supabase URL'],
   ['SUPABASE_SERVICE_ROLE_KEY', 'Supabase service key'],
+  ['ADMIN_PASSWORD', 'Admin password'],
 ];
 
-export default function Admin({ searchParams }) {
-  const jobber = searchParams?.jobber;
+const ERRORS = {
+  missing_jobber_settings: 'Jobber client ID or redirect URI is not set on this deployment.',
+  missing_code: 'Jobber did not send back an authorization code.',
+  state_mismatch: 'The sign-in did not start from this page. Click Connect Jobber and try again.',
+  token_exchange_failed: 'Jobber rejected the sign-in. Check the client ID, secret and redirect URI.',
+  could_not_save_tokens: 'Jobber signed in, but the tokens could not be saved to the database.',
+};
+
+function when(iso) {
+  return new Date(iso).toLocaleString('en-US', { timeZone: 'America/Phoenix' });
+}
+
+export default async function Admin({ searchParams }) {
+  const justConnected = searchParams?.jobber === 'connected';
   const error = searchParams?.error;
+  const jobber = await getJobberConnection();
 
   return (
     <main>
@@ -21,16 +36,26 @@ export default function Admin({ searchParams }) {
         <a href="/">← Home</a>
       </p>
 
-      {jobber === 'connected' && <div className="banner ok">Jobber connected.</div>}
-      {error && <div className="banner bad">Jobber connection failed: {error}</div>}
+      {justConnected && <div className="banner ok">Jobber connected.</div>}
+      {error && (
+        <div className="banner bad">{ERRORS[error] || `Jobber connection failed: ${error}`}</div>
+      )}
 
       <div className="card">
         <h2>Jobber</h2>
-        <p style={{ marginTop: 0 }}>
-          Sign in to Jobber and approve access. You will come back here when it finishes.
-        </p>
+        {jobber.connected ? (
+          <p style={{ marginTop: 0 }}>
+            <span className="ok">Connected.</span> Tokens last saved {when(jobber.updatedAt)}.
+            They refresh on their own when the app calls Jobber.
+          </p>
+        ) : (
+          <p style={{ marginTop: 0 }}>
+            <span className="bad">Not connected.</span>{' '}
+            {jobber.error ? jobber.error : 'Sign in to Jobber and approve access.'}
+          </p>
+        )}
         <a className="btn" href="/api/jobber/oauth/start">
-          Connect Jobber
+          {jobber.connected ? 'Reconnect Jobber' : 'Connect Jobber'}
         </a>
       </div>
 
