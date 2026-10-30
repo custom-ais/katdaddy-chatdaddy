@@ -34,6 +34,7 @@ export const initialSession = () => ({
   property: {},
   concerns: [],
   concernSkipped: false,
+  symptomConflict: null, // { tries } while BOB is waiting for a typed clarification
   safety: null,
   explained: [],
   addOns: {},
@@ -67,6 +68,7 @@ export const QUESTIONS = {
     options: ["Dries in one normal cycle", "Takes about 2 cycles", "Takes 3 or more cycles", "Dryer is overheating or shutting off", "It's showing an airflow error code"],
     multi: true,
   },
+  symptomClarify: { text: "Those answers don't match. How many drying cycles does it usually take? Please type it out in your own words.", options: [] },
   animals: { text: "Have you noticed any bird nests, pests, or animal activity around the outside vent?", options: ["Yes, signs of animals", "No signs", "Not sure"] },
   concern: { text: "In a sentence, what's going on with the vent? For example: disconnected behind the dryer, crushed, or needs rerouting.", options: ["Skip"] },
 };
@@ -190,12 +192,39 @@ function parseField(key, t) {
 
 export function parseSymptoms(t) {
   const out = [];
-  if (/\b(?:one normal cycle|normal cycle|dries (?:fine|normally|in one)|working normal(?:ly)?|no problems?)\b/.test(t)) out.push("normal");
-  if (/\b(?:about 2 cycles|2 cycles|two cycles|more than one cycle|takes (?:a )?(?:bit )?longer)\b/.test(t)) out.push("two");
+  if (/\b(?:one normal cycle|normal cycle|dries (?:fine|normally|in one)|working normal(?:ly)?|no problems?)\b/.test(t) || /(?<!than )\b(?:one|1) (?:normal )?cycle\b/.test(t)) out.push("normal");
+  if (/\b(?:about 2 cycles|2 cycles|two cycles|more than one(?: cycle| time| load| try)?|takes (?:a )?(?:bit )?longer)\b/.test(t)) out.push("two");
   if (/\b(?:3 or more|three or more|3 cycles|three cycles|3\+|multiple cycles|forever)\b/.test(t)) out.push("three");
   if (/\b(?:overheat\w*|shutting off|shuts off|hot to (?:the )?touch)\b/.test(t)) out.push("overheat");
   if (/\b(?:error code|airflow error|d80|d90|d95|check vent)\b/.test(t)) out.push("error");
   return out;
+}
+
+/** Only one drying-cycle answer can be true: one normal cycle, about two, or three or more. */
+export function cycleConflict(found) {
+  return found.filter((x) => ["normal", "two", "three"].includes(x)).length > 1;
+}
+
+function learnSymptoms(t, s, clarifying) {
+  const found = [...new Set(parseSymptoms(t))];
+  const tries = s.symptomConflict?.tries || 1;
+  const settle = (list) => {
+    s.property.symptoms = list;
+    s.symptomConflict = null;
+  };
+  // Contradictory answers are never guessed at: BOB asks for the answer in the customer's own words.
+  if (cycleConflict(found)) {
+    if (clarifying && tries >= 2) return settle([]);
+    s.symptomConflict = { tries: clarifying ? tries + 1 : 1 };
+    s.pending = "symptomClarify";
+    return;
+  }
+  if (found.length) return settle(found);
+  if (UNKNOWN.test(t)) return settle([]);
+  if (clarifying) {
+    if (tries >= 2) return settle([]); // unclear twice: recorded as not sure, the technician checks on site
+    s.symptomConflict = { tries: tries + 1 };
+  }
 }
 
 /** Learn property facts from what the customer said. Questions and hypotheticals teach nothing. */
@@ -207,10 +236,8 @@ function learn(text, s) {
     if (key === "zip") {
       const m = t.match(/\b(\d{5})\b/);
       if (m) s.zip = m[1];
-    } else if (key === "symptoms") {
-      const found = parseSymptoms(t);
-      if (found.length) p.symptoms = [...new Set(found)];
-      else if (UNKNOWN.test(t)) p.symptoms = [];
+    } else if (key === "symptoms" || key === "symptomClarify") {
+      learnSymptoms(t, s, key === "symptomClarify");
     } else if (key === "concern") {
       if (/^skip$/.test(t)) s.concernSkipped = true;
       else if (t.length >= 3 && !PICKS.some(([, re]) => re.test(t)) && !WELCOME.map(normalize).includes(t)) s.concerns.push(String(text).slice(0, 500));
@@ -245,8 +272,14 @@ export function applyFacts(session, facts = {}) {
     if (values.includes(facts[key])) p[key] = facts[key];
   }
   if (Array.isArray(facts.symptoms)) {
-    const list = facts.symptoms.filter((x) => SYMPTOMS.includes(x));
-    if (list.length) p.symptoms = [...new Set(list)];
+    const list = [...new Set(facts.symptoms.filter((x) => SYMPTOMS.includes(x)))];
+    if (cycleConflict(list)) {
+      session.symptomConflict = { tries: 1 };
+      session.pending = "symptomClarify";
+    } else if (list.length) {
+      p.symptoms = list;
+      session.symptomConflict = null;
+    }
   }
   if (typeof facts.zip === "string" && /^\d{5}$/.test(facts.zip)) session.zip = facts.zip;
   if (typeof facts.concern === "string" && facts.concern.trim().length >= 3 && !session.concerns.includes(facts.concern.trim())) {
@@ -346,6 +379,16 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.stage = "evaluating";
     const q = QUESTIONS[key];
     return respond(q.text, q.options, { ...(q.multi ? { multi: true } : {}), ...(q.info ? { info: q.info } : {}) });
+  };
+
+  const askSymptomClarify = () => {
+    s.pending = "symptomClarify";
+    s.stage = "evaluating";
+    const again = (s.symptomConflict?.tries || 1) > 1;
+    const lead = again
+      ? "Sorry, I still can't tell which one is right."
+      : "Those answers don't match: a dryer can't take one cycle and more than one cycle at the same time.";
+    return respond(`${lead} Please type out how many cycles it usually takes, in your own words. For example: "it dries in one cycle" or "about two cycles".`, []);
   };
 
   const welcome = (lead = "How can I help with your dryer vent today?") => {
@@ -482,6 +525,11 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       s.pending = null;
       return respond("I need the team to confirm service coverage for that ZIP code before offering an appointment. You can send a request for review below.", [], { action: "request" });
     }
+    // A contradictory symptom answer is clarified in the customer's own words before anything else.
+    if (s.symptomConflict) {
+      if (s.pending === "symptomClarify") return askSymptomClarify();
+      s.symptomConflict = null;
+    }
     // An open $248 offer needs a yes or no before anything else.
     if (s.stage === "bundle_offer" && s.offered && !s.bundleAccepted && !s.bundleDeclined) return bundleOffer();
     // Repairs, same-day and nest removal don't depend on the home's size: show the offer
@@ -593,7 +641,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
 
   const pendingBefore = s.pending;
   learn(text, s);
-  const changed = (x) => JSON.stringify(x?.property || {}) + (x?.zip || "") + (x?.concerns?.length || 0) + Boolean(x?.concernSkipped);
+  const changed = (x) => JSON.stringify(x?.property || {}) + (x?.zip || "") + (x?.concerns?.length || 0) + Boolean(x?.concernSkipped) + "|" + (x?.symptomConflict?.tries || 0);
   // A free-text answer to "what's going on with the vent?" is recorded, not re-routed.
   if (pendingBefore === "concern" && changed(current) !== changed(s)) return next();
 

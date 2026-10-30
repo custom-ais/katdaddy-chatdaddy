@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {initialSession,turn,classify,detectSafety} from '../shared/conversation.mjs';
+import {initialSession,turn,classify,detectSafety,parseSymptoms,applyFacts,cycleConflict} from '../shared/conversation.mjs';
 import {DEFAULT_CONFIG,INITIAL_FAQS,serviceQuote,validateConfig,validateContact,phoenixDate,money} from '../shared/domain.mjs';
 import {openSlots,candidateStarts} from '../server/schedule-rules.mjs';
 const TECHS=[{id:'tech-ryan',name:'Ryan Boucher',status:'available',jobberUserId:''}];
@@ -101,3 +101,16 @@ test('Approved fixed bundle can be explained before standalone review',()=>{cons
 test('Reported smoke odor invokes emergency guidance',()=>{const r=chat('I smell smoke in my laundry room');assert.equal(r.action,'emergency');assert.match(r.reply,/911/);});
 test('Question about smoke alarms is not an active smoke report',()=>assert.equal(detectSafety('Do you inspect smoke alarms?'),null));
 test('Assistant identifies itself accurately when asked',()=>{const r=chat('Are you a real person?');assert.match(r.reply,/automated/);assert.match(r.reply,/not a person/);assert.equal(r.action,undefined);});
+
+// Contradictory drying-cycle answers are clarified in the customer's own words, never guessed.
+const atSymptoms=()=>run(['85326','Have Dryer','No','1-Story','Electric','Standard'],cleaning()).session;
+test('one normal cycle and more than one cycle is not guessed at',()=>{const r=chat('Dries in one normal cycle, Takes about 2 cycles',atSymptoms());assert.equal(r.session.pending,'symptomClarify');assert.deepEqual(r.options,[]);assert.equal(r.multi,undefined);assert.equal(r.session.property.symptoms,undefined);assert.match(r.reply,/type out/);assert.match(r.reply,/don't match/);});
+test('typed clarification resolves the contradiction and moves on',()=>{let r=chat('Dries in one normal cycle, Takes about 2 cycles',atSymptoms());r=chat('about two cycles, most loads',r.session);assert.deepEqual(r.session.property.symptoms,['two']);assert.equal(r.session.symptomConflict,null);assert.equal(r.session.pending,'animals');});
+test('typed one cycle clarifies to normal',()=>{let r=chat('It takes one cycle and sometimes more than one',atSymptoms());assert.equal(r.session.pending,'symptomClarify');r=chat('it takes one cycle every time',r.session);assert.deepEqual(r.session.property.symptoms,['normal']);});
+test('two and three cycle answers together are a contradiction',()=>{const r=chat('Takes about 2 cycles, Takes 3 or more cycles',atSymptoms());assert.equal(r.session.pending,'symptomClarify');});
+test('contradiction still asked again after an unclear typed answer',()=>{let r=chat('Dries in one normal cycle, Takes about 2 cycles',atSymptoms());r=chat('hard to say',r.session);assert.equal(r.session.pending,'symptomClarify');assert.match(r.reply,/still can't tell/);assert.equal(r.session.property.symptoms,undefined);});
+test('unclear twice is recorded as not sure and the intake continues',()=>{let r=chat('Dries in one normal cycle, Takes about 2 cycles',atSymptoms());r=chat('hard to say',r.session);r=chat('still not clear',r.session);assert.deepEqual(r.session.property.symptoms,[]);assert.equal(r.session.pending,'animals');});
+test('choosing a package during a clarification moves on',()=>{let r=chat('Dries in one normal cycle, Takes about 2 cycles',atSymptoms());r=chat('Essential · $189',r.session);assert.equal(r.session.package,'essential');assert.equal(r.session.symptomConflict,null);});
+test('overheating with one normal cycle is not a cycle contradiction',()=>{const r=chat('Dries in one normal cycle, Dryer is overheating or shutting off',atSymptoms());assert.equal(r.session.symptomConflict,null);assert.equal(r.session.stage,'review');});
+test('more than one cycle is not read as one cycle',()=>{assert.deepEqual(parseSymptoms('it takes more than one cycle'),['two']);assert.equal(cycleConflict(parseSymptoms('it takes more than one cycle')),false);});
+test('assistant-suggested contradictory cycles are not stored',()=>{const s=applyFacts(atSymptoms(),{symptoms:['normal','two']});assert.equal(s.property.symptoms,undefined);assert.equal(s.pending,'symptomClarify');assert.deepEqual(s.symptomConflict,{tries:1});});
