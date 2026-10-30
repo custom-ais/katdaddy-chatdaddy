@@ -79,6 +79,8 @@ export async function createPostgresDb(url) {
         parse: (x) => JSON.parse(x),
       },
       bigint: { to: 20, from: [20], serialize: (x) => String(x), parse: (x) => Number(x) },
+      // Values already arrive as JSON text (cast with ::jsonb); don't encode them a second time.
+      jsonb: { to: 3802, from: [3802], serialize: (x) => (typeof x === "string" ? x : JSON.stringify(x)), parse: (x) => JSON.parse(x) },
     },
     onnotice: () => {},
   });
