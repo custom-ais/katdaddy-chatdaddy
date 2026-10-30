@@ -8,7 +8,9 @@
 //   → phone verification → live Jobber times → final approval → booked in Jobber.
 //
 // Business rules (rulebook / saved September policy) that stay in force:
-//   • gas smell / smoke / fire stops everything; overheating or burning goes to team review
+//   • gas smell / smoke / fire stops everything. Overheating, shutting off mid-cycle, running hot
+//     or a burning smell is explained as a significant airflow restriction (don't use the dryer
+//     until it's cleaned; Ultimate Protection suggested) and the booking carries on
 //   • a repair-first visit starts with an assessment; repairs are quoted separately
 //   • cleaning + a repair concern gets the assessment at 50% off with the cleaning, added only on a yes
 //   • appliance problems, commercial work, complaints and "talk to a person" go to the team
@@ -158,6 +160,10 @@ const PICKS = [
   ["emergency", /^(?:book )?emergency(?: same-day)?(?: ·|$| clog relief)/],
 ];
 
+// Heat building up in the dryer: overheating, shutting off mid-cycle, running hot, a burning smell.
+// "Not heating" is the opposite (an appliance problem), so a negated "heating up" doesn't count.
+const HEAT = /\b(?:overheat\w*|shutting (?:itself )?off|shuts (?:itself )?off(?: mid)?|shut(?:ting|s)? down mid|hot to (?:the )?touch|(?<!not |n't |no )heating up|gets? (?:really |very |too |super |way too )?hot|getting (?:really |very |too |super )?hot|running hot|runs hot|too hot|burning smell|smell(?:s|ing)? (?:like )?(?:something(?: is)? |it'?s |it is )?burn(?:ing|t)|smells? hot|hot smell)\b/;
+
 export function detectSafety(text) {
   const t = normalize(text);
   if (/^(?:what|how|can|does|is|do|why)\b/.test(t) && /\b(?:prevent|risk|cause|what if|what should|what do|mean)\b/.test(t) && !/(?:my|our|there is|i smell)/.test(t)) return null;
@@ -168,7 +174,7 @@ export function detectSafety(text) {
     .replace(/\b(?:no|not|without) (?:a |any )?(?:gas (?:smell|odor|odour|leak)|smoke|flames|burning smell|overheating)\b/g, "");
   if (/\b(gas (?:smell|odor|odour|leak)|smell(?:ing)? (?:natural )?gas|smells like (?:natural )?gas|rotten eggs)\b/.test(actual)) return "gas";
   if (/\b(smell(?:ing)? smoke|smoke (?:in|from|around)|full of smoke|smoke (?:coming|is coming)|(?:see|seeing|there is|there's) smoke|smoking|on fire|flames|fire (?:in|coming|behind)|dryer (?:has |is )?smoke)\b/.test(actual)) return "fire";
-  if (/\b(burning smell|smell(?:s|ing)? (?:like )?(?:something )?burning|overheat(?:ing|s|ed)?|hot to (?:the )?touch|shutting off)\b/.test(actual)) return "stop";
+  if (HEAT.test(actual)) return "stop";
   return null;
 }
 
@@ -192,7 +198,7 @@ export function classify(text, session = initialSession()) {
   if ((repair || assessment) && session.intent === "cleaning" && !NO_CLEAN.test(t)) return { route: "bundle_offer", safety: s };
   if (repair || assessment) return { route: "assessment", safety: s };
   if (wantsCleaning) return { route: "cleaning", safety: s };
-  if (s === "stop") return { route: "review", safety: s };
+  if (s === "stop") return { route: session.route || "cleaning", safety: s }; // heat: a restriction to clean, with a warning
   if (/\b(takes? (?:too )?long|two cycles|2 cycles|multiple cycles|still damp|airflow error|d80|d90|error code)\b/.test(t)) return { route: session.route || "clarify" };
   return { route: null };
 }
@@ -241,7 +247,7 @@ export function parseSymptoms(t) {
   if (/\b(?:one normal cycle|normal cycle|dries (?:fine|normally|in one)|working normal(?:ly)?|no problems?|just moved in|preventa?tive)\b/.test(t) || /(?<!than )\b(?:one|1) (?:normal )?cycle\b/.test(t)) out.push("normal");
   if (/\b(?:about 2 cycles|2 cycles|2\+ cycles|two cycles|more than one(?: cycle| time| load| try)?|takes (?:a )?(?:bit )?longer)\b/.test(t)) out.push("two");
   if (/\b(?:3 or more|three or more|3 cycles|three cycles|3\+|multiple cycles|forever|still damp)\b/.test(t)) out.push("three");
-  if (/\b(?:overheat\w*|shutting off|shuts off|hot to (?:the )?touch)\b/.test(t)) out.push("overheat");
+  if (HEAT.test(t)) out.push("overheat");
   if (/\b(?:error code|airflow error|d80|d90|d95|check vent)\b/.test(t)) out.push("error");
   return out;
 }
@@ -462,7 +468,7 @@ const answered = (s, key) => {
  */
 export function recommendTier(p = {}) {
   const sym = p.symptoms || [];
-  const severe = sym.includes("three") || sym.includes("error");
+  const severe = sym.includes("three") || sym.includes("error") || sym.includes("overheat");
   const slow = sym.includes("two");
   const fresh = p.recentService === "Yes"; // a new or just-serviced dryer that still dries slowly points to the vent
   const tight = ["Stacked", "Pedestal"].includes(p.mount);
@@ -485,9 +491,10 @@ export function airflowAnalysis(p = {}, recommended = recommendTier(p)) {
   const paragraphs = [];
   if (sym.includes("three")) parts.push(`Taking 3 or more cycles means each load takes ${eff.times} as long to dry, so your dryer is likely running at ${eff.percent} efficiency. That usually points to a significant airflow restriction in the vent line.`);
   else if (sym.includes("two")) parts.push(`Taking about 2 cycles means each load takes ${eff.times} as long to dry, so your dryer is likely running at ${eff.percent} efficiency, a sign of a moderate airflow restriction.`);
-  else if (Array.isArray(p.symptoms) && sym.includes("normal")) parts.push("Drying in one normal cycle suggests airflow is in good shape for now.");
+  else if (Array.isArray(p.symptoms) && sym.includes("normal") && !sym.includes("overheat")) parts.push("Drying in one normal cycle suggests airflow is in good shape for now.");
+  if (sym.includes("overheat")) parts.push("Overheating or shutting off mid-cycle means hot air isn't venting properly, so heat is building up in the dryer, a sign of a significant airflow restriction. Please don't use the dryer until the dryer and vent have been cleaned.");
   if (sym.includes("error")) parts.push("The airflow error code means the dryer itself is detecting restricted airflow.");
-  const slowOrWorse = sym.includes("two") || sym.includes("three") || sym.includes("error");
+  const slowOrWorse = sym.includes("two") || sym.includes("three") || sym.includes("error") || sym.includes("overheat");
   if (p.recentService === "Yes" && slowOrWorse) parts.push("Since the dryer was purchased or serviced in the last 90 days, the slow drying most likely comes from the vent, not the dryer.");
   if (p.hasDryer === "No") parts.push("Even with no dryer connected, lint left in the line stays there, so the vent may still be clogged.");
   if (p.mount === "Stacked" || p.mount === "Pedestal") parts.push(`With a ${p.mount === "Stacked" ? "stacked" : "pedestal"} setup, the transition hose behind the dryer is often kinked or crushed, which the DryerFlex hose upgrade fixes.`);
@@ -496,7 +503,9 @@ export function airflowAnalysis(p = {}, recommended = recommendTier(p)) {
   parts.push(
     eff
       ? `At ${eff.percent} efficiency you're paying for ${eff.times} the drying time on every load. Restoring airflow brings that back down and saves energy and wear on the dryer.`
-      : "A clear vent keeps drying times short, which saves energy and wear on the dryer.",
+      : sym.includes("overheat")
+        ? "Restoring airflow lets the hot air escape again, so the dryer runs cooler and safer."
+        : "A clear vent keeps drying times short, which saves energy and wear on the dryer.",
   );
   parts.push(
     recommended === "ultimate"
@@ -532,6 +541,7 @@ export function airflowFactors(p = {}) {
   if (sym.includes("three")) f.push("Takes 3 or more cycles");
   else if (sym.includes("two")) f.push("Takes about 2 cycles");
   else if (sym.includes("normal")) f.push("Dries in one normal cycle");
+  if (sym.includes("overheat")) f.push("Overheating or shutting off");
   if (sym.includes("error")) f.push("Airflow error code");
   if (p.recentService === "Yes") f.push("Dryer new or serviced in the last 90 days");
   if (p.hasDryer === "No") f.push("No dryer connected now");
@@ -545,7 +555,9 @@ export function airflowFactors(p = {}) {
 export function airflowSummary(p = {}, recommended = recommendTier(p)) {
   const sym = p.symptoms || [];
   const eff = dryingEfficiency(p);
-  const finding = eff
+  const finding = sym.includes("overheat")
+    ? "Overheating or shutting off means heat is building up from a significant airflow restriction, so please don't use the dryer until it's cleaned."
+    : eff
     ? `Each load is taking ${eff.times} as long to dry, so your dryer is likely running at ${eff.percent} efficiency, and you're paying for that extra drying time on every load.`
     : sym.includes("error")
       ? "Your dryer is reporting restricted airflow with an error code."
@@ -553,7 +565,7 @@ export function airflowSummary(p = {}, recommended = recommendTier(p)) {
   const why =
     recommended === "ultimate"
       ? "**Ultimate Protection** adds exterior termination cleanout and a DryerFlex transition upgrade to restore full airflow, with a 3-year parts and labor warranty."
-      : eff || sym.includes("error")
+      : eff || sym.includes("error") || sym.includes("overheat")
         ? "**Premium 1-2-3 See-It-Clean** clears the full path from the appliance to the termination, with live camera proof before and after."
         : "**Premium 1-2-3 See-It-Clean** keeps it that way: a full-path cleaning with live camera proof before and after.";
   return `${finding} ${why}`;
@@ -574,12 +586,11 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   const approvedFaqs = (faqs || []).filter((f) => f && f.status !== "draft");
   s.history = [...(s.history || []).slice(-39), { role: "user", text: String(text).slice(0, 2000) }];
 
-  let ack = "";
+  let ack = "", warn = "";
   const respond = (reply, options = [], extra = {}) => {
-    if (ack) {
-      reply = `${ack}\n\n${reply}`;
-      ack = "";
-    }
+    reply = [ack, warn, reply].filter(Boolean).join("\n\n");
+    ack = "";
+    warn = "";
     s.history.push({ role: "assistant", text: reply, ...(extra.card ? { card: extra.card } : {}) });
     s.options = options;
     return { session: s, reply, options, ...extra };
@@ -998,12 +1009,30 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     ack = "Overheating needs priority attention, so let's handle this as an emergency.";
     return next();
   }
+  // Heat is a sign of a significant airflow restriction, not an emergency stop: explain it, suggest
+  // Ultimate Protection for a cleaning, and keep going. Smoke, fire and gas were handled above.
   if (safety === "stop") {
-    s.safety = "stop";
-    s.stage = "review";
-    s.serviceAccepted = false;
-    s.pending = null;
-    return respond("Stop using the dryer if you can do so safely, and arrange a professional evaluation. If there is smoke, fire, or a suspected gas leak, leave immediately and call 911 from a safe location. I'll route this to our team for review rather than book a routine cleaning.", [], { action: "request" });
+    if (!s.intent) {
+      startIntent("cleaning");
+      ack = "Let's get your dryer vent cleaning set up.";
+    }
+    if (!s.heatWarned) {
+      const cleaning = s.intent === "cleaning";
+      warn = [
+        "Significant airflow restrictions keep hot air from venting properly, so heat builds up inside the dryer, which is extremely dangerous.",
+        "If your dryer is shutting off mid-cycle, running hot, or smells like it's burning, we strongly suggest that you don't use it until your dryer and dryer vent have been cleaned properly by a professional.",
+        cleaning ? "For significant airflow restrictions, we suggest the **Ultimate Protection** package." : "",
+        "If you ever see smoke or flames, leave the home and call 911.",
+      ].filter(Boolean).join(" ");
+      s.heatWarned = true;
+    }
+    s.heatSign = true;
+    // An answer to an open question is recorded as usual below; anywhere else, note it and re-ask.
+    if (!["symptoms", "symptomClarify", "concern", "repairScope", "otherDetail"].includes(s.pending)) {
+      learn(text, s);
+      if (Array.isArray(s.property.symptoms) && !s.property.symptoms.includes("overheat")) s.property.symptoms = [...s.property.symptoms, "overheat"];
+      return next();
+    }
   }
 
   // An answer written by the AI layer: show it, then offer to continue scheduling.
@@ -1070,6 +1099,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   const changed = (x) =>
     [JSON.stringify(x?.property || {}), x?.zip || "", x?.concerns?.length || 0, Boolean(x?.concernSkipped), x?.symptomConflict?.tries || 0, x?.otherFor || "", x?.notes?.length || 0, x?.repairScope || "", x?.dryerHot, Boolean(x?.dryerOffConfirmed), Boolean(x?.concernDescribed)].join("|");
   if (changed(current) !== changed(s) && pendingBefore && !s.symptomConflict && !s.otherFor) ack = ackFor(pendingBefore);
+  if (s.heatSign && Array.isArray(s.property.symptoms) && !s.property.symptoms.includes("overheat")) s.property.symptoms = [...s.property.symptoms, "overheat"];
   if (pendingBefore === "repairScope" && s.repairScope === "Bird / Pest Infestation") {
     startIntent("nest");
     s.property.animals = "Yes";

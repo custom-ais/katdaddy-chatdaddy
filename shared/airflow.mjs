@@ -4,13 +4,15 @@
 // Cycles set the base: 1 normal cycle ≈ clear, about 2 cycles ≈ half efficiency, 3 or more ≈ severe.
 // An airflow error code, slow drying on a dryer bought or serviced in the last 90 days (so the
 // vent is the likely cause), and a stacked or pedestal setup (transition hose often crushed)
-// push it up.
+// push it up. Overheating, shutting off mid-cycle or a burning smell means heat is building up
+// because hot air can't vent: a significant (severe) restriction.
 
 export function restrictionScore(p = {}) {
   const sym = p.symptoms || [];
   const slow = sym.includes("two") || sym.includes("three");
   let score = sym.includes("three") ? 72 : sym.includes("two") ? 50 : sym.includes("normal") ? 12 : 25;
   if (sym.includes("error")) score = Math.max(score, 66);
+  if (sym.includes("overheat")) score = Math.max(score, 80);
   if (p.recentService === "Yes" && slow) score += 10;
   if (p.mount === "Stacked" || p.mount === "Pedestal") score += 5;
   return Math.max(5, Math.min(95, score));
