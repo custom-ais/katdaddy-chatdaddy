@@ -32,3 +32,12 @@ test("Jobber's ChatDaddy redirect path is accepted and requests from other sites
   const other = await h.call("/api/session", { method: "POST", body: {}, headers: { Origin: "https://evil.example" } });
   assert.equal(other.status, 403);
 });
+
+test("a failed database start is retried instead of sticking", async () => {
+  const { createStore } = await import("../server/store.mjs");
+  let calls = 0;
+  const db = { kind: "fake", tx: (fn) => fn(db), close: async () => {}, query: async () => { if (++calls === 1) throw new Error("Database: relation does not exist"); return []; } };
+  const store = createStore(db);
+  await assert.rejects(store.init(), /does not exist/);
+  await store.init();
+});

@@ -26,7 +26,10 @@ export function createStore(db, { clock = Date.now } = {}) {
         ]) {
           await q("insert into bob.settings(key,value) values($1,$2::jsonb) on conflict (key) do nothing", [key, json(value)]);
         }
-      })();
+      })().catch((error) => {
+        ready = undefined; // a failed start must not stick for the life of the server
+        throw error;
+      });
       return ready;
     },
 

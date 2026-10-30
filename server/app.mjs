@@ -496,6 +496,17 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     const pathname = url.pathname, method = req.method || "GET";
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Referrer-Policy", "no-referrer");
+    // Health answers even when the database is broken, and says why (never keys or addresses).
+    if (method === "GET" && pathname === "/api/health") {
+      try {
+        await store.init();
+        return send(200, { ok: true, version: "3.0.0", bookingEnabled: await bookingOpen(await store.config()) });
+      } catch (e) {
+        console.error("BOB health check failed:", e);
+        const reason = String(e?.message || e).replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, "[address]").replace(/[A-Za-z0-9_.-]{32,}/g, "[hidden]").slice(0, 240);
+        return send(503, { ok: false, error: "BOB can't reach its database.", reason });
+      }
+    }
     try {
       await store.init();
       if (Math.random() < 0.05) store.cleanup().catch(() => {});
