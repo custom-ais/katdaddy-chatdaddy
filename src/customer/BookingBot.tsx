@@ -515,7 +515,25 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
   useEffect(() => { mounted.current = true; void initialize(); return () => { mounted.current = false; }; }, [initialize]);
-  useEffect(() => { const t = setTimeout(() => scroll.current?.scrollTo({ top: scroll.current.scrollHeight, behavior: 'smooth' }), 120); return () => clearTimeout(t); }, [messages.length, busy, action, receipt, requestId, contactStep, options.length]);
+  // A new reply opens at its first line, so long answers are read from the top. Everything else (the customer's own message, the typing indicator, cards) scrolls to the latest point.
+  const seen = useRef(0);
+  useEffect(() => {
+    const box = scroll.current;
+    if (!box) return;
+    const t = setTimeout(() => {
+      const fresh = messages.length !== seen.current;
+      seen.current = messages.length;
+      const newest = messages[messages.length - 1];
+      const el = box.querySelector<HTMLElement>(`[data-msg="${messages.length - 1}"]`);
+      if (fresh && newest?.role === 'model' && el) {
+        const top = el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+        box.scrollTo({ top: Math.max(0, top - 12), behavior: 'smooth' });
+      } else {
+        box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+      }
+    }, 120);
+    return () => clearTimeout(t);
+  }, [messages, busy, action, receipt, requestId, contactStep, options.length]);
 
   const say = (role: Msg['role'], t: string, extra: Partial<Msg> = {}) => setMessages((m) => [...m, { role, text: t, local: true, ...extra }]);
   const onApprovalBooked = useCallback((r: any, p: boolean) => { setReceipt(r); setPending(p); setAction(''); }, []);
@@ -648,8 +666,8 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
             <h1 className="font-extrabold text-base text-white tracking-tight leading-none">Dryer Vent Squad West Valley</h1>
             <p className="text-[11px] font-semibold text-orange-400 mt-1 flex items-center gap-1.5">
               <span className={`w-1.5 h-1.5 rounded-full ${ready ? 'bg-emerald-400' : 'bg-slate-500'}`} />
-              {ready ? (config?.smartChat ? 'BOB · AI booking assistant' : 'BOB · Booking assistant') : 'Connecting…'}
-              {ready && <span className="text-slate-400 font-medium">· {config?.bookingEnabled ? 'Live schedule' : 'Requests'}</span>}
+              {ready ? (config?.smartChat ? 'BOB · AI booking assistant' : 'BOB · Booking assistant') : error ? 'Not connected yet' : 'Connecting…'}
+              {ready && <span className="text-slate-300 font-medium">· {config?.bookingEnabled ? 'Live schedule' : 'Requests'}</span>}
             </p>
           </div>
         </div>
@@ -669,7 +687,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
             {(config?.faqs || []).slice(0, 12).map((f: any) => (
-              <button key={f.id} disabled={!ready || !!contactStep} onClick={() => { setFaqOpen(false); void send(f.question); }} className="text-left p-2.5 bg-slate-700/60 hover:bg-slate-700 border border-slate-600/60 hover:border-orange-500/50 rounded-xl text-xs font-bold text-slate-200 disabled:opacity-50">
+              <button key={f.id} disabled={!ready || !!contactStep} onClick={() => { setFaqOpen(false); void send(f.question); }} className="text-left p-2.5 bg-slate-700/60 hover:bg-slate-700 border border-slate-600/60 hover:border-orange-500/50 rounded-xl text-xs font-bold text-slate-200 disabled:cursor-wait">
                 <span className="text-[10px] text-orange-400 font-extrabold block mb-0.5">{f.category}</span>{f.question}
               </button>
             ))}
@@ -682,25 +700,25 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
           <div className="flex flex-col items-center max-w-xl mx-auto py-4 animate-in">
             <div className="mb-5"><BobFace size={112} /></div>
             <h2 className="text-2xl sm:text-3xl font-black text-white mb-2 text-center tracking-tight">Hi, we're glad you're here.</h2>
-            <p className="text-slate-400 text-center mb-6 text-sm max-w-sm leading-relaxed">I'm BOB. Pick an option or just type what's going on — I'll get you an exact price and a real opening on our schedule.</p>
+            <p className="text-slate-300 text-center mb-6 text-sm max-w-sm leading-relaxed">I'm BOB. Pick an option or just type what's going on — I'll get you an exact price and a real opening on our schedule.</p>
+            {error && <div role="alert" className="mb-4 w-full text-sm font-semibold text-rose-200 bg-rose-950/60 border border-rose-400/40 rounded-xl p-3">{error} <button className="ml-2 underline font-bold" onClick={() => initialize()}>Reconnect</button></div>}
             <div className="w-full flex flex-col gap-3">
               {WELCOME_CARDS.map(([label, icon]) => (
-                <button key={label} disabled={!ready} onClick={() => send(label)} className="w-full flex items-center gap-4 p-4 bg-slate-800/90 hover:bg-slate-800 border border-slate-700/70 rounded-2xl hover:border-orange-500/50 transition-all active:scale-[0.99] group text-left disabled:opacity-50">
+                <button key={label} disabled={!ready} onClick={() => send(label)} className="w-full flex items-center gap-4 p-4 bg-slate-800/90 hover:bg-slate-800 border border-slate-700/70 rounded-2xl hover:border-orange-500/50 transition-all active:scale-[0.99] group text-left disabled:cursor-wait">
                   <div className="bg-slate-700 text-slate-300 p-3 rounded-xl group-hover:bg-orange-500 group-hover:text-white transition-all">{icon}</div>
                   <span className="font-extrabold text-slate-200 text-base flex-1 group-hover:text-white">{label}</span>
                   <ChevronRight size={20} className="text-slate-500 group-hover:text-orange-400" />
                 </button>
               ))}
             </div>
-            <p className="mt-6 text-xs text-slate-500 text-center">Smoke, fire, or a gas smell? Leave the house and call 911 from outside.</p>
-            {error && <div role="alert" className="mt-4 text-sm text-rose-300">{error} <button className="underline" onClick={() => initialize()}>Reconnect</button></div>}
+            <p className="mt-6 text-xs text-slate-300 text-center">Smoke, fire, or a gas smell? Leave the house and call 911 from outside.</p>
           </div>
         ) : (
           <>
             {messages.map((msg, i) => {
               const model = msg.role === 'model';
               return (
-                <div key={i} className={`flex w-full ${model ? 'justify-start' : 'justify-end'} animate-in`}>
+                <div key={i} data-msg={i} className={`flex w-full ${model ? 'justify-start' : 'justify-end'} animate-in`}>
                   <div className={`flex max-w-[90%] sm:max-w-[80%] gap-2.5 ${model ? 'flex-row' : 'flex-row-reverse'}`}>
                     <div className="shrink-0 mt-auto mb-1">
                       {model ? <BobFace size={32} /> : <div className="bg-slate-700 text-slate-300 p-2 rounded-full border border-slate-600"><User size={16} /></div>}
@@ -788,9 +806,9 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
           />
           <button type="submit" aria-label="Send" disabled={!ready || busy || !text.trim() || !!receipt || !!requestId} className="absolute right-1.5 p-2.5 rounded-full bg-orange-500 hover:bg-orange-600 disabled:bg-slate-700 text-white transition-all disabled:opacity-50"><Send size={16} /></button>
         </form>
-        <div className="mt-2 flex items-center justify-between max-w-3xl mx-auto text-[11px] text-slate-400">
+        <div className="mt-2 flex items-center justify-between max-w-3xl mx-auto text-[11px] text-slate-300">
           <span>BOB is Dryer Vent Squad's automated assistant</span>
-          <button className="font-bold hover:text-white disabled:opacity-40" onClick={() => send('Request a callback')} disabled={!ready || !!receipt || !!contactStep}>Contact the team</button>
+          <button className="font-bold text-slate-200 hover:text-white disabled:text-slate-400" onClick={() => send('Request a callback')} disabled={!ready || !!receipt || !!contactStep}>Contact the team</button>
         </div>
       </div>
     </div>
