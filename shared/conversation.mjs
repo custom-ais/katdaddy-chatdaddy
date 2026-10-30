@@ -321,6 +321,13 @@ export function questionOrder(s) {
 const answered = (s, key) =>
   key === "zip" ? Boolean(s.zip) : key === "concern" ? s.concerns.length > 0 || s.concernSkipped : key === "symptoms" ? Array.isArray(s.property.symptoms) : s.property[key] != null;
 
+/** What each step up adds, for comparisons. */
+const UPGRADES = {
+  performance: "before-and-after photos and a DryerFlex transition hose upgrade",
+  total: "termination cleanout and correction of significant airflow restriction",
+  restoration: "sanitation fogging, a DryerFlex transition hose upgrade, a full system reset, and a set of four wool dryer lint balls",
+};
+
 export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {}) {
   const s = structuredClone(current || initialSession());
   if (!s.v) Object.assign(s, { ...initialSession(), ...s, v: 3 });
@@ -659,14 +666,28 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return next();
   }
   if (/^(?:compare(?: packages)?|compare the packages)$/.test(t)) {
-    const options = [...TIERS.map(label), "More services"];
-    const rows = TIERS.map((f) => {
+    // Compare what the customer is actually looking at: nest work compares nest options, not the routine tiers.
+    const nestFlow = s.intent === "nest" || ["nest", "restoration"].includes(s.package) || (s.offerFamilies || []).includes("restoration");
+    const families = nestFlow ? ["nest", "restoration"] : TIERS;
+    const price = (f) => (priced ? exact(f) ?? 0 : null);
+    // Cheapest first; each step up says what the extra money adds.
+    const rows = families.map((f, i) => {
       const item = services.find((x) => x.family === f && x.active !== false);
-      return `• **${PACKAGES[f].short}${priced ? ` (${money(exact(f) ?? 0)})` : ""}**: ${(item?.description || PACKAGES[f].pitch).replace(/\.$/, "")}.`;
+      const head = `**${PACKAGES[f].short}${priced ? ` (${money(price(f))})` : ""}**`;
+      if (i === 0) return `• ${head}: ${(item?.description || PACKAGES[f].pitch).replace(/\.$/, "")}.`;
+      const more = priced && price(f) > price(families[i - 1]) ? ` for ${money(price(f) - price(families[i - 1]))} more` : "";
+      return `• ${head}: everything in ${PACKAGES[families[i - 1]].short}${more}, plus ${UPGRADES[f]}.`;
     });
+    const top = families[families.length - 1];
     s.stage = s.package ? "details" : "offer";
-    if (!s.intent) s.intent = "cleaning";
-    return respond(`Here's how the packages compare${homeLabel()}:\n\n${rows.join("\n")}`, options, { suggested: s.suggested ? label(s.suggested) : undefined });
+    if (!s.intent) s.intent = nestFlow ? "nest" : "cleaning";
+    if (nestFlow) s.offerFamilies = families;
+    const options = [...families.map(label), nestFlow ? "Ask a question" : "More services"];
+    return respond(
+      `Here's how the packages compare${homeLabel()}:\n\n${rows.join("\n")}\n\n**${PACKAGES[top].short}** is our most complete option.`,
+      options,
+      { suggested: s.suggested ? label(s.suggested) : undefined },
+    );
   }
   if (/^(?:more services|see all services|other services)$/.test(t)) {
     if (!s.intent) s.intent = "cleaning";
