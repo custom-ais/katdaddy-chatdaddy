@@ -515,19 +515,29 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
   useEffect(() => { mounted.current = true; void initialize(); return () => { mounted.current = false; }; }, [initialize]);
-  // A new reply opens at its first line, so long answers are read from the top. Everything else (the customer's own message, the typing indicator, cards) scrolls to the latest point.
+  // Chats open at the top. The welcome screen starts at its heading; a conversation that is loaded starts at its latest reply.
+  // A new reply opens at its first line. The customer's own message, the typing indicator and cards scroll to the latest point.
   const seen = useRef(0);
   useEffect(() => {
     const box = scroll.current;
     if (!box) return;
     const t = setTimeout(() => {
+      const opening = seen.current === 0;
       const fresh = messages.length !== seen.current;
       seen.current = messages.length;
       const newest = messages[messages.length - 1];
-      const el = box.querySelector<HTMLElement>(`[data-msg="${messages.length - 1}"]`);
-      if (fresh && newest?.role === 'model' && el) {
-        const top = el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
-        box.scrollTo({ top: Math.max(0, top - 12), behavior: 'smooth' });
+      const topOf = (i: number) => {
+        const el = box.querySelector<HTMLElement>(`[data-msg="${i}"]`);
+        return el ? el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - 12 : null;
+      };
+      if (messages.length === 0) {
+        box.scrollTo({ top: 0 });
+      } else if (fresh && newest?.role === 'model' && topOf(messages.length - 1) !== null) {
+        box.scrollTo({ top: Math.max(0, topOf(messages.length - 1) as number), behavior: 'smooth' });
+      } else if (opening) {
+        let lastBot = -1;
+        messages.forEach((m, i) => { if (m.role === 'model') lastBot = i; });
+        box.scrollTo({ top: Math.max(0, (lastBot >= 0 ? topOf(lastBot) : 0) ?? 0) });
       } else {
         box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
       }
