@@ -699,3 +699,40 @@ test("address suggestions come through BOB's server, only inside a conversation"
   h.geo.addressFor = async () => { throw new Error("PERMISSION_DENIED"); };
   assert.equal((await h.call(`/api/address/details?id=ChIJabc12345&s=${S}`, { token })).status, 503);
 });
+
+// ---- going back to change an answer ---------------------------------------------------------
+test("Back restores the conversation to before the last answer, one answer at a time", async (t) => {
+  const h = await harness(t);
+  const token = await h.fresh();
+  assert.equal((await h.call("/api/chat/back", { method: "POST", token, body: {} })).status, 409, "nothing to go back to yet");
+  await h.chat(token, "Dryer Vent Cleaning");
+  const zip = await h.chat(token, "85326");
+  assert.equal(zip.canGoBack, true);
+  assert.equal(zip.session.zip, "85326");
+  const before = zip.session.history.length;
+  await h.chat(token, "Have Dryer");
+  let r = await h.call("/api/chat/back", { method: "POST", token, body: {} });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.session.pending, "hasDryer", "the dryer question is open again");
+  assert.equal(r.data.session.history.length, before, "the transcript loses the undone turn");
+  r = await h.call("/api/chat/back", { method: "POST", token, body: {} });
+  assert.equal(r.data.session.pending, "zip");
+  assert.equal(r.data.session.zip, "");
+  const again = await h.chat(token, "85374");
+  assert.equal(again.session.zip, "85374", "a changed answer carries on from there");
+});
+test("Back can undo Accept, but not once contact details are in, and never after a gas or smoke stop", async (t) => {
+  const h = await harness(t);
+  const token = await h.accept();
+  let r = await h.call("/api/chat/back", { method: "POST", token, body: {} });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.session.serviceAccepted, false);
+  assert.equal(r.data.session.stage, "details");
+  const t2 = await h.accept();
+  await h.contactAndVerify(t2);
+  assert.equal((await h.call("/api/chat/back", { method: "POST", token: t2, body: {} })).status, 409);
+  const t3 = await h.fresh();
+  await h.chat(t3, "Dryer Vent Cleaning");
+  await h.chat(t3, "I smell gas");
+  assert.equal((await h.call("/api/chat/back", { method: "POST", token: t3, body: {} })).status, 409);
+});

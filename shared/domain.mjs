@@ -97,7 +97,9 @@ export function serviceQuote(route,config=DEFAULT_CONFIG,ctx={}) {
  if(!base)throw new Error('That service is not available right now.');
  const lines=[base,...addOnLines(services,{family,route:route==='bundle'?'cleaning':route,property,addOns:ctx.addOns||{}})];
  if(route==='bundle')lines.push({id:'assessment-with-cleaning',name:'Comprehensive Repair Assessment (50% off with cleaning)',description:'Evaluation of the vent issue with documented findings, at half price with a cleaning. Repairs are quoted separately.',cents:halfAssessmentCents(config),mins:config.assessmentMinutes,certain:true});
- const difficultyMins=(route==='cleaning'||route==='bundle')&&DIFFICULTY_FAMILIES.has(family)?difficultyMinutes(property):0;
+ // With no dryer, Premium's usual time for cleaning the dryer covers the extra vent work, so no difficulty time is added.
+ const noDryerPremium=property.hasDryer==='No'&&family==='premium';
+ const difficultyMins=(route==='cleaning'||route==='bundle')&&DIFFICULTY_FAMILIES.has(family)&&!noDryerPremium?difficultyMinutes(property):0;
  return {route,package:family,serviceId:base.id,name:route==='bundle'?`${base.name} + assessment`:base.name,priceCents:lines.reduce((n,l)=>n+l.cents,0),durationMins:lines.reduce((n,l)=>n+l.mins,0)+difficultyMins,difficultyMins,
   lineItems:lines.map(({id,name,description,cents,mins})=>({id,name,description,cents,mins})),
   priceNote:base.certain?'':'Priced for a 2-story home with first-floor laundry. Your technician lowers it on site if your home is smaller.',

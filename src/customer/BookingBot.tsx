@@ -56,7 +56,7 @@ const INFO: Record<string, () => React.ReactElement> = {
             <li>A regular-size power cord.</li>
             <li>A <strong className="text-slate-700">flexible metal or yellow-coated line</strong> from the back of the dryer to a gas valve.</li>
           </ul>
-          <img src="/gas-line-connector.jpg" alt="A yellow-coated flexible gas line with metal fittings at each end" width={600} height={600} loading="lazy" decoding="async" className="mt-3 w-full max-w-[220px] mx-auto rounded-xl border border-orange-100 bg-white" />
+          <img src="/gas-line.webp" alt="A yellow-coated flexible gas line with a brass fitting on the end" width={640} height={204} loading="lazy" decoding="async" className="mt-3 w-full max-w-[260px] mx-auto" />
         </div>
       </div>
       <p className="mt-3 text-xs text-slate-500">Only look if you can see it easily. Don't move the dryer to check — “I don't know” is fine.</p>
@@ -570,6 +570,11 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   // Address suggestions (Google, through BOB's server) while the customer types the street address.
   const [addrItems, setAddrItems] = useState<{ id: string; main: string; secondary: string }[]>([]), [addrActive, setAddrActive] = useState(-1), [addrLoading, setAddrLoading] = useState(false);
   const addrSession = useRef(''), inputRef = useRef<HTMLInputElement>(null), addrPicked = useRef('');
+  // Back: each answer saves how the chat looked before it. Chat answers are also undone on the server.
+  type Snapshot = { kind: 'server' | 'contact'; messages: Msg[]; options: string[]; multi: boolean; suggested: string; action: string; contactStep: ContactStep | null; draft: any; session: any };
+  const undo = useRef<Snapshot[]>([]), [undoCount, setUndoCount] = useState(0);
+  const remember = (kind: Snapshot['kind']) => { undo.current = [...undo.current.slice(-29), { kind, messages, options, multi, suggested, action, contactStep, draft, session }]; setUndoCount(undo.current.length); };
+  const forget = () => { undo.current = []; setUndoCount(0); };
   const storageKey = preview ? 'bob.preview.session' : 'bob.session';
 
   const initialize = useCallback(async (fresh = false) => {
@@ -649,6 +654,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const send = async (message = text) => {
     if (!message.trim() || busyRef.current || !ready || receipt) return;
     if (contactStep) return answerContact(message);
+    remember('server');
     busyRef.current = true; setBusy(true); setError(''); setText(''); setPicked([]);
     setMessages((m) => [...m, { role: 'user', text: message }]);
     try {
@@ -665,9 +671,31 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       else if (r.action === 'emergency') setAction('emergency');
       else if (!['contact', 'verify', 'slots'].includes(r.session.stage)) setAction('');
     } catch (err) {
+      undo.current.pop(); setUndoCount(undo.current.length); // nothing changed on the server
       setError((err as Error).message);
       if (err instanceof ApiError && err.status === 401) setReady(false);
     } finally { setBusy(false); busyRef.current = false; }
+  };
+  const goBack = async () => {
+    if (busyRef.current || !undo.current.length) return;
+    const snap = undo.current[undo.current.length - 1];
+    setError('');
+    if (snap.kind === 'server') {
+      busyRef.current = true; setBusy(true);
+      try {
+        const r = await api('/api/chat/back', { method: 'POST', token, body: {} });
+        snap.session = r.session;
+      } catch (err) {
+        setError((err as Error).message);
+        if (err instanceof ApiError && err.status === 409) forget();
+        return;
+      } finally { setBusy(false); busyRef.current = false; }
+    }
+    undo.current.pop(); setUndoCount(undo.current.length);
+    setMessages(snap.messages); setOptions(snap.options); setMulti(snap.multi); setSuggested(snap.suggested);
+    setAction(snap.action); setContactStep(snap.contactStep); setDraft(snap.draft); setSession(snap.session);
+    setText(''); setPicked([]); setAddrItems([]); setAddrActive(-1);
+    if (snap.contactStep === 'address') { addrSession.current = crypto.randomUUID(); addrPicked.current = ''; }
   };
 
   // -- contact capture --------------------------------------------------------------------------
@@ -704,6 +732,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     return () => { clearTimeout(t); ctrl.abort(); };
   }, [text, suggestOn, token]);
   const pickAddress = async (item: { id: string; main: string; secondary: string }) => {
+    remember('contact');
     setAddrItems([]); setAddrActive(-1); setAddrLoading(true);
     try {
       const { address: a } = await api(`/api/address/details?id=${encodeURIComponent(item.id)}&s=${addrSession.current}`, { token });
@@ -738,6 +767,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   };
 
   const answerContact = (raw: string) => {
+    remember('contact');
     const step = contactStep!;
     const value = raw.trim();
     setText('');
@@ -783,6 +813,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     setBusy(true); busyRef.current = true; setError('');
     try {
       const r = await api('/api/contact', { method: 'POST', token, body: d });
+      forget();
       setSession(r.session);
       say('model', `Got it — ${r.address || `${d.address}, ${d.city}, AZ ${d.zip}`}.`);
       if (r.verification?.required) { setVerification(r.verification); setAction('verify'); }
@@ -804,10 +835,11 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const restart = () => {
     if ((messages.length || receipt) && !confirm('Start over? A visit you already booked stays booked.')) return;
     void api('/api/holds', { method: 'DELETE', token }).catch(() => {});
-    setMessages([]); void initialize(true);
+    setMessages([]); forget(); void initialize(true);
   };
   const toggle = (label: string) => setPicked((p) => (p.includes(label) ? p.filter((x) => x !== label) : [...p, label]));
   const last = messages[messages.length - 1];
+  const canGoBack = undoCount > 0 && ready && !receipt && !requestId && !['verify', 'slots', 'approval', 'emergency'].includes(action);
   const inputHints = contactStep ? INPUT_FOR[contactStep] : session?.pending === 'zip' ? ZIP_INPUT : undefined;
   const showOptions = !busy && !receipt && !requestId && action !== 'emergency' && options.length > 0 && (last?.role === 'model' || !!contactStep);
   const started = messages.length > 0;
@@ -961,7 +993,14 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       </div>
 
       <div className="p-3 sm:p-4 bg-slate-800/90 border-t border-slate-700/60 shrink-0">
-        <form onSubmit={(e) => { e.preventDefault(); void send(); }} className="relative flex items-center max-w-3xl mx-auto">
+        <div className="flex items-center gap-2 max-w-3xl mx-auto">
+        {canGoBack && (
+          <button type="button" onClick={() => void goBack()} disabled={busy} aria-label="Go back and change your last answer" title="Change my last answer"
+            className="shrink-0 size-10 rounded-full border border-slate-600 text-slate-300 hover:text-white hover:border-sky-300 flex items-center justify-center transition-colors disabled:opacity-40">
+            <ArrowLeft size={17} />
+          </button>
+        )}
+        <form onSubmit={(e) => { e.preventDefault(); void send(); }} className="relative flex-1 min-w-0 flex items-center">
           {suggestOn && (addrItems.length > 0 || addrLoading) && (
             <div className="absolute bottom-full inset-x-0 mb-2 bg-white rounded-2xl shadow-2xl shadow-slate-900/30 border border-slate-200 overflow-hidden animate-in">
               {addrLoading ? (
@@ -989,10 +1028,11 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
             type={inputHints?.type || 'text'} autoComplete={suggestOn ? 'off' : inputHints?.autoComplete || 'off'} inputMode={inputHints?.inputMode} enterKeyHint="send"
             disabled={!ready || busy || addrLoading || !!receipt || !!requestId || contactStep === 'sms' || contactStep === 'addons'}
             placeholder={receipt ? 'Your visit is booked.' : inputHints?.placeholder || 'Type your message or answer…'}
-            className="w-full bg-slate-900/90 border-2 border-slate-700 focus:border-orange-500 rounded-full pl-5 pr-14 py-3.5 text-sm font-semibold text-white placeholder-slate-400 outline-none transition-all disabled:opacity-50"
+            className="neon-field w-full bg-slate-950 rounded-full pl-5 pr-14 py-3.5 text-sm font-semibold text-white outline-none disabled:opacity-60"
           />
-          <button type="submit" aria-label="Send" disabled={!ready || busy || !text.trim() || !!receipt || !!requestId} className="absolute right-1.5 p-2.5 rounded-full bg-orange-500 hover:bg-orange-600 disabled:bg-slate-700 text-white transition-all disabled:opacity-50"><Send size={16} /></button>
+          <button type="submit" aria-label="Send" disabled={!ready || busy || !text.trim() || !!receipt || !!requestId} className="neon-send absolute right-1.5 p-2.5 rounded-full"><Send size={18} /></button>
         </form>
+        </div>
         <div className="mt-2 flex items-center justify-between max-w-3xl mx-auto text-[11px] text-slate-300">
           <span>BOB is Dryer Vent Squad's automated assistant</span>
           <button className="font-bold text-slate-200 hover:text-white disabled:text-slate-400" onClick={() => send('Request a callback')} disabled={!ready || !!receipt || !!contactStep}>Contact the team</button>

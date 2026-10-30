@@ -48,7 +48,7 @@ const tests=[
  ['package choice, then the pricing promise, then contact',()=>{let r=run(HOME,cleaning());assert.equal(r.session.stage,'offer');assert.equal(r.suggested,'Select Premium 1-2-3 ⭐ ($179)');r=chat('Select Premium 1-2-3 ⭐ ($179)',r.session);assert.equal(r.session.stage,'details');assert.match(r.reply,/Premium 1-2-3 See-It-Clean — \$179/);assert.match(r.reply,/\*\*Transparent Pricing Promise\*\*\nMost dryer vent cleanings are completed at the package price selected\./);assert.equal(r.options[0],'Accept');assert.equal(r.action,undefined);r=chat('Accept',r.session);assert.equal(r.action,'contact');assert.match(r.reply,/^I have locked in \*\*Premium 1-2-3 See-It-Clean\*\* at \*\*\$179\*\*/);assert.equal(r.session.serviceAccepted,true);}],
  ['picking a package is not acceptance',()=>{const r=run([...HOME,'Total System · $349'],cleaning());assert.equal(r.session.serviceAccepted,false);}],
  ['recommendation: Premium by default; Ultimate for severe drying, a stacked/pedestal setup, or 2 cycles on a new/serviced dryer',()=>{const ans=(cleaned,sym,mount='Standard')=>run(['85326','Have Dryer',cleaned,'1-Story','Electric',mount,...sym,'No signs'],cleaning());assert.equal(ans('Yes',['Dries in one normal cycle']).session.suggested,'premium');assert.equal(ans('No',['Takes about 2 cycles']).session.suggested,'premium');assert.equal(ans('Yes',['Takes about 2 cycles']).session.suggested,'ultimate','a new or just-serviced dryer that still dries slowly points to the vent');assert.equal(ans('No',['Dries in one normal cycle'],'Stacked').session.suggested,'ultimate','its DryerFlex upgrade fixes a crushed transition hose');const three=ans('Yes',['Takes 3 or more cycles',"It's showing an airflow error code"]);assert.equal(three.session.suggested,'ultimate');assert.match(three.reply,/aren't a diagnosis/);}],
- ['overheating symptom stops routine booking',()=>{const r=run(['85326','Have Dryer','No','1-Story','Electric','Standard','Takes about 2 cycles, Dryer is overheating or shutting off'],cleaning());assert.equal(r.action,'request');assert.equal(r.session.stage,'review');}],
+ ['overheating explains the restriction, suggests Ultimate, and keeps booking',()=>{let r=run(['85326','Have Dryer','No','1-Story','Electric','Standard','Takes about 2 cycles, Dryer is overheating or shutting off'],cleaning());assert.equal(r.action,undefined);assert.equal(r.session.stage,'evaluating');assert.ok(!r.session.safety);assert.match(r.reply,/heat builds up inside the dryer, which is extremely dangerous/);assert.match(r.reply,/don't use it until your dryer and dryer vent have been cleaned properly by a professional/);assert.match(r.reply,/we suggest the \*\*Ultimate Protection\*\* package/);assert.match(r.reply,/signs of animals/,'the next question follows');assert.deepEqual(r.session.property.symptoms,['two','overheat']);r=chat('No signs',r.session);assert.equal(r.session.suggested,'ultimate');assert.equal(r.card.airflow.level,'severe');assert.ok(r.card.airflow.factors.includes('Overheating or shutting off'));}],
  ['animal signs lead to nest removal',()=>{const r=run(['85326','Have Dryer','No','1-Story','Electric','Standard','Dries in one normal cycle','Yes, signs of animals'],cleaning());assert.match(r.reply,/Nest Removal Plus Cleaning/);assert.equal(r.session.suggested,'nest');}],
  ['2-story upstairs gas stacked home: base, gas and stacked surcharges add up',()=>{const r=run(['85326','Have Dryer','Yes','2-Story','2nd Floor','Gas','Stacked','Takes about 2 cycles','No signs','Premium 1-2-3 · $199'],cleaning());assert.match(r.reply,/\$199/);assert.match(r.reply,/Gas Appliance Safety Procedure: \$49/);assert.match(r.reply,/Stacked Washer\/Dryer Setup: \$45/);assert.match(r.reply,/Total: \$293/);}],
  ['emergency path: safety check first, then triage, then the same-day offer with approval',()=>{let r=chat('Emergency Clog / Overheating');assert.match(r.reply,/^Emergency priority acknowledged\.\n\n🚨 Safety Priority Flag!/);assert.deepEqual(r.options,["Yes, it's still running / hot","No, it's turned off now"]);r=chat("Yes, it's still running / hot",r.session);assert.match(r.reply,/turn off and unplug/);r=chat('Dryer is off now',r.session);assert.match(r.reply,/^Thank you for confirming the dryer is powered down\./);assert.equal(r.multi,true);r=chat('Overheating or shutting off, Burning smell',r.session);assert.notEqual(r.session.stage,'review','overheating is the reason for an emergency visit');assert.equal(r.session.pending,'zip');r=run(['85326','1-Story Home','Electric Dryer'],r.session);assert.match(r.reply,/approval/);assert.match(r.reply,/\$349/);}],
@@ -64,7 +64,11 @@ const tests=[
  ['smoke emergency interrupts upsell',()=>{const r=chat('Smoke is coming from my dryer.',offered());assert.equal(r.action,'emergency');assert.match(r.reply,/911/);assert.doesNotMatch(r.reply,/\$248/);}],
  ['gas odor never instructs unplugging',()=>{const r=chat('I smell gas',cleaning());assert.equal(r.action,'emergency');assert.match(r.reply,/Do not operate/);assert.doesNotMatch(r.reply,/unplug the dryer/);}],
  ['emergency state cannot simply resume booking',()=>{const s=chat('My dryer is on fire').session;const r=chat('Continue',s);assert.equal(r.action,'request');assert.notEqual(r.session.stage,'intake');}],
- ['burning smell requires professional evaluation',()=>assert.equal(chat('There is a burning smell').action,'request')],
+ ['a burning smell as the first message: the warning, then the cleaning questions',()=>{const r=chat('There is a burning smell');assert.equal(r.action,undefined);assert.equal(r.session.intent,'cleaning');assert.match(r.reply,/heat builds up inside the dryer/);assert.match(r.reply,/five-digit ZIP code/);}],
+ ['gas and smoke still stop the chat',()=>{assert.equal(chat('I smell gas',cleaning()).action,'emergency');assert.equal(chat('there is smoke coming from the dryer',cleaning()).action,'emergency');}],
+ ['the heat warning is given once',()=>{const a=chat('my dryer gets really hot',chat('85326',cleaning()).session);assert.match(a.reply,/extremely dangerous/);const b=chat('it also shuts off mid cycle',a.session);assert.doesNotMatch(b.reply,/extremely dangerous/);}],
+ ['heat mentioned early joins the performance answers later',()=>{let r=chat('it smells like something is burning',chat('85326',cleaning()).session);assert.match(r.reply,/dryer installed at the location/,'the open question is asked again');r=run(['Have Dryer','No','1-Story','Electric','Standard','Takes about 2 cycles'],r.session);assert.deepEqual(r.session.property.symptoms,['two','overheat']);}],
+ ['"not heating" is an appliance question, not heat',()=>assert.equal(run(['85326','Have Dryer','No','1-Story','Electric','Standard','my dryer is not heating up'],cleaning()).action,'request')],
  ['no smoke does not trigger fire',()=>assert.equal(detectSafety('There is no smoke.'),null)],
  ['negated gas smell is not an emergency',()=>assert.equal(detectSafety('I do not smell gas'),null)],
  ['negated fire plus real gas triggers gas',()=>assert.equal(detectSafety('There is no smoke, but I smell gas'),'gas')],
@@ -111,7 +115,7 @@ test('two and three cycle answers together are a contradiction',()=>{const r=cha
 test('contradiction still asked again after an unclear typed answer',()=>{let r=chat('Dries in one normal cycle, Takes about 2 cycles',atSymptoms());r=chat('hard to say',r.session);assert.equal(r.session.pending,'symptomClarify');assert.match(r.reply,/still can't tell/);assert.equal(r.session.property.symptoms,undefined);});
 test('unclear twice is recorded as not sure and the intake continues',()=>{let r=chat('Dries in one normal cycle, Takes about 2 cycles',atSymptoms());r=chat('hard to say',r.session);r=chat('still not clear',r.session);assert.deepEqual(r.session.property.symptoms,[]);assert.equal(r.session.pending,'animals');});
 test('choosing a package during a clarification moves on',()=>{let r=chat('Dries in one normal cycle, Takes about 2 cycles',atSymptoms());r=chat('Premium 1-2-3 · $179',r.session);assert.equal(r.session.package,'premium');assert.equal(r.session.symptomConflict,null);});
-test('overheating with one normal cycle is not a cycle contradiction',()=>{const r=chat('Dries in one normal cycle, Dryer is overheating or shutting off',atSymptoms());assert.equal(r.session.symptomConflict,null);assert.equal(r.session.stage,'review');});
+test('overheating with one normal cycle is not a cycle contradiction',()=>{const r=chat('Dries in one normal cycle, Dryer is overheating or shutting off',atSymptoms());assert.equal(r.session.symptomConflict,null);assert.deepEqual(r.session.property.symptoms,['normal','overheat']);assert.equal(r.session.stage,'evaluating');});
 test('more than one cycle is not read as one cycle',()=>{assert.deepEqual(parseSymptoms('it takes more than one cycle'),['two']);assert.equal(cycleConflict(parseSymptoms('it takes more than one cycle')),false);});
 test('assistant-suggested contradictory cycles are not stored',()=>{const s=applyFacts(atSymptoms(),{symptoms:['normal','two']});assert.equal(s.property.symptoms,undefined);assert.equal(s.pending,'symptomClarify');assert.deepEqual(s.symptomConflict,{tries:1});});
 
@@ -132,4 +136,41 @@ test('the recommendation opens on the airflow estimate, then BOB\'s pick, then t
 test('a bird or pest repair goes to nest removal',()=>{const r=chat('Bird / Pest Infestation',chat('Repair / Reroute / Assessment').session);assert.equal(r.session.intent,'nest');assert.equal(r.session.property.animals,'Yes');});
 test('the service question asks about the last 90 days, and nothing is suggested before the last answer',()=>{let r=run(['85326','Have Dryer Installed'],cleaning());assert.match(r.reply,/Has your dryer been purchased or serviced in the last 90 days\?$/);const none=run(['85326','No Dryer Present (Duct Only)'],cleaning());assert.doesNotMatch(none.reply,/Express|\$/);});
 test('visit length: shorter with no dryer to move, longer for a restricted or severe vent',()=>{const len=(pkg,has,sym)=>serviceQuote('cleaning',config,{package:pkg,property:{stories:'1-story',hasDryer:has,symptoms:sym}}).durationMins;assert.ok(len('express','No',['normal'])<len('ultimate','Yes',['normal']));assert.equal(len('express','No',['two'])-len('express','No',['normal']),15);assert.equal(len('premium','Yes',['three'])-len('premium','Yes',['normal']),30);assert.equal(serviceQuote('cleaning',config,{package:'nest',property:{symptoms:['three']}}).durationMins,90,'nest removal keeps its own time');});
-test('no dryer: the offer opens on the airflow estimate from the last dryer\'s performance',()=>{const r=run(['85326','No Dryer Present (Duct Only)','1-Story Home','Takes 3 or more cycles','No signs'],cleaning());assert.equal(r.card.airflow.level,'severe');assert.ok(r.card.airflow.factors.includes('No dryer connected now'));assert.equal(r.card.picks[0].family,'express');assert.equal(r.card.picks[0].minutes,75);});
+test('no dryer: the offer opens on the airflow estimate from the last dryer\'s performance',()=>{const r=run(['85326','No Dryer Present (Duct Only)','1-Story Home','Takes 3 or more cycles','No signs'],cleaning());assert.equal(r.card.airflow.level,'severe');assert.ok(r.card.airflow.factors.includes('No dryer connected now'));assert.deepEqual(r.card.picks.map((p)=>[p.family,p.minutes]),[['premium',60],['express',75]],'Premium keeps its usual time; Express gets the extra difficulty time');});
+
+// ---- no dryer + a badly restricted vent -------------------------------------------------
+const NO_DRYER = ['Dryer Vent Cleaning', '85326', 'No Dryer Present (Duct Only)', '1-Story Home'];
+const sayAll = (msgs) => msgs.reduce((r, m) => turn(m, r ? r.session : initialSession(), config, INITIAL_FAQS), null);
+test('no dryer and a clear vent is still Express', () => {
+  const r = sayAll([...NO_DRYER, 'Dries in one normal cycle', 'No signs']);
+  assert.deepEqual(r.card.picks.map((p) => p.family), ['express']);
+  assert.equal(r.session.suggested, 'express');
+});
+test('no dryer and an estimated restriction of 50% or more recommends Premium 1-2-3, with Express as the shorter option', () => {
+  for (const cycles of ['Takes about 2 cycles', 'Takes 3 or more cycles', "It's showing an airflow error code"]) {
+    const r = sayAll([...NO_DRYER, cycles, 'No signs']);
+    assert.ok(r.card.airflow.score >= 50, cycles);
+    assert.deepEqual(r.card.picks.map((p) => [p.family, p.recommended]), [['premium', true], ['express', false]], cycles);
+    assert.match(r.reply, /time we'd normally spend cleaning the dryer goes into clearing the vent line/);
+  }
+});
+test('no dryer Premium keeps its usual time (the dryer-cleaning time covers the vent) and has no dryer fees', () => {
+  const p = { hasDryer: 'No', stories: '1-story', symptoms: ['three'], power: 'Gas', mount: 'Stacked' };
+  const q = serviceQuote('cleaning', config, { package: 'premium', property: p });
+  assert.equal(q.package, 'premium');
+  assert.equal(q.difficultyMins, 0);
+  assert.equal(q.durationMins, 60);
+  assert.deepEqual(q.lineItems.map((l) => l.id), ['premium-1'], 'no gas or setup fee without a dryer');
+  assert.equal(serviceQuote('cleaning', config, { package: 'ultimate', property: p }).package, 'premium', "Ultimate's DryerFlex upgrade needs a dryer");
+  assert.equal(serviceQuote('cleaning', config, { package: 'premium', property: { ...p, symptoms: ['normal'] } }).package, 'express');
+  const express = serviceQuote('cleaning', config, { package: 'express', property: p });
+  assert.equal(express.package, 'express', 'the customer can still choose Express');
+  assert.equal(express.difficultyMins, 30);
+});
+test('the no-dryer Premium details leave out the dryer parts and offer no tier comparison', () => {
+  const r = sayAll([...NO_DRYER, 'Takes about 2 cycles', 'No signs', 'Premium 1-2-3 · $179']);
+  assert.equal(r.session.stage, 'details');
+  assert.doesNotMatch(r.reply, /Lint screen and dryer cavity cleaning/);
+  assert.match(r.reply, /time for the lint screen and dryer cavity goes into the vent line/);
+  assert.ok(!r.options.includes('Compare Packages'));
+});
