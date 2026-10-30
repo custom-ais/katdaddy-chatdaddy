@@ -20,7 +20,7 @@
 // The AI layer (server/assistant.mjs) only translates free text into the commands and
 // facts below; every decision about price and booking happens here or on the server.
 
-import { DEFAULT_CONFIG, money, serviceQuote, halfAssessmentCents } from "./domain.mjs";
+import { DEFAULT_CONFIG, money, serviceQuote, halfAssessmentCents, areaFor } from "./domain.mjs";
 import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant, noDryerNeedsPremium } from "./catalog.mjs";
 import { restrictionScore, restrictionLevel } from "./airflow.mjs";
 
@@ -51,6 +51,9 @@ export const initialSession = () => ({
   explained: [],
   addOns: {},
   zip: "",
+  serviceAddress: null, // { street, city, zip, state, formatted } from the first question
+  travelAccepted: false, // just outside the area: the customer chose to continue with the travel charge
+  travelDeclined: false,
   contact: { name: "", phone: "", email: "", address: "", city: "", notes: "", smsConsent: false },
   history: [],
   options: [],
@@ -75,6 +78,7 @@ export const START_LABELS = Object.keys(START);
 export const GREETING = "👋 Hi! Welcome to Dryer Vent Squad West Valley! I'm your AI Booking & Diagnostic Assistant.\n\nHow can I help restore your dryer exhaust system today?";
 
 export const QUESTIONS = {
+  serviceAddress: { text: "Let's start by making sure your property is in our service area. Please enter the service address below.", options: [] },
   zip: { text: "What's the five-digit ZIP code for the service address?", options: [] },
   hasDryer: { text: "Do you currently have a dryer installed at the location, or do you only need the exhaust duct line serviced?", options: ["Have Dryer Installed", "No Dryer Present (Duct Only)"] },
   recentService: { text: "Has your dryer been purchased or serviced in the last 90 days?", options: ["Yes", "No", "Not sure"] },
@@ -291,9 +295,13 @@ function learn(text, s) {
       s.otherFor = key;
       s.pending = "otherDetail";
     };
-    if (key === "zip") {
+    if (key === "zip" || key === "serviceAddress") {
       const m = t.match(/\b(\d{5})\b/);
       if (m) s.zip = m[1];
+      if (m && key === "serviceAddress" && /^\s*\d+\s+\S/.test(text)) {
+        const [street, city = ""] = String(text).split(",").map((x) => x.trim());
+        s.serviceAddress = { street, city: /^\d|\baz\b/i.test(city) ? "" : city, zip: m[1], state: "", formatted: String(text).trim() };
+      }
     } else if (key === "otherDetail") {
       if (t.length >= 2 && !UNKNOWN.test(t)) {
         const note = String(text).trim().slice(0, 500);
@@ -414,8 +422,8 @@ export function questionOrder(s) {
   if (s.intent === "cleaning") {
     const help = s.help;
     return [
-      help && !s.package && "symptoms", // Help Me Choose starts with performance (and stays on it with an assessment added)
-      "zip",
+      "serviceAddress", // first: the address decides whether we can come
+      help && !s.package && "symptoms", // Help Me Choose then starts with performance (and stays on it with an assessment added)
       "hasDryer",
       hasDryer(s) && "recentService",
       ...layout,
@@ -427,18 +435,20 @@ export function questionOrder(s) {
     ].filter(Boolean);
   }
   if (s.intent === "repair") {
-    return [!s.concernDescribed && "repairScope", "zip", ...layout, "power", "mount", "repairPerf", "concern"].filter(Boolean);
+    return ["serviceAddress", !s.concernDescribed && "repairScope", ...layout, "power", "mount", "repairPerf", "concern"].filter(Boolean);
   }
   if (s.intent === "emergency") {
-    return ["safetyCheck", s.dryerHot && "powerOff", "triage", "zip", ...layout, hasDryer(s) && "power"].filter(Boolean);
+    // Safety comes first on the emergency path; the address follows what's happening.
+    return ["safetyCheck", s.dryerHot && "powerOff", "triage", "serviceAddress", ...layout, hasDryer(s) && "power"].filter(Boolean);
   }
   // nest: what price and access depend on
-  return ["zip", "hasDryer", ...layout, hasDryer(s) && "power"].filter(Boolean);
+  return ["serviceAddress", "hasDryer", ...layout, hasDryer(s) && "power"].filter(Boolean);
 }
 
 const answered = (s, key) => {
   switch (key) {
     case "zip":
+    case "serviceAddress":
       return Boolean(s.zip);
     case "concern":
       return s.concernDescribed || s.concernSkipped;
@@ -697,6 +707,9 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     switch (key) {
       case "zip":
         return `Thanks, ZIP ${s.zip}.`;
+      case "serviceAddress":
+        // Only good news is acknowledged here; "just outside" and "not served" have their own replies.
+        return areaFor(s.zip, config, s.serviceAddress?.state) === "in" ? inArea() : "";
       case "hasDryer":
         return p.hasDryer === "No" ? "Got it, duct line service only." : "Understood.";
       case "recentService":
@@ -944,13 +957,33 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     );
   };
 
+  // -- service area: in, just outside (travel charge), or not served ------------------------------
+  const inArea = () => (s.serviceAddress?.city ? `Good news: ${s.serviceAddress.city} is in our service area.` : "Good news: you're in our service area.");
+  const travelFee = () => (priced && config.travelZoneFeeCents > 0 ? ` of ${money(config.travelZoneFeeCents)}` : "");
+  const travelOffer = () => {
+    s.stage = "travel_offer";
+    s.pending = null;
+    return respond(
+      `It looks like you're just outside our service area. We'd still be happy to service your home, but there would be an extra travel charge${travelFee()}. Would you like to continue with us, or find someone more local?`,
+      ["Continue with travel charge", "Find someone more local"],
+    );
+  };
+  const outOfArea = () => {
+    s.stage = "out_of_area";
+    s.pending = null;
+    return respond("We're sorry, but unfortunately we don't currently service your area. Thank you for thinking of Dryer Vent Squad West Valley.", ["Check a different address"]);
+  };
+  const resetArea = () => {
+    Object.assign(s, { zip: "", serviceAddress: null, travelAccepted: false, travelDeclined: false, stage: "evaluating" });
+  };
+
   /** Where the booking stands: the next unanswered question, the offer, the details, or contact. */
   const next = (brief = false) => {
     if (!s.intent) return welcome();
-    if (s.zip && !(config.serviceZips || []).includes(s.zip)) {
-      s.stage = "review";
-      s.pending = null;
-      return respond("I need the team to confirm service coverage for that ZIP code before offering an appointment. You can send a request for review below.", [], { action: "request" });
+    if (s.zip) {
+      const area = areaFor(s.zip, config, s.serviceAddress?.state);
+      if (area === "out") return outOfArea();
+      if (area === "travel" && !s.travelAccepted) return travelOffer();
     }
     // An "Other" answer gets a short description before anything else.
     if (s.otherFor) {
@@ -1072,30 +1105,30 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     startIntent("cleaning");
     s.bundleAccepted = false;
     s.route = "cleaning";
-    ack = "Great, let's get your standard vent cleaning set up.";
+    ack = "I'd be happy to help you with a standard dryer vent cleaning.";
     return next();
   }
   if (start === "help") {
     startIntent("cleaning", { help: true });
     s.bundleAccepted = false;
     s.route = "cleaning";
-    ack = "I'd be glad to help you pick the perfect package.";
+    ack = "I'd be happy to help you choose the right package.";
     return next();
   }
   if (start === "repair" || (/^(?:vent issue or repair|book assessment|assessment)$/.test(t) && !s.intent)) {
     startIntent("repair");
-    ack = "Understood, specialized repair and assessment inquiry.";
+    ack = "I'd be happy to help you with your vent repair, reroute, or assessment.";
     return next();
   }
   if (start === "emergency" || /^emergency clog(?: relief)?$/.test(t)) {
     startIntent("emergency");
-    ack = "Emergency priority acknowledged.";
+    ack = "I'd be happy to help you with your emergency clog or overheating dryer.";
     return next();
   }
   if (start === "nest") {
     startIntent("nest");
     s.property.animals = "Yes";
-    ack = "Understood, a bird or pest problem.";
+    ack = "I'd be happy to help you with your bird or pest problem.";
     return next();
   }
   if (start === "faq" || /^(?:ask (?:a|another) question|faqs?)$/.test(t)) {
@@ -1104,6 +1137,48 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   }
   if (/^(?:yes,? let'?s schedule|let'?s schedule)[.!]?$/.test(t)) return s.intent ? next() : welcome("Great! How can I help restore your dryer exhaust system today?");
   if (/^(?:continue|continue booking|back to (?:my )?booking|resume)$/.test(t)) return s.intent ? next() : welcome();
+
+  // -- the service-area answers ---------------------------------------------------------------
+  if (s.stage === "out_of_area") {
+    if (/^(?:check|try|use|enter) (?:a |another )?(?:different |new )?address$/.test(t)) {
+      resetArea();
+      return next();
+    }
+    if (!opts.place) return outOfArea();
+    resetArea(); // a new address typed straight in
+    s.pending = "serviceAddress";
+  }
+  if (s.stage === "travel_offer") {
+    if (/^(?:continue|yes|yeah|yep|sure|ok(?:ay)?|let'?s do it)\b/.test(t) && !/\blocal\b/.test(t)) {
+      s.travelAccepted = true;
+      s.stage = "evaluating";
+      ack = "Great, we'll make the trip.";
+      return next();
+    }
+    if (/\b(?:local|someone else|somebody else|no thanks|no thank you|not now)\b|^no\b/.test(t)) {
+      s.travelDeclined = true;
+      s.stage = "closed";
+      s.pending = null;
+      return respond("No problem at all. We hope you find a great local pro. If you'd ever like us to make the trip, just start a new conversation.", ["Start over"]);
+    }
+    return travelOffer();
+  }
+  if (s.stage === "closed") return respond("If you'd like us to make the trip after all, start a new conversation anytime.", ["Start over"]);
+  // The address: the server looks it up (opts.place); a typed ZIP still works if it can't.
+  if (s.pending === "serviceAddress" && opts.place) {
+    const place = opts.place;
+    if (place.found) {
+      s.zip = place.zip;
+      s.serviceAddress = { street: place.street, city: place.city, zip: place.zip, state: place.state || "", formatted: place.formatted || "" };
+      s.travelAccepted = false;
+      s.travelDeclined = false;
+      if (areaFor(s.zip, config, place.state) === "in") ack = inArea();
+      return next();
+    }
+    if (place.incomplete) return respond("Please enter the full street address, including the house number, so I can check it.", []);
+    if (place.notFound) return respond("I couldn't find that address. Please check the street number and street name, and include the city or ZIP code.", []);
+    // place.unavailable: fall through, and a ZIP in the text is enough to check the area
+  }
 
   const pendingBefore = s.pending;
   learn(text, s);
@@ -1320,6 +1395,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   if (s.stage === "evaluating" || (s.intent && !s.serviceAccepted && !["offer", "details", "bundle_offer"].includes(s.stage))) {
     if (changed(current) !== changed(s)) return next();
     if (s.pending === "zip") return respond("Please enter the five-digit ZIP code for the service address.", []);
+    if (s.pending === "serviceAddress") return respond("Please enter the street address for the service location, including the city or ZIP code.", []);
     if (s.pending && !isQuestion) {
       ack = "Sorry, I didn't catch that.";
       return ask(s.pending);

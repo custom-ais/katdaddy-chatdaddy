@@ -54,7 +54,7 @@ function SignIn({ setupRequired, onSignedIn }: { setupRequired: boolean; onSigne
 function BotPreview() {
   const { data } = useDashboard();
   const c = data.config, i = data.integrations || {};
-  const live = c.bookingEnabled && (c.scheduleSource !== 'Jobber' || i.jobber?.connected) && (!c.requirePhoneVerification || i.leadConnector?.configured);
+  const live = c.bookingEnabled && (c.scheduleSource !== 'Jobber' || i.jobber?.connected) && (!(c.requirePhoneVerification && c.smsConfirmations) || i.leadConnector?.configured);
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 animate-in">
       <div className="min-w-0"><BookingBot preview /></div>
@@ -64,7 +64,7 @@ function BotPreview() {
           <p className="text-sm text-slate-600 leading-relaxed">It uses the same prices, rules and calendar customers see. {live ? 'Online booking is on, so a booking you finish here is real — use your own phone and cancel it in Jobber afterwards.' : 'Online booking is off right now, so it will offer a callback request instead of times.'}</p>
           <ul className="text-xs text-slate-600 space-y-1.5">
             <li><b>Smart chat:</b> {c.aiAssistant ? (i.assistant?.configured ? `on (${i.assistant.model})` : 'on, waiting for GEMINI_API_KEY') : 'off'}</li>
-            <li><b>Phone code:</b> {c.requirePhoneVerification ? 'required' : 'off'}</li>
+            <li><b>Phone code:</b> {c.requirePhoneVerification && c.smsConfirmations ? 'required' : 'off'}</li>
             <li><b>Approvals:</b> {c.approvalServices.length ? c.approvalServices.join(', ') : 'none'}{c.overflow?.enabled ? ' + 5 PM overflow' : ''}</li>
           </ul>
           <a className={`${secondaryButton} w-full`} href="/chat" target="_blank" rel="noreferrer">Open the customer page<ExternalLink size={14} /></a>

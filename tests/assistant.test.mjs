@@ -24,8 +24,8 @@ test("free text with several home details fills them in and skips those question
   assert.equal(r.via, "ai");
   assert.equal(r.session.intent, "cleaning");
   assert.deepEqual(r.session.property, { stories: "2-story", laundryFloor: "2nd floor", power: "Gas", hasDryer: "Yes", symptoms: ["three"] });
-  assert.equal(r.session.pending, "zip");
-  assert.match(r.reply, /^Sorry the dryer is taking so long\.\n\n(?:.+\n\n)?What's the five-digit ZIP/);
+  assert.equal(r.session.pending, "serviceAddress");
+  assert.match(r.reply, /^Sorry the dryer is taking so long\.\n\n(?:.+\n\n)?Let's start by making sure your property is in our service area/);
   assert.equal(r.session.history.at(-2).text, "Need my vent cleaned — 2 story house, gas dryer upstairs, takes 3 loads to dry", "customer's own words are kept");
 });
 
@@ -123,7 +123,7 @@ test("the smart chat is used through the API when configured, and can be switche
   const r = await h.chat(token, "my vent pipe in the attic fell apart, can someone come fix it");
   assert.equal(r.via, "ai");
   assert.equal(r.session.intent, "repair");
-  assert.equal(r.session.pending, "zip", "the customer's own words describe the issue, so the issue list is skipped");
+  assert.equal(r.session.pending, "serviceAddress", "the customer's own words describe the issue, so the issue list is skipped");
   assert.equal(calls.length, 1);
   assert.equal((await h.call("/api/public/config")).data.smartChat, true);
   await h.store.set("config", { ...(await h.store.config()), aiAssistant: false });

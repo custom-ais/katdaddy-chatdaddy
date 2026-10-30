@@ -59,6 +59,11 @@ export const DEFAULT_CONFIG = {
   saturdayStarts: ['10:00','12:00'], saturdayClose: '14:00',
   blockedDates: [],
   serviceZips: [],
+  // Just outside the service area: BOB says so, mentions the travel charge, and lets the customer
+  // continue or find someone more local. Default: the Metro Phoenix ZIPs (territory zones 10–12).
+  // Every other ZIP is told politely that DVS doesn't service the area.
+  travelZips: ['85003','85004','85006','85007','85008','85009','85012','85013','85015','85016','85017','85018','85019','85020','85021','85022','85023','85024','85027','85028','85029','85031','85032','85033','85034','85035','85037','85039','85041','85043','85044','85045','85048','85050','85051','85053','85054','85083','85085','85086','85087'],
+  travelZoneFeeCents: 0,
   activeTechnicianIds: ['tech-ryan'],
   preparation: 'Please make the laundry area accessible and secure pets before the visit. Do not move or disconnect the dryer yourself. Let the team know about access restrictions.',
   cleaningProcess: 'Every See-It-Clean visit is a full vent cleaning with a live camera inspection during service, and we verify airflow before and after so you can see the difference.',
@@ -124,6 +129,15 @@ export const withConfigDefaults = saved => {
  if(Array.isArray(saved?.services)){const ids=new Set(saved.services.map(x=>x.id));c.services=[...saved.services.map(x=>RETIRED_FAMILIES.has(x.family)?{...x,active:false}:x),...SERVICE_CATALOG.filter(x=>!ids.has(x.id))];}
  return c;
 };
+/** "Text confirmations" is the switch for every text to customers: with it off, the phone code isn't sent either. */
+export const textCodeOn=(config)=>Boolean(config.requirePhoneVerification)&&config.smsConfirmations!==false;
+/** Where a ZIP stands: in the service area, just outside it (travel charge), or not served. */
+export function areaFor(zip,config=DEFAULT_CONFIG,state='') {
+ if(state&&String(state).toUpperCase()!=='AZ')return 'out';
+ if((config.serviceZips||[]).includes(zip))return 'in';
+ if((config.travelZips||[]).includes(zip))return 'travel';
+ return 'out';
+}
 export function isBookable(config) {
  return !!(config.bookingEnabled && config.scheduleAcknowledged && config.pricesAcknowledged && config.serviceZips.length && config.activeTechnicianIds.length);
 }
@@ -152,6 +166,8 @@ export function validateConfig(c) {
  for(const key of ['weekdayStarts','saturdayStarts'])if(!Array.isArray(c[key])||c[key].length>12||c[key].some(t=>!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)))errors.push(`Invalid ${key}.`);
  for(const key of ['weekdayClose','saturdayClose'])if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(c[key]||''))errors.push(`Invalid ${key}.`);
  if(!Array.isArray(c.serviceZips)||c.serviceZips.length>1000||c.serviceZips.some(z=>!/^\d{5}$/.test(z)))errors.push('Coverage must contain five-digit ZIP codes.');
+ if(!Array.isArray(c.travelZips)||c.travelZips.length>1000||c.travelZips.some(z=>!/^\d{5}$/.test(z)))errors.push('Just-outside ZIPs must be five-digit ZIP codes.');
+ if(!Number.isInteger(c.travelZoneFeeCents)||c.travelZoneFeeCents<0||c.travelZoneFeeCents>50000)errors.push('The just-outside travel charge must be $0–$500.');
  if(!Array.isArray(c.blockedDates)||c.blockedDates.length>1000||c.blockedDates.some(d=>!/^\d{4}-\d{2}-\d{2}$/.test(d)||Number.isNaN(Date.parse(d))))errors.push('Invalid blocked dates.');
  if(!Array.isArray(c.activeTechnicianIds)||!c.activeTechnicianIds.every(id=>typeof id==='string'&&id.length<80))errors.push('Invalid technician selection.');
  for(const k of ['bookingEnabled','scheduleAcknowledged','pricesAcknowledged','nearbyFirst','smsConfirmations','emailConfirmations'])if(typeof c[k]!=='boolean')errors.push(`Invalid ${k}.`);

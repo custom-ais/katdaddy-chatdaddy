@@ -62,7 +62,7 @@ test("disabled configuration refuses real booking availability", async (t) => {
   const token = await h.fresh();
   await h.chat(token, "Dryer Vent Cleaning");
   const r = await h.chat(token, "85326");
-  assert.equal(r.action, "request");
+  assert.equal(r.session.stage, "out_of_area", "no approved ZIPs yet");
   assert.equal((await h.hold(token, "2026-09-22T16:00:00Z")).status, 409);
 });
 test("contact cannot be submitted before service acceptance", async (t) => {
@@ -716,7 +716,7 @@ test("Back restores the conversation to before the last answer, one answer at a 
   assert.equal(r.data.session.pending, "hasDryer", "the dryer question is open again");
   assert.equal(r.data.session.history.length, before, "the transcript loses the undone turn");
   r = await h.call("/api/chat/back", { method: "POST", token, body: {} });
-  assert.equal(r.data.session.pending, "zip");
+  assert.equal(r.data.session.pending, "serviceAddress");
   assert.equal(r.data.session.zip, "");
   const again = await h.chat(token, "85374");
   assert.equal(again.session.zip, "85374", "a changed answer carries on from there");
@@ -735,4 +735,82 @@ test("Back can undo Accept, but not once contact details are in, and never after
   await h.chat(t3, "Dryer Vent Cleaning");
   await h.chat(t3, "I smell gas");
   assert.equal((await h.call("/api/chat/back", { method: "POST", token: t3, body: {} })).status, 409);
+});
+
+// ---- the first question: is the address in the service area? ------------------------------
+const AFTER_ADDRESS = ["Have Dryer", "No", "1-Story", "Electric", "Standard", "Dries in one normal cycle", "No signs", "Premium 1-2-3 · $179", "Accept & Continue"];
+test("BOB asks for the address first and looks it up: in the service area carries on", async (t) => {
+  const h = await harness(t);
+  const token = await h.fresh();
+  const first = await h.chat(token, "Standard Vent Cleaning");
+  assert.match(first.reply, /^I'd be happy to help you with a standard dryer vent cleaning\.\n\nLet's start by making sure your property is in our service area\. Please enter the service address below\.$/);
+  const r = await h.chat(token, "100 W Test St, Buckeye, AZ 85326");
+  assert.match(r.reply, /^Good news: you're in our service area\./);
+  assert.equal(r.session.pending, "hasDryer");
+  assert.deepEqual([r.session.zip, r.session.serviceAddress.street], ["85326", "100 W Test St"]);
+  assert.ok(h.geo.lookups.some((a) => /100 W Test St/.test(a)), "the address was looked up");
+});
+test("just outside the service area: the travel charge is explained, and a yes books with it", async (t) => {
+  const h = await harness(t, { config: { travelZoneFeeCents: 4900 } });
+  const token = await h.fresh();
+  await h.chat(token, "Standard Vent Cleaning");
+  let r = await h.chat(token, "4515 N 59th Ave, Phoenix, AZ 85033");
+  assert.equal(r.session.stage, "travel_offer");
+  assert.match(r.reply, /just outside our service area\. We'd still be happy to service your home, but there would be an extra travel charge of \$49\. Would you like to continue with us, or find someone more local\?/);
+  assert.deepEqual(r.options, ["Continue with travel charge", "Find someone more local"]);
+  r = await h.chat(token, "Continue with travel charge");
+  assert.equal(r.session.pending, "hasDryer");
+  for (const m of AFTER_ADDRESS) r = await h.chat(token, m);
+  assert.equal(r.action, "contact");
+  const c = await h.contactAndVerify(token, { ...contact, address: "4515 N 59th Ave", city: "Phoenix", zip: "85033" });
+  assert.equal(c.data.quote.travelFeeCents, 4900);
+  const open = await h.slots(token);
+  assert.ok(open.length, "times are offered");
+  const held = await h.hold(token, open[0].scheduledAt);
+  assert.equal(held.status, 201, JSON.stringify(held.data));
+  const done = await h.confirm(token, held.data.hold);
+  assert.equal(done.status, 201, JSON.stringify(done.data));
+  assert.equal(done.data.receipt.priceCents, 17900 + 4900);
+  assert.match(h.jobber.jobs[0].instructions, /Just outside the service area \(ZIP 85033\); the customer accepted a travel charge of \$49\.00/);
+});
+test("just outside, choosing someone more local closes politely; contact is refused without the yes", async (t) => {
+  const h = await harness(t);
+  const token = await h.fresh();
+  await h.chat(token, "Standard Vent Cleaning");
+  await h.chat(token, "4515 N 59th Ave, Phoenix, AZ 85033");
+  const r = await h.chat(token, "Find someone more local");
+  assert.equal(r.session.stage, "closed");
+  assert.match(r.reply, /^No problem at all\./);
+  const other = await h.prepare();
+  assert.equal((await h.call("/api/contact", { method: "POST", token: other, body: { ...contact, address: "4515 N 59th Ave", city: "Phoenix", zip: "85033" } })).status, 409, "a travel-zone address typed at checkout still needs the yes");
+});
+test("an address we don't serve gets a polite no and can try a different address", async (t) => {
+  const h = await harness(t);
+  const token = await h.fresh();
+  await h.chat(token, "Repair / Reroute / Assessment");
+  let r = await h.chat(token, "123 E Main St, Mesa, AZ 85201");
+  assert.equal(r.session.stage, "out_of_area");
+  assert.match(r.reply, /^We're sorry, but unfortunately we don't currently service your area\./);
+  r = await h.chat(token, "Check a different address");
+  assert.equal(r.session.pending, "serviceAddress");
+  r = await h.chat(token, "100 W Test St, Buckeye, AZ 85326");
+  assert.match(r.reply, /^Good news/);
+});
+
+// ---- "Text confirmations" off means no texts at all ----------------------------------------
+test("with text confirmations off, BOB sends no phone code and no confirmation text, and booking still works", async (t) => {
+  const h = await harness(t, { config: { smsConfirmations: false, requirePhoneVerification: true } });
+  const token = await h.prepare();
+  const s = await h.call("/api/session", { token });
+  assert.equal(s.data.config.phoneVerification, false);
+  assert.equal(s.data.config.textMessages, false);
+  const c = await h.call("/api/contact", { method: "POST", token, body: { ...contact, smsConsent: true } });
+  assert.equal(c.status, 200);
+  assert.equal(c.data.verification.required, false);
+  assert.equal(c.data.session.stage, "slots");
+  assert.equal((await h.call("/api/verify/send", { method: "POST", token, body: {} })).status, 409);
+  const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
+  const done = await h.confirm(token, held.data.hold);
+  assert.equal(done.status, 201, JSON.stringify(done.data));
+  assert.equal(h.lc.calls.filter((x) => x[0] === "sms").length, 0, "no texts were attempted");
 });
