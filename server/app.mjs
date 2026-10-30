@@ -158,7 +158,8 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
   const integrations = async () => ({
     jobber: { appConfigured: jobber.appConfigured, connected: await jobber.connected() },
     leadConnector: { configured: lc.configured },
-    maps: { provider: geo.provider },
+    maps: { provider: geo.provider, issue: (await geo.lastIssue?.()) || null },
+    lastError: (await store.kvGet("diag:last-error").catch(() => null)) || null,
     assistant: { configured: Boolean(assistant?.configured), model: assistant?.model || "" },
     database: store.db.kind,
   });
@@ -252,13 +253,26 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
 
   /** Geocode a service address and apply the area + travel-fee rules. */
   async function locate(c, { address, city, zip }) {
-    const g = await geo.geocode(`${address}, ${city}, AZ ${zip}`);
+    let g;
+    try {
+      g = await geo.geocode(`${address}, ${city}, AZ ${zip}`);
+    } catch (error) {
+      if (error.code !== "GEO_UNAVAILABLE") throw error;
+      console.error("[geo]", error.message);
+      return { ok: false, reason: "lookup_unavailable" };
+    }
     if (!g) return { ok: false, reason: "not_found" };
     if (g.state && g.state.toUpperCase() !== "AZ") return { ok: false, reason: "out_of_area" };
     let driveFromBaseMin = null;
     if (c.baseAddress) {
-      const base = await geo.geocode(c.baseAddress);
-      if (base) [driveFromBaseMin] = await geo.driveMinutes([{ from: base, to: g }]);
+      // The customer's address is known, so a failed drive-time check doesn't stop the booking;
+      // it is treated like no base address (no travel fee, no farthest-drive limit).
+      try {
+        const base = await geo.geocode(c.baseAddress);
+        if (base) [driveFromBaseMin] = await geo.driveMinutes([{ from: base, to: g }]);
+      } catch (error) {
+        console.error("[geo] base address", error.message);
+      }
     }
     if (driveFromBaseMin != null && driveFromBaseMin > c.maxDriveFromBaseMin) return { ok: false, reason: "out_of_area", driveFromBaseMin };
     const fee = travelFeeFor(driveFromBaseMin, c);
@@ -557,6 +571,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         const c = await store.config();
         if (!c.serviceZips.includes(body.zip)) fail(409, "The team must confirm coverage for this ZIP code. Use a callback request.", { code: "OUT_OF_AREA" });
         const where = await locate(c, { address: body.address.trim(), city: body.city.trim(), zip: body.zip });
+        if (!where.ok && where.reason === "lookup_unavailable") fail(503, "We couldn't check that address just now. Please try again in a minute, or send the team a request.", { code: "ADDRESS_LOOKUP_UNAVAILABLE" });
         if (!where.ok && where.reason === "not_found") fail(400, "We couldn't find that street address. Check the street number, street name, and ZIP code.");
         if (!where.ok) fail(409, "That address is outside our online booking area. The team can review it — send a callback request.", { code: "OUT_OF_AREA" });
         data.contact = {
@@ -1121,7 +1136,11 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
       fail(404, "Endpoint not found.");
     } catch (e) {
       if (res.headersSent) return res.end();
-      if (!(e instanceof HttpError)) console.error("BOB request failed:", e);
+      if (!(e instanceof HttpError)) {
+        console.error("BOB request failed:", e);
+        // Kept for a week so the office can see what went wrong (Settings → Connections).
+        await store.kvSet("diag:last-error", { at: clock(), path: `${method} ${pathname}`, message: String(e?.message || e).slice(0, 300) }, 60 * 60 * 24 * 7).catch(() => {});
+      }
       send(e.status || 500, {
         error: e.status ? e.message : "The operation could not be completed. Your appointment is not confirmed unless a booking reference was returned.",
         ...(e.extra || {}),

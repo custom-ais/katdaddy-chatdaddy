@@ -2,6 +2,8 @@
 // With GOOGLE_MAPS_API_KEY: Google Geocoding API + Routes API (real road drive times).
 // Without it: US Census geocoder (free) + a straight-line estimate. The estimate is
 // fine for testing but too rough to enforce the 20-minute rule in production.
+// If Google refuses or errors, the Census lookup is tried next. When every lookup fails the
+// error has code GEO_UNAVAILABLE, and the reason is kept for the office dashboard.
 
 const GEOCODE_TTL = 60 * 60 * 24 * 90;
 const DRIVE_TTL = 60 * 60 * 24 * 30;
@@ -21,8 +23,23 @@ export function haversineMiles(a, b) {
 export const estimateDriveMinutes = (a, b) => Math.round((haversineMiles(a, b) * 1.3 * 60) / 32);
 
 const pointKey = (p) => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`;
+const LOOKUP_TIMEOUT_MS = 8000;
+const ISSUE_KEY = "diag:geo";
 
-export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY || "", fetchImpl = fetch } = {}) {
+export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY || "", fetchImpl = fetch, clock = () => Date.now() } = {}) {
+  /** GET a JSON API with a time limit; an error page or a hang becomes a plain Error. */
+  async function getJson(url, label) {
+    let response;
+    try {
+      response = await fetchImpl(url, { signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS) });
+    } catch (error) {
+      throw new Error(`${label} did not respond (${error.name === "TimeoutError" ? "timed out" : error.message})`);
+    }
+    const json = await response.json().catch(() => null);
+    if (!json) throw new Error(`${label} returned ${response.status} without a usable answer`);
+    return { response, json };
+  }
+
   const component = (cs, type, short = false) => {
     const hit = (cs || []).find((c) => c.types?.includes(type));
     return hit ? (short ? hit.short_name : hit.long_name) : "";
@@ -30,9 +47,10 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
 
   async function geocodeGoogle(address) {
     const params = new URLSearchParams({ address, components: "country:US", key: googleKey });
-    const json = await (await fetchImpl(`https://maps.googleapis.com/maps/api/geocode/json?${params}`)).json();
+    const { json } = await getJson(`https://maps.googleapis.com/maps/api/geocode/json?${params}`, "Google address lookup");
     if (json.status === "ZERO_RESULTS") return null;
-    if (json.status !== "OK") throw new Error(`Geocoding failed: ${json.status}`);
+    // e.g. REQUEST_DENIED when the Geocoding API isn't enabled or the key only allows websites.
+    if (json.status !== "OK") throw new Error(`Google address lookup refused: ${json.status}${json.error_message ? ` (${json.error_message})` : ""}`);
     const top = json.results[0], c = top.address_components;
     const number = component(c, "street_number");
     return {
@@ -50,8 +68,9 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
 
   async function geocodeCensus(address) {
     const params = new URLSearchParams({ address, benchmark: "Public_AR_Current", format: "json" });
-    const json = await (await fetchImpl(`https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?${params}`)).json();
-    const m = json?.result?.addressMatches?.[0];
+    const { response, json } = await getJson(`https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?${params}`, "Census address lookup");
+    if (!response.ok || !json.result) throw new Error(`Census address lookup returned ${response.status}${json.errors ? ` (${[].concat(json.errors).join("; ")})` : ""}`);
+    const m = json.result.addressMatches?.[0];
     if (!m) return null;
     return {
       lat: m.coordinates.y,
@@ -71,15 +90,35 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
     const key = `geo:${norm}`;
     const cached = await cache.kvGet(key);
     if (cached) return cached.miss ? null : cached;
-    const result = googleKey ? await geocodeGoogle(address) : await geocodeCensus(address);
-    await cache.kvSet(key, result || { miss: true }, result ? GEOCODE_TTL : 6 * 3600);
-    return result;
+    const lookups = googleKey ? [geocodeGoogle, geocodeCensus] : [geocodeCensus];
+    const problems = [];
+    for (const lookup of lookups) {
+      let result;
+      try {
+        result = await lookup(address);
+      } catch (error) {
+        problems.push(error.message);
+        console.warn("[geo]", error.message);
+        continue;
+      }
+      await cache.kvSet(key, result || { miss: true }, result ? GEOCODE_TTL : 6 * 3600);
+      return result;
+    }
+    const message = problems.join(" Then: ");
+    await cache.kvSet(ISSUE_KEY, { at: clock(), message }, 60 * 60 * 24 * 7).catch(() => {});
+    const error = new Error(`Address lookup unavailable. ${message}`);
+    error.code = "GEO_UNAVAILABLE";
+    throw error;
   }
+
+  /** The last time every address lookup failed, for the dashboard (null if none this week). */
+  const lastIssue = async () => (await cache.kvGet(ISSUE_KEY).catch(() => null)) || null;
 
   async function matrix(origin, destinations) {
     const wp = (p) => ({ waypoint: { location: { latLng: { latitude: p.lat, longitude: p.lng } } } });
     const response = await fetchImpl("https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix", {
       method: "POST",
+      signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
       headers: {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": googleKey,
@@ -87,7 +126,7 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
       },
       body: JSON.stringify({ origins: [wp(origin)], destinations: destinations.map(wp), travelMode: "DRIVE", routingPreference: "TRAFFIC_UNAWARE" }),
     });
-    const json = await response.json();
+    const json = await response.json().catch(() => null);
     if (!response.ok || !Array.isArray(json)) throw new Error(`Route matrix failed: ${json?.error?.message || response.status}`);
     // Proto3 JSON omits zero values, so a missing index means 0.
     return json.map((el) => ({
@@ -137,5 +176,5 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
     return out;
   }
 
-  return { geocode, driveMinutes, provider: googleKey ? "google" : "estimate" };
+  return { geocode, driveMinutes, lastIssue, provider: googleKey ? "google" : "estimate" };
 }
