@@ -106,7 +106,7 @@ export function ToastContainer({ toasts, onDismiss }: { toasts: ToastMessage[]; 
   const icon = { success: <CheckCircle size={20} className="text-emerald-500" />, error: <AlertCircle size={20} className="text-rose-500" />, warning: <AlertTriangle size={20} className="text-amber-500" />, info: <Info size={20} className="text-blue-500" /> };
   const border = { success: 'border-emerald-200', error: 'border-rose-200', warning: 'border-amber-200', info: 'border-blue-200' };
   return (
-    <div className="fixed bottom-5 right-5 z-[60] flex flex-col gap-2.5 max-w-md w-full pointer-events-none px-4 sm:px-0" role="status">
+    <div className="fixed bottom-[calc(1.25rem+var(--save-dock-space,0px))] right-5 z-[60] flex flex-col gap-2.5 max-w-md w-full pointer-events-none px-4 sm:px-0" role="status">
       {toasts.map((t) => (
         <div key={t.id} className={`pointer-events-auto p-4 rounded-2xl border bg-white shadow-xl shadow-slate-900/10 flex items-start gap-3 animate-in ${border[t.type]}`}>
           <div className="mt-0.5 shrink-0">{icon[t.type]}</div>
