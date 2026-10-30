@@ -95,11 +95,12 @@ export const QUESTIONS = {
   animals: { text: "Have you noticed any visible signs of animals around the vent?", options: ["Yes, signs of animals", "No signs", "I don't know", "Other"] },
   concern: { text: "Please describe the issue in a sentence or two. For example: the duct came apart in the attic, or the roof cap is crushed.", options: ["Skip"] },
   // Emergency path
-  safetyCheck: { text: "🚨 Safety Priority Flag! Is your dryer currently running or extremely hot to the touch right now?", options: ["Yes, it's still running / hot", "No, it's turned off now"] },
-  powerOff: { text: "🛑 Please turn off and unplug your dryer immediately to prevent motor burnout or a fire hazard.\n\nPlease confirm when the appliance is turned off so we can proceed with emergency scheduling.", options: ["Dryer is off now"] },
+  // DVS is a vent company, not an emergency service: BOB never talks about dispatching or emergency equipment.
+  safetyCheck: { text: "Is your dryer currently running or heating?", options: ["Yes, it's still running / hot", "No, it's turned off now"] },
+  powerOff: { text: "⚠️ Please stop the dryer immediately if you can safely do so. I'll stay right here. Once it's off, we can review what's happening and go over the safest solution options.", options: ["Dryer is off now"] },
   triage: {
-    text: "What is happening with the dryer? Select all that apply.",
-    options: ["Overheating or shutting off", "Error code (D80/D90/D95)", "Little/no airflow outside", "Takes multiple cycles", "Possible nest/blockage", "Burning smell", "Other / something else"],
+    text: "Let's pinpoint what we're dealing with. What's happening with the dryer? (Select all that apply)",
+    options: ["Overheating or shutting off", "Showing an error code (D80 / D90 / D95)", "Little or no airflow outside", "Taking multiple cycles to dry", "Possible nest or blockage", "Burning smell", "Other / something else"],
     multi: true,
   },
   // Repair path
@@ -741,11 +742,11 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       case "animals":
         return p.animals === "Yes" ? "Got it, signs of animals at the vent." : p.animals === "No" ? "Good, no signs of animals." : "No problem.";
       case "safetyCheck":
-        return s.dryerHot ? "Understood." : "Thank you for confirming the dryer is powered down.";
+        return s.dryerHot ? "" : "Good. That reduces risk.";
       case "powerOff":
-        return "Thank you for confirming the dryer is powered down.";
+        return "Good. That reduces risk.";
       case "triage":
-        return "Thank you, that helps us prepare our emergency equipment.";
+        return "Thanks, that tells us what we're dealing with.";
       case "repairScope":
       case "concern":
         return "Thanks for providing those details.";
@@ -1050,7 +1051,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     const found = parseSymptoms(t);
     startIntent("emergency");
     if (found.length) s.property.symptoms = found;
-    ack = "Overheating needs priority attention, so let's handle this as an emergency.";
+    ack = "Overheating needs attention first, so let's handle this safely.";
     return next();
   }
   // Heat is a sign of a significant airflow restriction, not an emergency stop: explain it, suggest
@@ -1122,7 +1123,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   }
   if (start === "emergency" || /^emergency clog(?: relief)?$/.test(t)) {
     startIntent("emergency");
-    ack = "I'd be happy to help you with your emergency clog or overheating dryer.";
+    ack = "🚨 Got it — this sounds like a possible airflow restriction, clog, or overheating issue. Let's handle this safely first.";
     return next();
   }
   if (start === "nest") {

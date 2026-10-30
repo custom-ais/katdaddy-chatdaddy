@@ -71,7 +71,7 @@ test("birds or a nest offer Nest Removal and Full System Restoration", () => {
 });
 
 test("an urgent clog offers Emergency Same-Day Clog Relief", () => {
-  const r = say(["My dryer vent is completely clogged, I need help asap", "No, it's turned off now", "Possible nest/blockage", "85326", "1-Story Home", "Electric Dryer"]);
+  const r = say(["My dryer vent is completely clogged, I need help asap", "No, it's turned off now", "Possible nest or blockage", "85326", "1-Story Home", "Electric Dryer"]);
   assert.equal(r.options[0], "Emergency Same-Day · $349");
   const regular = turn("Schedule regular cleaning", r.session, config, INITIAL_FAQS);
   assert.equal(regular.session.intent, "cleaning");

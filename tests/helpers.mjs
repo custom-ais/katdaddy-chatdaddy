@@ -147,7 +147,7 @@ export const FLOWS = {
   cleaning: (zip) => ["Dryer Vent Cleaning", zip, "Have Dryer", "No", "1-Story", "Electric", "Standard", "Dries in one normal cycle", "No signs", "Premium 1-2-3 · $179", "Accept & Continue"],
   assessment: (zip) => ["Repair / Reroute / Assessment", zip, "Disconnected Duct in Wall/Attic", "1-Story Home", "Electric Dryer", "Standard Floor Setup", "Working Normal", "The vent is disconnected behind the dryer", "Book Assessment"],
   bundle: (zip) => ["Dryer Vent Cleaning", "The vent also has damage.", "Include assessment", zip, "Have Dryer", "No", "1-Story", "Electric", "Standard", "Dries in one normal cycle", "No signs", "Select Premium 1-2-3 ⭐ ($238.50)", "Accept"],
-  emergency: (zip) => ["Emergency Clog / Overheating", "No, it's turned off now", "Possible nest/blockage", zip, "1-Story Home", "Electric Dryer", "Emergency Same-Day · $349", "Accept"],
+  emergency: (zip) => ["Emergency Clog / Overheating", "No, it's turned off now", "Possible nest or blockage", zip, "1-Story Home", "Electric Dryer", "Emergency Same-Day · $349", "Accept"],
 };
 
 /** The Supabase REST adapter, talking to an in-process Postgres through public.bob_exec. */
