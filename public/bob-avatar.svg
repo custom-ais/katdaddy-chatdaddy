@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="BOB, the Dryer Vent Squad West Valley booking assistant">
+  <rect x="28" y="28" width="456" height="456" rx="104" fill="#083653"/>
+  <rect x="50" y="50" width="412" height="412" rx="84" fill="none" stroke="#ffffff" stroke-opacity=".13" stroke-width="5"/>
+  <path d="M176 132h160c26.5 0 48 21.5 48 48v100c0 26.5-21.5 48-48 48h-44l-36 58-33-66h-47c-26.5 0-48-21.5-48-48v-92c0-26.5 21.5-48 48-48z" fill="#fff"/>
+  <path d="M178 194h156M178 244h156M178 294h156" stroke="#083653" stroke-width="21" stroke-linecap="round"/>
+  <path d="M336 178c33-2 60-29 64-62" fill="none" stroke="#f27c20" stroke-width="18" stroke-linecap="round"/>
+  <path d="M362 194c22-2 42-21 46-44" fill="none" stroke="#f27c20" stroke-width="15" stroke-linecap="round"/>
+  <path d="M386 207c13-2 25-14 28-28" fill="none" stroke="#f27c20" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="377" cy="141" r="24" fill="#f27c20"/>
+  <circle cx="377" cy="141" r="8" fill="#fff"/>
+</svg>

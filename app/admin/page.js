@@ -1,15 +1,25 @@
 import { getJobberConnection, supabaseProject } from '@/lib/jobberTokens';
+import { HOURS_TEXT } from '@/lib/bob/catalog';
+import { bookingCrews, geminiReady } from '@/lib/bob/config';
+import CopyButton from '@/components/CopyButton';
 
 export const dynamic = 'force-dynamic';
 
+export const metadata = {
+  title: 'ChatDaddy admin',
+  icons: { icon: '/chatdaddy-mark.webp' },
+};
+
 const SETTINGS = [
-  ['JOBBER_CLIENT_ID', 'Jobber client ID'],
-  ['JOBBER_CLIENT_SECRET', 'Jobber client secret'],
-  ['JOBBER_REDIRECT_URI', 'Jobber redirect URI'],
-  ['NEXT_PUBLIC_APP_URL', 'App URL'],
-  ['NEXT_PUBLIC_SUPABASE_URL', 'Supabase URL'],
-  ['SUPABASE_SERVICE_ROLE_KEY', 'Supabase service key'],
-  ['ADMIN_PASSWORD', 'Admin password'],
+  ['JOBBER_CLIENT_ID', 'Jobber client ID', true],
+  ['JOBBER_CLIENT_SECRET', 'Jobber client secret', true],
+  ['JOBBER_REDIRECT_URI', 'Jobber redirect URI', true],
+  ['NEXT_PUBLIC_APP_URL', 'App URL', true],
+  ['NEXT_PUBLIC_SUPABASE_URL', 'Supabase URL', true],
+  ['SUPABASE_SERVICE_ROLE_KEY', 'Supabase service key', true],
+  ['ADMIN_PASSWORD', 'Admin password', true],
+  ['GEMINI_API_KEY', 'AI answers for typed questions', false],
+  ['BOOKING_CREWS', 'Jobs at the same time (default 1)', false],
 ];
 
 const ERRORS = {
@@ -29,63 +39,94 @@ export default async function Admin({ searchParams }) {
   const error = searchParams?.error;
   const jobber = await getJobberConnection();
   const project = supabaseProject();
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'https://katdaddy-bookingbot.vercel.app').replace(/\/$/, '');
+  const snippet = `<script src="${appUrl}/widget.js" defer></script>`;
 
   return (
-    <main>
-      <h1>Admin</h1>
-      <p className="sub">
-        <a href="/">← Home</a>
-      </p>
+    <main className="admin">
+      <div className="admin-top">
+        <img src="/chatdaddy-mark.webp" alt="" />
+        <div>
+          <h1>ChatDaddy admin</h1>
+          <p>Running BOB for Dryer Vent Squad West Valley</p>
+        </div>
+        <a href="/">Open BOB</a>
+      </div>
 
       {justConnected && jobber.connected && <div className="banner ok">Jobber connected.</div>}
       {justConnected && !jobber.connected && (
-        <div className="banner bad">Jobber sign-in finished, but no tokens are saved. Tap Connect Jobber again.</div>
+        <div className="banner bad">Jobber sign-in finished, but no tokens are saved. Click Connect Jobber again.</div>
       )}
-      {error && (
-        <div className="banner bad">{ERRORS[error] || `Jobber connection failed: ${error}`}</div>
-      )}
+      {error && <div className="banner bad">{ERRORS[error] || `Jobber connection failed: ${error}`}</div>}
 
-      <div className="card">
+      <section className="panel">
         <h2>Jobber</h2>
         {jobber.connected ? (
-          <p style={{ marginTop: 0 }}>
-            <span className="ok">Connected.</span> Tokens last saved {when(jobber.updatedAt)}.
-            They refresh on their own when the app calls Jobber.
-          </p>
+          <p className="status is-ok">Connected. BOB books straight onto your Jobber schedule.</p>
         ) : jobber.missingTable ? (
-          <p style={{ marginTop: 0 }}>
-            <span className="bad">Database not set up.</span> The table <code>{jobber.table}</code>{' '}
-            is missing in Supabase project <code>{project || 'unknown'}</code>. Run{' '}
-            <code>supabase/{jobber.table}.sql</code> in that project&apos;s SQL editor, then reload.
+          <p className="status">
+            Database not set up: create the {jobber.table} table in Supabase project {project || 'unknown'}.
           </p>
         ) : (
-          <p style={{ marginTop: 0 }}>
-            <span className="bad">Not connected.</span>{' '}
-            {jobber.error ? jobber.error : 'Sign in to Jobber and approve access.'}
-          </p>
+          <p className="status">Not connected. {jobber.error || 'BOB can show prices but cannot book until you connect.'}</p>
         )}
-        <p style={{ fontSize: '0.9rem', color: 'var(--muted)' }}>
-          Supabase project: <code>{project || 'not set'}</code>
-        </p>
-        <a className="btn" href="/api/jobber/oauth/start">
+        {jobber.connected && <p className="muted">Tokens last saved {when(jobber.updatedAt)}. They refresh on their own.</p>}
+        <p className="muted">Supabase project: {project || 'not set'}</p>
+        <a className={jobber.connected ? 'btn btn-quiet' : 'btn'} href="/api/jobber/oauth/start">
           {jobber.connected ? 'Reconnect Jobber' : 'Connect Jobber'}
         </a>
-      </div>
+      </section>
 
-      <div className="card">
+      <section className="panel">
+        <h2>BOB on your website</h2>
+        <p>Paste this just before the closing body tag on dryerventsquadaz.com. It adds a floating Book with BOB button.</p>
+        <pre className="snippet">{snippet}</pre>
+        <p className="muted">
+          Any button or link with <code>data-bob-open</code>, or linking to <code>#book-with-bob</code>, also opens BOB.
+        </p>
+        <div className="actions">
+          <CopyButton text={snippet} label="Copy snippet" />
+          <a className="btn btn-quiet" href="/" target="_blank" rel="noreferrer">
+            Try BOB
+          </a>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Booking rules</h2>
+        <div className="row">
+          <span>Bookable hours</span>
+          <span>{HOURS_TEXT}</span>
+        </div>
+        <div className="row">
+          <span>Jobs at the same time</span>
+          <span>{bookingCrews()}</span>
+        </div>
+        <div className="row">
+          <span>Earliest booking</span>
+          <span>2 hours from now, up to 14 days out</span>
+        </div>
+        <div className="row">
+          <span>Answers to typed questions</span>
+          <span className={geminiReady() ? 'ok' : 'soft'}>{geminiReady() ? 'AI on' : 'Phone number fallback'}</span>
+        </div>
+      </section>
+
+      <section className="panel">
         <h2>Settings on this deployment</h2>
-        {SETTINGS.map(([key, label]) => {
+        {SETTINGS.map(([key, label, required]) => {
           const set = Boolean(process.env[key]);
           return (
             <div className="row" key={key}>
               <span>
-                {label} <code>{key}</code>
+                {label}
+                <code>{key}</code>
               </span>
-              <span className={set ? 'ok' : 'bad'}>{set ? 'Set' : 'Missing'}</span>
+              <span className={set ? 'ok' : required ? 'bad' : 'soft'}>{set ? 'Set' : required ? 'Missing' : 'Optional'}</span>
             </div>
           );
         })}
-      </div>
+      </section>
     </main>
   );
 }
