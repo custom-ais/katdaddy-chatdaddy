@@ -101,6 +101,14 @@ export const QUESTIONS = {
   // Any "Other" answer
   otherDetail: { text: "Could you briefly describe it in your own words?", options: [] },
 };
+/** What the setup fees cover, said the same way everywhere BOB mentions them. */
+export const SETUP_WHY = {
+  gas: "we shut off the gas, safely disconnect the dryer, reconnect it after cleaning, and perform a gas leak test before we leave",
+  stacked: "we move stacked units with air sleds, so the washer and dryer slide out safely and go back into place",
+  pedestal: "the raised dryer is heavier to handle, so moving the dryer and pedestal out together without tipping, reaching the vent connection, and setting everything back securely takes extra time and care",
+};
+const SETUP_KEY = { "Gas Appliance Safety Procedure": "gas", "Stacked Washer/Dryer Setup": "stacked", "Fixed Pedestal Setup": "pedestal" };
+
 /** Help Me Choose asks performance first, with the playbook's wording. */
 const HELP_SYMPTOMS = { text: "To match you with the right service level, how is your dryer currently performing?", options: ["Dries in 1 normal cycle", "Takes 2+ cycles to dry", "Overheating / Error Code", "Just moved in / Preventative"] };
 /** Questions that offer "Other", and how the description is labeled for the technician. */
@@ -475,7 +483,7 @@ export function airflowAnalysis(p = {}, recommended = recommendTier(p)) {
   if (p.lastCleaned === "No") parts.push("It hasn't been professionally cleaned in the last 12 months, so lint buildup in the line is likely.");
   else if (p.lastCleaned === "Not sure") parts.push("If it hasn't been cleaned in the last 12 months, some lint buildup in the line is likely.");
   if (p.mount === "Stacked" || p.mount === "Pedestal") parts.push(`With a ${p.mount === "Stacked" ? "stacked" : "pedestal"} setup, the transition hose behind the dryer is often kinked or crushed, which the DryerFlex hose upgrade fixes.`);
-  if (p.power === "Gas") parts.push("Gas dryers also get our Gas Appliance Safety Procedure for a safe disconnect and reconnect.");
+  if (p.power === "Gas") parts.push("Gas dryers also get our Gas Appliance Safety Procedure: a safe disconnect and reconnect, plus a gas leak test before we leave.");
   paragraphs.push(parts.splice(0).join(" "));
   parts.push(
     eff
@@ -528,7 +536,7 @@ export function airflowFactors(p = {}) {
   else if (p.lastCleaned === "Yes") f.push("Cleaned in the last 12 months");
   if (p.mount === "Stacked") f.push("Stacked setup: transition hose often crushed");
   if (p.mount === "Pedestal") f.push("Fixed pedestal: transition hose often crushed");
-  if (p.power === "Gas") f.push("Gas dryer: safe disconnect included");
+  if (p.power === "Gas") f.push("Gas dryer: disconnect, reconnect & leak test");
   return f;
 }
 
@@ -687,9 +695,21 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
         if (p.stories === "2-story" && p.laundryFloor === "2nd floor") return "Understood, second-floor laundry setup.";
         return layoutPhrase() ? `Got it, ${layoutPhrase()} setup.` : "Got it.";
       case "power":
-        return p.power === "Gas" ? "Got it, a gas dryer line." : p.power === "Electric" ? "Understood, an electric dryer." : "No problem, your technician will confirm it on site.";
-      case "mount":
-        return p.mount === "Stacked" ? "Got it, a stacked setup." : p.mount === "Pedestal" ? "Got it, a fixed pedestal." : "Got it.";
+        if (p.power === "Gas") {
+          if (s.intent === "repair") return `Got it, a gas dryer line. If the dryer has to be moved, ${SETUP_WHY.gas}.`;
+          const fee = feeLabel("gas").replace(/[ ()+]/g, "");
+          return `Got it, a gas dryer line. ${fee ? `The ${fee} Gas Appliance Safety Procedure means` : "For gas dryers,"} ${SETUP_WHY.gas}.`;
+        }
+        return p.power === "Electric" ? "Understood, an electric dryer." : "No problem, your technician will confirm it on site.";
+      case "mount": {
+        if (p.mount !== "Stacked" && p.mount !== "Pedestal") return "Got it.";
+        const key = p.mount === "Stacked" ? "stacked" : "pedestal";
+        const fee = s.intent === "cleaning" ? feeLabel(key).replace(/[ ()+]/g, "") : "";
+        const why = SETUP_WHY[key].replace(/^./, (c) => c.toUpperCase());
+        return p.mount === "Stacked"
+          ? `Got it, a stacked setup. ${fee ? `The ${fee} stacked setup fee covers moving it with air sleds, so the washer and dryer slide out safely and go back into place.` : `${why}.`}`
+          : `Got it, a fixed pedestal. ${fee ? `The ${fee} pedestal fee covers the extra labor: ${SETUP_WHY.pedestal}.` : `${why}.`}`;
+      }
       case "symptoms":
       case "symptomClarify":
         return "Thanks, that helps me match the right service.";
@@ -867,9 +887,10 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       .map((x) => "• " + x.trim().replace(/^./, (c) => c.toUpperCase()))
       .join("\n") + (fine.length ? `\n\n${finePrint}` : "");
     const extras = q.lineItems.slice(1);
+    const covers = extras.filter((l) => SETUP_KEY[l.name]).map((l) => `• **${l.name}:** ${SETUP_WHY[SETUP_KEY[l.name]].replace(/^./, (c) => c.toUpperCase())}.`);
     const total = priced
       ? extras.length
-        ? `\n\n${q.lineItems.map((l) => `${l.name}: ${money(l.cents)}`).join("\n")}\n**Total: ${money(q.priceCents)}**`
+        ? `\n\n${q.lineItems.map((l) => `${l.name}: ${money(l.cents)}`).join("\n")}\n**Total: ${money(q.priceCents)}**${covers.length ? `\n\n**What the extras cover**\n${covers.join("\n")}` : ""}`
         : ""
       : `\n\n${unverified}`;
     const note = q.priceNote && priced ? `\n\n${q.priceNote}` : "";

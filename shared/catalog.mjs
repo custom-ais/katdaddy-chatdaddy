@@ -31,10 +31,10 @@ export const SERVICE_CATALOG = [
   s("nest", "nest", "any", "Nest Removal Plus Cleaning", "Nest removal plus full vent cleaning, before-and-after photos, and airflow verification", "Restoration", 389, 90),
   s("restoration", "restoration", "any", "Full System Restoration", "Includes nest or pest removal, sanitation fogging, DryerFlex Transition Hose Upgrade, full system reset, before-and-after photos, and airflow verification, set of four wool dryer lint balls", "Restoration", 599, 150),
   s("addon-fogging", "addon", "fogging", "Sanitation Fogging Add-On", "Antimicrobial fogging treatment", "Add-Ons", 79, 15),
-  s("addon-gas", "addon", "gas", "Gas Appliance Safety Procedure", "Flat fee for safe gas dryer disconnect and reconnect", "Add-Ons", 49, 15),
+  s("addon-gas", "addon", "gas", "Gas Appliance Safety Procedure", "Shut off the gas, safely disconnect and reconnect the dryer, and perform a gas leak test before leaving", "Add-Ons", 49, 15),
   s("addon-tool", "addon", "tool", "Tool Retrieval", "Foreign object removal from vent system", "Add-Ons", 69, 30),
-  s("addon-pedestal", "addon", "pedestal", "Fixed Pedestal Setup", "Dryer on a fixed pedestal: extra handling to reach and reconnect the vent", "Add-Ons", 20, 10),
-  s("addon-stacked", "addon", "stacked", "Stacked Washer/Dryer Setup", "Stacked washer and dryer: extra handling to reach and reconnect the vent", "Add-Ons", 45, 15),
+  s("addon-pedestal", "addon", "pedestal", "Fixed Pedestal Setup", "Extra labor for a dryer on a fixed pedestal: moving the raised dryer and pedestal out together without tipping, reaching the vent connection, and setting it back securely", "Add-Ons", 20, 10),
+  s("addon-stacked", "addon", "stacked", "Stacked Washer/Dryer Setup", "Stacked washer and dryer moved with air sleds so the pair slides out safely and goes back into place", "Add-Ons", 45, 15),
   s("emergency", "emergency", "any", "Emergency Same-Day Clog Relief", "Urgent blockage removal, airflow restoration, live camera inspection during service, and airflow verification", "Emergency", 349, 75),
 ];
 

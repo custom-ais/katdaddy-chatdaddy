@@ -64,7 +64,11 @@ const INFO: Record<string, () => React.ReactElement> = {
   ),
   why_we_ask: () => (
     <Expandable title="Why are we asking this?">
-      <p className="mb-2">Gas connections, stacked units, and pedestals need specific safety steps, tools, and a little more time.</p>
+      <ul className="mb-2 space-y-1.5 list-disc pl-5 marker:text-orange-300">
+        <li><strong className="text-slate-700">Gas dryers:</strong> we shut off the gas, safely disconnect the dryer, reconnect it after cleaning, and perform a gas leak test before we leave.</li>
+        <li><strong className="text-slate-700">Stacked units:</strong> we move them with air sleds so the washer and dryer slide out safely and go back into place.</li>
+        <li><strong className="text-slate-700">Fixed pedestals:</strong> the raised dryer is heavier to handle, so moving the dryer and pedestal out together without tipping, reaching the vent, and setting it back securely takes extra time and care.</li>
+      </ul>
       <p>Knowing your setup up front gives you an accurate price and lets your technician arrive ready.</p>
     </Expandable>
   ),
