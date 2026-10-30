@@ -25,6 +25,9 @@ export const estimateDriveMinutes = (a, b) => Math.round((haversineMiles(a, b) *
 const pointKey = (p) => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`;
 const LOOKUP_TIMEOUT_MS = 8000;
 const ISSUE_KEY = "diag:geo";
+// Address suggestions lean toward the West Valley (Places allows a 50 km bias circle).
+const WEST_VALLEY = { latitude: 33.53, longitude: -112.38 };
+const ADDRESS_TYPES = ["street_address", "premise", "subpremise"];
 
 export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY || "", fetchImpl = fetch, clock = () => Date.now() } = {}) {
   /** GET a JSON API with a time limit; an error page or a hang becomes a plain Error. */
@@ -111,6 +114,73 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
     throw error;
   }
 
+  // ---- address suggestions while the customer types (Google Places API (New)) ---------------
+  // One session token per address entry: the typing requests and the final Place Details call
+  // are billed together as one session.
+  const placesError = async (response, json, label) => {
+    const reason = json?.error ? `${json.error.status || response.status}${json.error.message ? ` (${json.error.message})` : ""}` : response.status;
+    const message = `${label} failed: ${reason}`;
+    await cache.kvSet(ISSUE_KEY, { at: clock(), message }, 60 * 60 * 24 * 7).catch(() => {});
+    return new Error(message);
+  };
+
+  /** Up to 5 suggestions: [{ id, main, secondary }]. Empty without a Google key. */
+  async function suggestAddresses(input, sessionToken) {
+    if (!googleKey) return [];
+    const response = await fetchImpl("https://places.googleapis.com/v1/places:autocomplete", {
+      method: "POST",
+      signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
+      headers: { "Content-Type": "application/json", "X-Goog-Api-Key": googleKey },
+      body: JSON.stringify({
+        input, sessionToken, languageCode: "en", regionCode: "us", includedRegionCodes: ["us"],
+        includedPrimaryTypes: ADDRESS_TYPES,
+        locationBias: { circle: { center: WEST_VALLEY, radius: 50000 } },
+      }),
+    });
+    const json = await response.json().catch(() => null);
+    if (!response.ok || !json) throw await placesError(response, json, "Google address suggestions");
+    return (json.suggestions || []).map((x) => x.placePrediction).filter((p) => p?.placeId).slice(0, 5).map((p) => ({
+      id: p.placeId,
+      main: p.structuredFormat?.mainText?.text || p.text?.text || "",
+      secondary: p.structuredFormat?.secondaryText?.text || "",
+    }));
+  }
+
+  /** The chosen suggestion as street / city / ZIP. Also primes the geocode cache for booking. */
+  async function addressFor(placeId, sessionToken) {
+    if (!googleKey) return null;
+    const qs = sessionToken ? `?sessionToken=${encodeURIComponent(sessionToken)}` : "";
+    const response = await fetchImpl(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}${qs}`, {
+      signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
+      headers: { "X-Goog-Api-Key": googleKey, "X-Goog-FieldMask": "addressComponents,formattedAddress,location" },
+    });
+    const json = await response.json().catch(() => null);
+    if (!response.ok || !json) throw await placesError(response, json, "Google address details");
+    const part = (type, short = false) => {
+      const hit = (json.addressComponents || []).find((c) => c.types?.includes(type));
+      return hit ? (short ? hit.shortText : hit.longText) || "" : "";
+    };
+    const number = part("street_number"), road = part("route", true), unit = part("subpremise");
+    const street = [number, road].filter(Boolean).join(" ") + (unit ? ` #${unit}` : "");
+    const out = {
+      street,
+      city: part("locality") || part("sublocality") || part("neighborhood"),
+      state: part("administrative_area_level_1", true),
+      zip: part("postal_code"),
+      formatted: json.formattedAddress || "",
+      precise: Boolean(number),
+    };
+    if (out.precise && out.city && out.zip && json.location) {
+      const g = {
+        lat: json.location.latitude, lng: json.location.longitude, formatted: out.formatted, city: out.city,
+        state: out.state, zip: out.zip, neighborhood: part("neighborhood"), precise: true, provider: "google",
+      };
+      // The same key the contact step looks up, so booking doesn't geocode this address again.
+      await cache.kvSet(`geo:${normalizeAddress(`${out.street}, ${out.city}, AZ ${out.zip}`)}`, g, GEOCODE_TTL).catch(() => {});
+    }
+    return out;
+  }
+
   /** The last time every address lookup failed, for the dashboard (null if none this week). */
   const lastIssue = async () => (await cache.kvGet(ISSUE_KEY).catch(() => null)) || null;
 
@@ -176,5 +246,5 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
     return out;
   }
 
-  return { geocode, driveMinutes, lastIssue, provider: googleKey ? "google" : "estimate" };
+  return { geocode, driveMinutes, lastIssue, suggestAddresses, addressFor, suggestions: Boolean(googleKey), provider: googleKey ? "google" : "estimate" };
 }

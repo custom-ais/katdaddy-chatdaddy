@@ -672,3 +672,30 @@ test("a text code LeadConnector won't send is explained to the office in Connect
   const data = await h.call("/api/admin/data", { cookie: await h.login() });
   assert.match(data.data.integrations.leadConnector.issue.message, /^Text code not sent: sms down/);
 });
+
+// ---- address suggestions -------------------------------------------------------------
+test("address suggestions come through BOB's server, only inside a conversation", async (t) => {
+  const h = await harness(t);
+  const S = "0b7f6a3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b";
+  let token = await h.fresh();
+  assert.equal((await h.call("/api/session", { token })).data.config.addressSuggestions, false, "off without a Google key");
+  Object.assign(h.geo, {
+    suggestions: true,
+    suggestAddresses: async (q, s) => (assert.equal(s, S), [{ id: "ChIJabc12345", main: "15420 W Bell Rd", secondary: "Surprise, AZ, USA" }]),
+    addressFor: async (id) => ({ street: "15420 W Bell Rd", city: "Surprise", state: "AZ", zip: "85374", formatted: "15420 W Bell Rd, Surprise, AZ 85374, USA", precise: true }),
+  });
+  assert.equal((await h.call("/api/session", { token })).data.config.addressSuggestions, true);
+  assert.equal((await h.call(`/api/address/suggest?q=15420&s=${S}`)).status, 401, "needs a conversation");
+  assert.equal((await h.call(`/api/address/suggest?q=15420&s=bad!`, { token })).status, 400);
+  const r = await h.call(`/api/address/suggest?q=15420%20w%20bell&s=${S}`, { token });
+  assert.deepEqual(r.data.suggestions.map((x) => x.main), ["15420 W Bell Rd"]);
+  assert.deepEqual((await h.call(`/api/address/suggest?q=15&s=${S}`, { token })).data.suggestions, [], "too short to search");
+  const d = await h.call(`/api/address/details?id=ChIJabc12345&s=${S}`, { token });
+  assert.equal(d.data.address.zip, "85374");
+  h.geo.suggestAddresses = async () => { throw new Error("PERMISSION_DENIED"); };
+  const down = await h.call(`/api/address/suggest?q=15420%20w%20bell&s=${S}`, { token });
+  assert.equal(down.status, 200, "typing keeps working when Google is down");
+  assert.deepEqual(down.data.suggestions, []);
+  h.geo.addressFor = async () => { throw new Error("PERMISSION_DENIED"); };
+  assert.equal((await h.call(`/api/address/details?id=ChIJabc12345&s=${S}`, { token })).status, 503);
+});

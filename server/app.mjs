@@ -135,6 +135,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
       phone: c.phone,
       email: c.email,
       bookingEnabled: await bookingOpen(c),
+      addressSuggestions: Boolean(geo.suggestions),
       timeZone: "America/Phoenix",
       cleaningPriceCents: c.cleaningPriceCents,
       assessmentPriceCents: c.assessmentPriceCents,
@@ -560,6 +561,33 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         const s = result.session;
         if (s.route !== data.route || s.package !== data.package || s.stage === "review" || s.safety) await store.releaseHolds(token);
         return send(200, result);
+      }
+
+      // Address suggestions for the contact step. The Google key stays on the server.
+      if (method === "GET" && pathname === "/api/address/suggest") {
+        await rate(req, "address-suggest", 150, 600_000);
+        await session(req);
+        const q = String(url.searchParams.get("q") || "").trim().slice(0, 120);
+        const sessionToken = String(url.searchParams.get("s") || "");
+        if (!/^[A-Za-z0-9_-]{8,36}$/.test(sessionToken)) fail(400, "Missing address session.");
+        if (q.length < 3 || !geo.suggestions) return send(200, { suggestions: [] });
+        try {
+          return send(200, { suggestions: await geo.suggestAddresses(q, sessionToken) });
+        } catch (error) {
+          console.warn("[geo] suggestions", error.message);
+          return send(200, { suggestions: [], unavailable: true }); // the customer just keeps typing
+        }
+      }
+      if (method === "GET" && pathname === "/api/address/details") {
+        await rate(req, "address-details", 40, 600_000);
+        await session(req);
+        const id = String(url.searchParams.get("id") || "");
+        const sessionToken = String(url.searchParams.get("s") || "");
+        if (!/^[A-Za-z0-9_-]{8,300}$/.test(id) || !/^[A-Za-z0-9_-]{8,36}$/.test(sessionToken)) fail(400, "Choose an address from the list.");
+        let address = null;
+        try { address = await geo.addressFor(id, sessionToken); } catch (error) { console.warn("[geo] address details", error.message); }
+        if (!address) fail(503, "We couldn't load that address. Please type it instead.");
+        return send(200, { address });
       }
 
       if (method === "POST" && pathname === "/api/contact") {
