@@ -48,7 +48,7 @@ test("an answer with an invented price is thrown away; the rules engine answers 
   const r = await step("how much for a cleaning?", initialSession(), assistant);
   assert.equal(r.via, "rules");
   assert.doesNotMatch(r.reply, /\$99/);
-  assert.match(r.reply, /\$189/);
+  assert.match(r.reply, /Premium 1-2-3 from \$179/);
 });
 
 test("Gemini can't claim a booking, promise a warranty, or ask for card numbers", () => {
@@ -57,8 +57,9 @@ test("Gemini can't claim a booking, promise a warranty, or ask for card numbers"
   assert.equal(guard("Every cleaning has a 3-year warranty.", limits), null);
   assert.equal(guard("Please share your credit card number.", limits), null);
   assert.equal(guard("Call us at (602) 555-0000.", limits), null);
-  assert.equal(guard("Essential is $189 and Performance is $249.", limits), "Essential is $189 and Performance is $249.");
-  assert.equal(guard("Gas dryers come to $318 for Performance upstairs.", limits), "Gas dryers come to $318 for Performance upstairs.");
+  assert.equal(guard("Premium 1-2-3 is $179 and Ultimate Protection is $299.", limits), "Premium 1-2-3 is $179 and Ultimate Protection is $299.");
+  assert.equal(guard("Gas dryers come to $248 for Premium 1-2-3 upstairs.", limits), "Gas dryers come to $248 for Premium 1-2-3 upstairs.");
+  assert.equal(guard("With a cleaning the assessment is $59.50.", limits), "With a cleaning the assessment is $59.50.");
 });
 
 test("option commands must match a real button", () => {
@@ -71,11 +72,11 @@ test("option commands must match a real button", () => {
   assert.deepEqual(unknown.facts, { stories: "2-story" }, "only allowed values survive");
 });
 
-test("cleaning plus a vent problem gets the $248 offer with the customer's concern recorded", async () => {
+test("cleaning plus a vent problem gets the half-off assessment offer with the customer's concern recorded", async () => {
   const { assistant } = reply({ ...base, command: "CLEANING_WITH_CONCERN", facts: { concern: "hose behind the dryer is squished" } });
   const r = await step("want it cleaned, also the hose behind the dryer is all squished", initialSession(), assistant);
   assert.equal(r.session.stage, "bundle_offer");
-  assert.match(r.reply, /\$248 total/);
+  assert.match(r.reply, /50% off: \$59\.50 instead of \$119/);
   assert.deepEqual(r.session.concerns, ["hose behind the dryer is squished"]);
   assert.equal(r.session.bundleAccepted, false, "an offer is not acceptance");
 });

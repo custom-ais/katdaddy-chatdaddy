@@ -3,7 +3,7 @@
 import { turn, detectSafety, applyFacts, WELCOME, START_LABELS } from "../shared/conversation.mjs";
 
 const DIRECT = /^(?:continue(?: booking)?|start over|restart|reset|accept(?: & continue)?|compare packages|more services|back to (?:packages|options)|book this service|book assessment|include assessment|cleaning only|skip|not sure|i don't know|yes|no|ask a question(?: \(faqs\))?|request a callback|\d{5})$/i;
-const PICK_LABEL = /^(?:essential|performance|total system|express|post-service|nest removal \+ cleaning|full system restoration|emergency same-day)(?: · \$[\d,]+\+?)?$/i;
+const PICK_LABEL = /^(?:select )?(?:premium 1-2-3|ultimate protection|safety inspection|essential|performance|total system|express|post-service|nest removal \+ cleaning|full system restoration|emergency same-day)(?: ⭐)?(?: · \$[\d,.]+\+?| \(\$[\d,.]+\+?\))?$/i;
 
 const isDirect = (message, session) => {
   const m = message.trim();

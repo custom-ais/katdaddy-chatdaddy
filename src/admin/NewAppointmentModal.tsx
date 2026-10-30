@@ -14,7 +14,7 @@ export function NewAppointmentModal({ onClose }: { onClose: () => void }) {
   const { data, mutate } = useDashboard();
   const c = data.config;
   const [f, setF] = useState({
-    name: '', phone: '', email: '', address: '', city: '', zip: c.serviceZips[0] || '', service: 'cleaning:essential',
+    name: '', phone: '', email: '', address: '', city: '', zip: c.serviceZips[0] || '', service: 'cleaning:premium',
     stories: '1-story', upstairs: false, gas: false, noDryer: false, fogging: false, toolRetrieval: false,
     scheduledAt: tomorrow10(), technicianId: '', urgency: 'normal', notes: '', smsConsent: false, sendConfirmation: true,
   });
@@ -70,7 +70,7 @@ export function NewAppointmentModal({ onClose }: { onClose: () => void }) {
           <Field label="Service">
             <select className={inputClass} value={f.service} onChange={(e) => set({ service: e.target.value })}>
               <optgroup label="Cleaning">{families.map((fam) => <option key={fam} value={`cleaning:${fam}`}>{(PACKAGES as any)[fam].short}</option>)}</optgroup>
-              <optgroup label="Repairs"><option value="assessment:">Dryer-vent assessment ({money(c.assessmentPriceCents)})</option><option value="bundle:essential">Cleaning + assessment ($248)</option></optgroup>
+              <optgroup label="Repairs"><option value="assessment:">Dryer-vent assessment ({money(c.assessmentPriceCents)})</option><option value="bundle:premium">Premium 1-2-3 + assessment (50% off)</option><option value="bundle:ultimate">Ultimate Protection + assessment (50% off)</option></optgroup>
             </select>
           </Field>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">

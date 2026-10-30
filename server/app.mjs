@@ -1009,7 +1009,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
           if (!(await store.lock(`slot:${day}`, 60))) fail(409, "Another booking for that day is finishing. Try again in a moment.");
           try {
             const office = {
-              route: b.route, package: typeof b.package === "string" ? b.package : "essential",
+              route: b.route, package: typeof b.package === "string" ? b.package : "premium",
               property: { stories: b.stories === "2-story" ? "2-story" : "1-story", laundryFloor: b.upstairs ? "2nd floor" : "1st floor", hasDryer: b.noDryer ? "No" : "Yes", power: b.gas ? "Gas" : "Electric" },
               addOns: b.route === "cleaning" ? { fogging: b.fogging === true, toolRetrieval: b.toolRetrieval === true } : {}, travelFeeCents: where.travelFeeCents,
             };

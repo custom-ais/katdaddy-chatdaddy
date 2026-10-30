@@ -221,7 +221,7 @@ export function AnalyticsDashboard({ onNavigateToAppointments }: { onNavigateToA
           <div className="p-4 rounded-2xl bg-emerald-50/70 border border-emerald-100 space-y-2">
             <div className="flex items-center gap-2 text-emerald-900 font-extrabold text-xs"><AlertTriangle size={14} className="text-emerald-700" />Repairs and follow-up</div>
             <p className="text-xs text-slate-700 leading-relaxed font-medium">
-              {bundleShare === null ? 'No repair visits yet.' : <>Of {repairs.length} repair visit{repairs.length === 1 ? '' : 's'}, <b>{bundleShare}%</b> added the $248 cleaning + assessment.</>}{' '}
+              {bundleShare === null ? 'No repair visits yet.' : <>Of {repairs.length} repair visit{repairs.length === 1 ? '' : 's'}, <b>{bundleShare}%</b> added a cleaning with the assessment at 50% off.</>}{' '}
               {stats.needsOffice ? <><b className="text-rose-700">{stats.needsOffice}</b> booking{stats.needsOffice === 1 ? ' needs' : 's need'} a Jobber check.</> : 'Nothing is waiting on a Jobber check.'}
             </p>
           </div>

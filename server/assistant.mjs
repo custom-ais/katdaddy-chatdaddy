@@ -10,7 +10,7 @@
 
 import { PACKAGES, TIERS, MORE } from "../shared/catalog.mjs";
 import { QUESTIONS, FACT_VALUES, SYMPTOMS, WELCOME } from "../shared/conversation.mjs";
-import { BUNDLE_PRICE_CENTS, money } from "../shared/domain.mjs";
+import { halfAssessmentCents, money } from "../shared/domain.mjs";
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 
@@ -108,14 +108,14 @@ function knowledge(config, faqs) {
     .join("\n\n");
   return `BUSINESS: ${config.businessName}. Residential dryer-vent service in the West Valley (Phoenix area). Service ZIP codes are checked by the booking system.${config.phone ? ` Office phone: ${config.phone}.` : ""}
 Online booking: weekday start times ${config.weekdayStarts.join(", ")}; Saturday ${config.saturdayStarts.join(", ")}; closed Sundays. Times are arrival windows (30 minutes either side), Arizona time. Live availability comes from the schedule; never promise a time.
-${priced ? "" : "Standalone prices are pending the owner's review: don't state service prices except the $248 cleaning + assessment.\n"}
+${priced ? "" : "Prices are pending the owner's review: don't state any service price.\n"}
 SERVICES:
 ${svc}
 ADD-ONS:
 ${addons}
-Gas dryers: the Gas Appliance Safety Procedure is added automatically to cleaning visits (not Express, not an assessment, not the $248 bundle).
+Gas dryers: the Gas Appliance Safety Procedure is added automatically to cleaning visits (not Express, not an inspection or assessment). A fixed pedestal and a stacked washer/dryer add their setup fees to Premium 1-2-3 and Ultimate Protection.
 ASSESSMENT: ${config.assessmentProcess}${priced ? ` Price ${money(config.assessmentPriceCents)}.` : ""} Repairs, parts and replacement are quoted separately.
-CLEANING + ASSESSMENT: when a customer wants cleaning and also has a vent concern, the assessment is 50% off: ${money(BUNDLE_PRICE_CENTS)} total for Essential See-It-Clean + assessment. Nothing is added on top. Repairs are quoted separately.
+CLEANING + ASSESSMENT: when a customer wants cleaning and also has a vent concern, the assessment is 50% off when added to the cleaning${priced ? ` (${money(halfAssessmentCents(config))})` : ""}. The customer still picks the cleaning package. Repairs are quoted separately.
 No dryer installed → the visit is Express Vent Cleaning (vent only).
 Emergency Same-Day Clog Relief needs approval from the team before it's confirmed.
 Before booking, the customer confirms their phone with a text code, then picks a live time and approves the final summary.
@@ -145,8 +145,9 @@ ${recent || "(none)"}`;
 
 /** Money amounts BOB may say, in cents. */
 export function allowedMoney(config, faqs) {
-  const set = new Set([BUNDLE_PRICE_CENTS]);
+  const set = new Set();
   if (!config.pricesAcknowledged) return set;
+  set.add(halfAssessmentCents(config));
   for (const x of config.services || []) if (x.active !== false) set.add(x.priceCents);
   set.add(config.assessmentPriceCents);
   for (const t of config.travelFeeTiers || []) set.add(t.feeCents);

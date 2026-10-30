@@ -2,9 +2,10 @@
 // Names match the Jobber Products & Services list exactly so booked line items line up.
 // Prices and minutes are editable in BOB's admin; these are the starting values.
 
-const SIC_ESSENTIAL = "Full vent cleaning, live camera inspection during service, airflow verification before and after, lint screen cleaning, lint cavity cleaning, dryer drum cleaning, surrounding dryer area cleaning";
-const SIC_PERFORMANCE = "Everything in Essential plus before-and-after photos and DryerFlex transition hose upgrade";
-const SIC_TOTAL = "Everything in Performance, plus termination cleanout, roof access when needed, significant airflow restriction correction, and reusable wool dryer balls. Complete clogs and nest removals are excluded from the package but receive $50 off if removal is needed";
+// Package wording follows the website's pricing cards (dryerventsquadaz.com, Oct 30 2026).
+const PREMIUM = "Live camera inspection before cleaning, lint screen and dryer cavity cleaning, full-path rotary brush cleaning from the appliance to the termination, sealed HEPA-filter vacuum system with no blow-back into the home, post-clean camera verification";
+const ULTIMATE = "Everything in Premium 1-2-3 See-It-Clean, plus exterior termination cleanout for maximum airflow, DryerFlex transition upgrade with professional installation, before-and-after photo documentation, 3-year warranty on parts and labor, complimentary 4-pack of reusable wool dryer balls. Complete clogs and nest removals are excluded from the package but receive $50 off if removal is needed";
+const INSPECTION = "Full visual inspection of the entire dryer vent system, in-duct camera inspection with photo documentation, airflow velocity testing to detect restriction, exterior termination (hood or roof) inspection, marked-up photo report with expert recommendations, itemized repair estimate if needed. The inspection fee applies toward approved repairs";
 const EXPRESS = "Vent-only cleaning with no appliance present, live camera inspection during service";
 const POST = "Vent cleaning plus disconnect and reconnect dryer, before-and-after photos, airflow verification; does not include lint screen, lint cavity, or dryer drum cleaning";
 
@@ -13,15 +14,15 @@ const s = (id, family, variant, name, description, category, dollars, minutes) =
 });
 
 export const SERVICE_CATALOG = [
-  s("essential-1", "essential", "1-story", "Essential See-It-Clean", SIC_ESSENTIAL, "Cleaning", 189, 60),
-  s("essential-2", "essential", "2-story", "Essential See-It-Clean (2 Story)", "Full first floor vent cleaning, live camera inspection during service, airflow verification before and after, lint screen cleaning, lint cavity cleaning, dryer drum cleaning, surrounding dryer area cleaning.", "Cleaning", 229, 90),
-  s("essential-2up", "essential", "2-story-upstairs", "Essential See-It-Clean (2 Story, Upstairs)", "Full second floor vent cleaning, live camera inspection during service, airflow verification before and after, lint screen cleaning, lint cavity cleaning, dryer drum cleaning, surrounding dryer area cleaning.", "Cleaning", 209, 75),
-  s("performance-1", "performance", "1-story", "Performance See-It-Clean", SIC_PERFORMANCE, "Cleaning", 249, 90),
-  s("performance-2", "performance", "2-story", "Performance See-It-Clean (2 Story)", `${SIC_PERFORMANCE}—First floor laundry room.`, "Cleaning", 289, 105),
-  s("performance-2up", "performance", "2-story-upstairs", "Performance See-It-Clean (2 Story, Upstairs)", `${SIC_PERFORMANCE}—Second floor laundry room.`, "Cleaning", 269, 105),
-  s("total-1", "total", "1-story", "Total System See-It-Clean", `${SIC_TOTAL}.`, "Cleaning", 349, 120),
-  s("total-2", "total", "2-story", "Total System See-It-Clean (2 Story)", `${SIC_TOTAL}—First floor laundry room.`, "Cleaning", 389, 135),
-  s("total-2up", "total", "2-story-upstairs", "Total System See-It-Clean (2 Story, upstairs)", `${SIC_TOTAL}—Second floor laundry room.`, "Cleaning", 369, 135),
+  s("premium-1", "premium", "1-story", "Premium 1-2-3 See-It-Clean", PREMIUM, "Cleaning", 179, 60),
+  s("premium-2", "premium", "2-story", "Premium 1-2-3 See-It-Clean (2 Story)", `${PREMIUM}—First floor laundry room.`, "Cleaning", 219, 90),
+  s("premium-2up", "premium", "2-story-upstairs", "Premium 1-2-3 See-It-Clean (2 Story, Upstairs)", `${PREMIUM}—Second floor laundry room.`, "Cleaning", 199, 75),
+  s("ultimate-1", "ultimate", "1-story", "Ultimate Protection", `${ULTIMATE}.`, "Cleaning", 299, 120),
+  s("ultimate-2", "ultimate", "2-story", "Ultimate Protection (2 Story)", `${ULTIMATE}—First floor laundry room.`, "Cleaning", 339, 135),
+  s("ultimate-2up", "ultimate", "2-story-upstairs", "Ultimate Protection (2 Story, Upstairs)", `${ULTIMATE}—Second floor laundry room.`, "Cleaning", 319, 135),
+  s("inspection-1", "inspection", "1-story", "Dryer Vent Safety Inspection", `${INSPECTION}.`, "Inspection", 119, 60),
+  s("inspection-2", "inspection", "2-story", "Dryer Vent Safety Inspection (2 Story)", `${INSPECTION}—First floor laundry room.`, "Inspection", 139, 75),
+  s("inspection-2up", "inspection", "2-story-upstairs", "Dryer Vent Safety Inspection (2 Story, Upstairs)", `${INSPECTION}—Second floor laundry room.`, "Inspection", 129, 75),
   s("express-1", "express", "1-story", "Express Vent Cleaning", `${EXPRESS}.`, "Cleaning", 149, 45),
   s("express-2", "express", "2-story", "Express Vent Cleaning (2 Story)", `${EXPRESS}—First floor laundry room.`, "Cleaning", 189, 60),
   s("express-2up", "express", "2-story-upstairs", "Express Vent Cleaning (2 Story, upstairs)", `${EXPRESS}—Second floor laundry room.`, "Cleaning", 169, 45),
@@ -40,21 +41,23 @@ export const SERVICE_CATALOG = [
 
 /** How each package is presented in chat. Order = menu order. */
 export const PACKAGES = {
-  essential: { label: "Essential", short: "Essential See-It-Clean", pitch: "full vent cleaning with a live camera inspection, airflow checked before and after, plus the lint screen, lint cavity, drum, and dryer area" },
-  performance: { label: "Performance", short: "Performance See-It-Clean", pitch: "everything in Essential, plus before-and-after photos and a DryerFlex transition hose upgrade" },
-  total: { label: "Total System", short: "Total System See-It-Clean", pitch: "everything in Performance, plus termination cleanout, roof access when needed, airflow restriction correction, and wool dryer balls ($50 off clog or nest removal if needed)" },
+  premium: { label: "Premium 1-2-3", short: "Premium 1-2-3 See-It-Clean", badge: "Most popular", pitch: "professional cleaning from the appliance to the exterior termination, with live camera proof before and after, full-path rotary brushing and a sealed HEPA vacuum" },
+  ultimate: { label: "Ultimate Protection", short: "Ultimate Protection", badge: "Most protection", pitch: "everything in Premium 1-2-3, plus exterior termination cleanout, a DryerFlex transition upgrade, before-and-after photos, a 3-year parts and labor warranty, and wool dryer balls" },
+  inspection: { label: "Safety Inspection", short: "Dryer Vent Safety Inspection", badge: "Detailed report", pitch: "a full inspection with in-duct camera photos, airflow velocity testing and a marked-up photo report; the fee applies toward approved repairs" },
   express: { label: "Express", short: "Express Vent Cleaning", pitch: "vent-only cleaning with a live camera inspection, for when no dryer is installed" },
   postservice: { label: "Post-Service", short: "Post-Service Vent Cleaning", pitch: "vent cleaning with dryer disconnect and reconnect, before-and-after photos, and airflow verification (no lint screen, cavity, or drum cleaning)" },
   nest: { label: "Nest Removal + Cleaning", short: "Nest Removal Plus Cleaning", pitch: "nest removal plus a full vent cleaning, before-and-after photos, and airflow verification" },
   restoration: { label: "Full System Restoration", short: "Full System Restoration", pitch: "nest or pest removal, sanitation fogging, a DryerFlex hose upgrade, a full system reset, before-and-after photos, airflow verification, and wool dryer balls" },
   emergency: { label: "Emergency Same-Day", short: "Emergency Same-Day Clog Relief", pitch: "urgent blockage removal and airflow restoration with a live camera inspection and airflow verification" },
 };
-export const TIERS = ["essential", "performance", "total"];
-export const MORE = ["express", "postservice", "nest", "restoration", "emergency"];
-const VARIANT_FAMILIES = new Set(["essential", "performance", "total", "express", "postservice"]);
-const APPLIANCE_FREE = new Set(["express"]);
+/** Packages retired on Oct 30 2026 when the online packages were matched to the website. */
+export const RETIRED_FAMILIES = new Set(["essential", "performance", "total"]);
+export const TIERS = ["premium", "ultimate"];
+export const MORE = ["inspection", "express", "postservice", "nest", "restoration", "emergency"];
+const VARIANT_FAMILIES = new Set(["premium", "ultimate", "inspection", "express", "postservice"]);
+const APPLIANCE_FREE = new Set(["express", "inspection"]); // no dryer to disconnect
 // Setup surcharges (pedestal, stacked) apply to the core packages, per the assistant rules manual.
-const SETUP_FAMILIES = new Set(["essential", "performance", "total", "postservice"]);
+const SETUP_FAMILIES = new Set(["premium", "ultimate", "postservice"]);
 
 /** Which home version applies. Unknown details price as the 2-story first-floor version (the highest). */
 export function homeVariant(property = {}) {
@@ -66,10 +69,12 @@ export function homeVariant(property = {}) {
 
 /** No dryer installed turns a See-It-Clean or Post-Service visit into Express (vent only). */
 export function effectiveFamily(pkg, property = {}) {
-  const family = PACKAGES[pkg] ? pkg : "essential";
-  if (property.hasDryer === "No" && ["essential", "performance", "total", "postservice"].includes(family)) return "express";
-  // Express is vent-only; with a dryer installed the visit is the Essential package.
-  if (property.hasDryer === "Yes" && family === "express") return "essential";
+  const legacy = { essential: "premium", performance: "premium", total: "ultimate" }; // bookings and links from before Oct 30
+  const named = legacy[pkg] || pkg;
+  const family = PACKAGES[named] ? named : "premium";
+  if (property.hasDryer === "No" && ["premium", "ultimate", "postservice"].includes(family)) return "express";
+  // Express is vent-only; with a dryer installed the visit is the Premium package.
+  if (property.hasDryer === "Yes" && family === "express") return "premium";
   return family;
 }
 
@@ -97,8 +102,8 @@ export function addOnLines(services, { family, route, property = {}, addOns = {}
     const item = findService(services, "addon", variant);
     if (item && item.variant === variant) lines.push({ id: item.id, name: item.name, description: item.description, cents: item.priceCents, mins: item.minutes, certain: true });
   };
-  // Add-ons belong to cleaning visits. The $248 cleaning + assessment is a fixed total with
-  // nothing stacked on it, and an assessment by itself is quoted without extras.
+  // Add-ons belong to cleaning visits (a cleaning + assessment visit gets them through its cleaning
+  // package). An assessment by itself is quoted without extras.
   if (route !== "cleaning") return lines;
   // The dryer is disconnected for every cleaning except vent-only Express.
   if (property.power === "Gas" && !APPLIANCE_FREE.has(family)) add("gas");

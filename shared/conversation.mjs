@@ -10,7 +10,7 @@
 // Business rules (rulebook / saved September policy) that stay in force:
 //   • gas smell / smoke / fire stops everything; overheating or burning goes to team review
 //   • a repair-first visit starts with an assessment; repairs are quoted separately
-//   • cleaning + a repair concern gets the $248 cleaning + assessment offer, added only on a yes
+//   • cleaning + a repair concern gets the assessment at 50% off with the cleaning, added only on a yes
 //   • appliance problems, commercial work, complaints and "talk to a person" go to the team
 //   • facts already given are reused, "Not sure" is accepted, and a question asked mid-booking
 //     is answered before returning to the unfinished step
@@ -18,7 +18,7 @@
 // The AI layer (server/assistant.mjs) only translates free text into the commands and
 // facts below; every decision about price and booking happens here or on the server.
 
-import { DEFAULT_CONFIG, money, serviceQuote, BUNDLE_PRICE_CENTS } from "./domain.mjs";
+import { DEFAULT_CONFIG, money, serviceQuote, halfAssessmentCents } from "./domain.mjs";
 import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant } from "./catalog.mjs";
 import { restrictionScore, restrictionLevel } from "./airflow.mjs";
 
@@ -134,7 +134,7 @@ const normalize = (t) => String(t || "").toLowerCase().replace(/[’‘]/g, "'")
 const ACCEPT = /^(?:accept(?: & continue| and continue)?|book this service|book (?:the )?assessment|book it|yes(?:,? please)?|yep|yeah|sure|sounds good|ok(?:ay)?|let'?s do it|continue with (?:this|it))[.!]?$/;
 const ACCEPT_BUNDLE = /^(?:yes|yeah|yep|sure|please|sounds good|okay|ok|include (?:it|the assessment|assessment)|schedule both|add (?:the )?assessment|book (?:both|it)|yes[, ]+(?:include (?:the )?assessment|both|please))[.!]?$/;
 const NO = /^(no|nope|no thanks|not now|decline|just (?:the )?cleaning|cleaning only|skip assessment)[.!]?$/;
-const PRICE = /\b(how much|price|prices|pricing|cost|costs|charge|total|quote|\$248|248)\b/;
+const PRICE = /\b(how much|price|prices|pricing|cost|costs|charge|total|quote|\$248|248|half off|50% off)\b/;
 const QUESTION = /^(how|what|when|where|why|who|can|could|do|does|is|are|will|would|should|tell me|explain|if)\b/;
 const CLEAN = /\b(clean(?:ing)?|cleaned|maintenance|annual|routine)\b/;
 const REPAIR = /\b(repair|fix|replac\w*|rerout\w*|disconnect\w*|crush\w*|damag\w*|came (?:apart|off)|fallen|fell off|broken|loose|hole|leak\w*|install\w*|upgrade)\b/;
@@ -146,9 +146,11 @@ const URGENT = /\b(emergency|urgent|urgently|asap|same[- ]day|right away|today|c
 const CLOG = /\b(clog\w*|blocked|blockage|no airflow|lint (?:buildup|build-up))\b/;
 const UNKNOWN = /^(?:i(?:'m| am)? )?(?:don't know|do not know|not sure|unsure|unknown|no idea|i don't know)[.!]?$/;
 const PICKS = [
-  ["essential", /^essential\b/],
-  ["performance", /^performance\b/],
-  ["total", /^total(?: system)?\b/],
+  ["premium", /^premium(?: 1-2-3)?\b/],
+  ["ultimate", /^ultimate(?: protection)?\b/],
+  ["inspection", /^(?:dryer vent )?(?:safety )?inspection\b|^safety inspection\b/],
+  ["premium", /^(?:essential|performance)\b/], // earlier package names
+  ["ultimate", /^total(?: system)?\b/],
   ["express", /^(?:book )?express\b/],
   ["postservice", /^post-?service\b/],
   ["nest", /^nest(?: removal)?\b/],
@@ -404,9 +406,9 @@ export function questionOrder(s) {
   if (!s.intent) return [];
   const layout = ["stories", twoStory(s) && "laundryFloor"];
   if (s.intent === "cleaning") {
-    const help = s.help && s.route !== "bundle";
+    const help = s.help;
     return [
-      help && !s.package && "symptoms", // Help Me Choose starts with performance
+      help && !s.package && "symptoms", // Help Me Choose starts with performance (and stays on it with an assessment added)
       "zip",
       "hasDryer",
       hasDryer(s) && "recentService",
@@ -414,7 +416,7 @@ export function questionOrder(s) {
       hasDryer(s) && "power",
       hasDryer(s) && "mount",
       // asked with or without a dryer: a vent with no dryer on it can still be badly clogged
-      !help && !s.package && s.route !== "bundle" && "symptoms",
+      !help && !s.package && "symptoms",
       !["nest", "restoration"].includes(s.package) && "animals",
     ].filter(Boolean);
   }
@@ -453,8 +455,9 @@ const answered = (s, key) => {
 
 /**
  * The recommended See-It-Clean package from everything the customer told us.
- * Performance ⭐ is the standard pick. Total System when drying shows a significant restriction
- * (3+ cycles, still damp, or an airflow error code), or when 2-cycle drying comes with a vent
+ * Premium 1-2-3 is the standard pick. Ultimate Protection when drying shows a significant restriction
+ * (3+ cycles, still damp, or an airflow error code), for a stacked or pedestal setup (its DryerFlex upgrade fixes a
+ * crushed transition hose), or when 2-cycle drying comes with a vent
  * that's overdue for cleaning or a stacked/pedestal setup that crushes the transition hose.
  */
 export function recommendTier(p = {}) {
@@ -463,7 +466,7 @@ export function recommendTier(p = {}) {
   const slow = sym.includes("two");
   const fresh = p.recentService === "Yes"; // a new or just-serviced dryer that still dries slowly points to the vent
   const tight = ["Stacked", "Pedestal"].includes(p.mount);
-  return severe || (slow && (fresh || tight)) ? "total" : "performance";
+  return severe || tight || (slow && fresh) ? "ultimate" : "premium";
 }
 
 /** Estimated drying efficiency from cycles: 2 cycles ≈ 50%, 3 or more ≈ 33% or less. */
@@ -496,9 +499,9 @@ export function airflowAnalysis(p = {}, recommended = recommendTier(p)) {
       : "A clear vent keeps drying times short, which saves energy and wear on the dryer.",
   );
   parts.push(
-    recommended === "total"
-      ? "That's why I recommend **Total System See-It-Clean**: it adds termination cleanout and airflow restriction correction to restore full airflow."
-      : "That's why I recommend **Performance See-It-Clean**: it includes the DryerFlex transition hose upgrade and before-and-after photos so you can see the result.",
+    recommended === "ultimate"
+      ? "That's why I recommend **Ultimate Protection**: it adds exterior termination cleanout and a DryerFlex transition upgrade to restore full airflow, with a 3-year parts and labor warranty."
+      : "That's why I recommend **Premium 1-2-3 See-It-Clean**: a full-path cleaning from the appliance to the termination, with live camera proof before and after.",
   );
   parts.push("Symptoms aren't a diagnosis; your technician measures airflow before and after.");
   const [energy, ...why] = parts;
@@ -548,18 +551,17 @@ export function airflowSummary(p = {}, recommended = recommendTier(p)) {
       ? "Your dryer is reporting restricted airflow with an error code."
       : "Drying in one normal cycle suggests airflow is in good shape for now.";
   const why =
-    recommended === "total"
-      ? "**Total System See-It-Clean** adds termination cleanout and airflow restriction correction to restore full airflow."
+    recommended === "ultimate"
+      ? "**Ultimate Protection** adds exterior termination cleanout and a DryerFlex transition upgrade to restore full airflow, with a 3-year parts and labor warranty."
       : eff || sym.includes("error")
-        ? "**Performance See-It-Clean** clears the line and adds the DryerFlex transition hose upgrade, with before-and-after photos so you can see the result."
-        : "**Performance See-It-Clean** keeps it that way with the DryerFlex transition hose upgrade and before-and-after photos.";
+        ? "**Premium 1-2-3 See-It-Clean** clears the full path from the appliance to the termination, with live camera proof before and after."
+        : "**Premium 1-2-3 See-It-Clean** keeps it that way: a full-path cleaning with live camera proof before and after.";
   return `${finding} ${why}`;
 }
 
 /** What each step up adds, for comparisons. */
 const UPGRADES = {
-  performance: "before-and-after photos and a DryerFlex transition hose upgrade",
-  total: "termination cleanout, roof or attic access when needed, airflow restriction correction, and a set of wool dryer balls",
+  ultimate: "exterior termination cleanout, a DryerFlex transition upgrade, before-and-after photos, a 3-year parts and labor warranty, and a 4-pack of wool dryer balls",
   restoration: "sanitation fogging, a DryerFlex transition hose upgrade, a full system reset, and a set of four wool dryer lint balls",
 };
 
@@ -591,7 +593,8 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     if (route === "assessment") return config.assessmentProcess + "\n\n";
     return config.cleaningProcess + " " + config.assessmentProcess + "\n\n";
   };
-  const quoteFor = (family) => serviceQuote("cleaning", config, { package: family, property: s.property, addOns: s.addOns });
+  const quoteFor = (family) => serviceQuote(s.route === "bundle" && TIERS.includes(family) ? "bundle" : "cleaning", config, { package: family, property: s.property, addOns: s.addOns });
+  const halfOff = money(halfAssessmentCents(config)), fullAssessment = money(config.assessmentPriceCents ?? 11900);
   const exact = (family) => {
     try {
       const q = quoteFor(family);
@@ -610,7 +613,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   };
   const variantKnown = () => homeVariant(s.property).certain;
   // Before the home questions, sized packages show their lowest ("from") price.
-  const sized = (family) => ["essential", "performance", "total", "express", "postservice"].includes(family) && s.property.stories == null;
+  const sized = (family) => ["premium", "ultimate", "inspection", "express", "postservice"].includes(family) && s.property.stories == null;
   const amountOf = (family) => (sized(family) ? `${money(fromPrice(services, family) ?? 0)}+` : money(totalOf(family) ?? 0));
   const priceOf = (family) => (priced ? amountOf(family) : "");
   const label = (family) => {
@@ -646,6 +649,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       bullets,
       option: offerLabel(family, recommended),
       recommended: Boolean(recommended),
+      badge: PACKAGES[family].badge || "",
     };
   };
   /** Which surcharges a price already includes, e.g. "the $49 Gas Appliance Safety Procedure". */
@@ -660,7 +664,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return `\n\nPrices include ${names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names.at(-1) : names[0]}.`;
   };
   const unverified = "The team needs to verify the standalone service price before a price-confirmed appointment can be made.";
-  const gasNote = () => feesNote(s.package || (s.offerFamilies || [])[0] || "essential");
+  const gasNote = () => feesNote(s.package || (s.offerFamilies || [])[0] || "premium");
   const homeLabel = () => {
     const { variant, certain } = homeVariant(s.property);
     if (!certain) return "";
@@ -795,7 +799,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       note: priced ? (variantKnown() ? "" : "Prices shown are for a 2-story home with first-floor laundry; your technician confirms on site.") : unverified,
     };
     // Rules manual §5: diagnosis and pricing are separate parts of the message (|||).
-    const reply = `${airflow.headline}. ${airflow.efficiency ? airflow.efficiency + "." : ""}\n\n${lead}\n\n${analysis.join("\n\n")}\n|||\n${explain("cleaning")}${pricing}\n\nWhich package would you like?`;
+    const reply = `${airflow.headline}.${airflow.efficiency ? " " + airflow.efficiency + "." : ""}\n\n${lead}\n\n${analysis.join("\n\n")}\n|||\n${explain("cleaning")}${pricing}\n\nWhich package would you like?`;
     return respond(reply, options, { ...extra, info: ["pricing"], card });
   };
 
@@ -829,7 +833,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.offered = true;
     s.pending = null;
     return respond(
-      `${explain("bundle")}For that additional concern, the assessment lets us evaluate the issue and explain the recommended repair options. With your cleaning, the assessment is 50% off — **${money(BUNDLE_PRICE_CENTS)} total for cleaning + assessment** (Essential See-It-Clean plus the assessment). Any repair work is quoted separately.\n\nWould you like to include the assessment?`,
+      `${explain("bundle")}For that additional concern, the assessment lets us evaluate the issue and explain the recommended repair options. Added to a cleaning, the assessment is **50% off: ${halfOff} instead of ${fullAssessment}**. You'll still choose your cleaning package. Any repair work is quoted separately.\n\nWould you like to include the assessment?`,
       ["Include assessment", "Cleaning only", "Ask a question"],
     );
   };
@@ -863,7 +867,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
 
   const details = (brief = false) => {
     s.stage = "details";
-    s.route = "cleaning";
+    if (!(s.route === "bundle" && s.bundleAccepted && TIERS.includes(s.package))) s.route = "cleaning";
     s.pending = null;
     let q;
     try {
@@ -907,8 +911,8 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.pending = null;
     let locked = "";
     try {
-      const q = s.route === "assessment" || s.route === "bundle" ? serviceQuote(s.route, config) : quoteFor(s.package);
-      const name = s.route === "assessment" ? "the Comprehensive Repair Assessment" : s.route === "bundle" ? "cleaning + assessment" : q.name;
+      const q = s.route === "assessment" ? serviceQuote("assessment", config) : quoteFor(s.package);
+      const name = s.route === "assessment" ? "the Comprehensive Repair Assessment" : q.name;
       locked = `I have locked in **${name}**${priced ? ` at **${money(q.priceCents)}**` : ""}. `;
     } catch {}
     return respond(
@@ -936,7 +940,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       if (s.pending === "symptomClarify") return askSymptomClarify();
       s.symptomConflict = null;
     }
-    // An open $248 offer needs a yes or no before anything else.
+    // An open half-off assessment offer needs a yes or no before anything else.
     if (s.stage === "bundle_offer" && s.offered && !s.bundleAccepted && !s.bundleDeclined) return bundleOffer();
     const missing = questionOrder(s).find((k) => !answered(s, k));
     if (missing) return ask(missing);
@@ -952,7 +956,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     if (s.stage === "review") return respond(body, [], { action: "request" });
     if (["emergency", "confirmed"].includes(s.stage)) return respond(body, []);
     if (["contact", "verify", "slots", "approval"].includes(s.stage)) return respond(`${body}\n\nWhen you're ready, continue with the booking below.`, [], { action: "resume" });
-    if (s.stage === "bundle_offer") return respond(`${body}\n\nWould you like to include the assessment with cleaning for ${money(BUNDLE_PRICE_CENTS)} total?`, ["Include assessment", "Cleaning only"]);
+    if (s.stage === "bundle_offer") return respond(`${body}\n\nWould you like to add the assessment to your cleaning at 50% off (${halfOff})?`, ["Include assessment", "Cleaning only"]);
     return respond(`${body}\n\nWould you like to continue scheduling your service visit?`, ["Yes, let's schedule", "Ask another question"]);
   };
 
@@ -1082,8 +1086,10 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     const family = pick[0];
     if (!s.intent || (s.intent === "repair" && s.route !== "bundle")) s.intent = family === "emergency" ? "emergency" : ["nest", "restoration"].includes(family) ? "nest" : "cleaning";
     if (family === "emergency") s.intent = "emergency";
-    s.route = "cleaning";
-    s.bundleAccepted = false;
+    if (!(s.route === "bundle" && s.bundleAccepted && TIERS.includes(family))) {
+      s.route = "cleaning";
+      s.bundleAccepted = false;
+    }
     s.package = family;
     s.serviceAccepted = false;
     s.pending = null;
@@ -1124,7 +1130,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.serviceAccepted = false;
     if (!s.intent || s.intent === "repair") s.intent = "cleaning";
     if (s.intent === "emergency" || s.intent === "nest") s.intent = "cleaning";
-    s.route = "cleaning";
+    if (!s.bundleAccepted) s.route = "cleaning"; // an added half-off assessment stays
     return next();
   }
 
@@ -1147,12 +1153,13 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   }
   if (s.stage === "bundle_offer") {
     if (ACCEPT_BUNDLE.test(t)) {
+      // The assessment rides along at 50% off; the customer still picks the cleaning package.
       s.intent = "cleaning";
       s.route = "bundle";
-      s.package = "essential";
       s.bundleAccepted = true;
-      s.serviceAccepted = true;
+      s.serviceAccepted = false;
       s.stage = "evaluating";
+      ack = `Got it, the assessment is added at 50% off (${halfOff}).`;
       return next();
     }
     if (NO.test(t)) {
@@ -1181,7 +1188,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       return next();
     }
     if (s.stage === "offer" && !s.package) {
-      s.package = s.suggested || "essential";
+      s.package = s.suggested || "premium";
       return next();
     }
     s.serviceAccepted = true;
@@ -1235,12 +1242,12 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   // -- prices and questions ------------------------------------------------------------------
   const bare = /\b(just (?:the )?(?:price|total|number)|only (?:the )?price)\b/.test(t);
   if (PRICE.test(t) && /\b(includ\w*|covers?|replacing|replacement|repair work|repair itself)\b/.test(t) && (s.route === "bundle" || s.offered || /248/.test(t))) {
-    return resume(`The **${money(BUNDLE_PRICE_CENTS)} covers cleaning and assessment**, not repairs, parts, or replacement work. Any repair work is quoted separately for your approval.`);
+    return resume(`The assessment covers evaluating the issue, not repairs, parts, or replacement work. Added to a cleaning it's 50% off (${halfOff}). Any repair work is quoted separately for your approval.`);
   }
   if (PRICE.test(t) && (QUESTION.test(t) || t.endsWith("?") || bare || /^(?:price|prices|pricing|cost)$/.test(t))) {
     if (intent.route === "cleaning" && !s.intent) startIntent("cleaning");
     let answer;
-    if (s.route === "bundle" || (s.offered && !s.bundleDeclined)) answer = `Cleaning + assessment is **${money(BUNDLE_PRICE_CENTS)} total**. Repairs are quoted separately.`;
+    if (s.route === "bundle" || (s.offered && !s.bundleDeclined)) answer = `Added to a cleaning, the assessment is **50% off: ${halfOff}** on top of your cleaning package. Repairs are quoted separately.`;
     else if (s.intent === "repair" || /\b(?:repair|assessment)\b/.test(t)) {
       answer = priced ? `${bare ? "" : explain("assessment")}The dryer-vent assessment is **${money(config.assessmentPriceCents)}**. Repairs are quoted separately.` : unverified;
     } else if (!priced) answer = unverified;

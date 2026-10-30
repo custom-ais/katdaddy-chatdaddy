@@ -124,10 +124,13 @@ function AirflowGauge({ a }: { a: { score: number; level: string; headline: stri
 }
 
 function PackageCard({ p, onChoose, disabled }: { p: any; onChoose: (option: string) => void; disabled: boolean }) {
-  const short = String(p.name).replace(/ See-It-Clean$/, '');
+  const short = String(p.name).replace(/ See-It-Clean$/, '').replace(/^Dryer Vent /, '');
   return (
     <div className={`rounded-2xl border-2 bg-white p-4 sm:p-5 ${p.recommended ? 'border-orange-500 shadow-md shadow-orange-500/10' : 'border-slate-200'}`}>
-      {p.recommended && <p className="text-xs font-extrabold text-orange-700 mb-1">BOB's pick for you</p>}
+      <div className="flex flex-wrap items-center gap-2 mb-1">
+        {p.recommended && <p className="text-xs font-extrabold text-orange-700">BOB's pick for you</p>}
+        {p.badge && <span className="text-[11px] font-extrabold uppercase tracking-wide bg-slate-100 text-slate-700 rounded-full px-2.5 py-0.5">{p.badge}</span>}
+      </div>
       <div className="flex items-start justify-between gap-3">
         <h4 className="font-extrabold text-slate-900 text-base leading-snug">{p.name}</h4>
         {p.price && <span className="font-display text-2xl sm:text-[28px] font-extrabold text-slate-900 leading-none shrink-0">{p.price}</span>}
@@ -179,9 +182,9 @@ function iconFor(label: string) {
   if (/one normal cycle|1 normal cycle|no signs|have dryer|^yes|no gate code|no special notes|cleaning only|dryer is off|turned off/.test(l)) return <Check size={18} className={`${c} text-emerald-500`} />;
   if (/^no$|no dryer|^no thanks|^no,/.test(l)) return <X size={18} className={`${c} text-rose-500`} />;
   if (l.includes('express')) return <Timer size={18} className={`${c} text-teal-500`} />;
-  if (l.includes('essential')) return <Wind size={18} className={`${c} text-blue-500`} />;
-  if (l.includes('performance')) return <Star size={18} className={`${c} text-orange-500`} />;
-  if (l.includes('total')) return <Shield size={18} className={`${c} text-indigo-500`} />;
+  if (l.includes('premium')) return <Star size={18} className={`${c} text-orange-500`} />;
+  if (l.includes('ultimate')) return <Shield size={18} className={`${c} text-indigo-500`} />;
+  if (l.includes('inspection')) return <Search size={18} className={`${c} text-blue-500`} />;
   if (/emergency|same-day|running \/ hot|burning/.test(l)) return <AlertTriangle size={18} className={`${c} text-red-500`} />;
   if (/nest|restoration|animals/.test(l)) return <Bird size={18} className={`${c} text-amber-600`} />;
   if (l.includes('gas')) return <Flame size={18} className={`${c} text-orange-500`} />;

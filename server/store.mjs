@@ -4,6 +4,7 @@
 
 import { randomUUID } from "node:crypto";
 import { DEFAULT_CONFIG, INITIAL_FAQS, INITIAL_TECHNICIANS, withConfigDefaults } from "../shared/domain.mjs";
+import { refreshFaqs } from "../shared/faqs.mjs";
 
 const num = (v) => (v == null ? null : Number(v));
 const json = (v) => JSON.stringify(v ?? null);
@@ -36,7 +37,8 @@ export function createStore(db, { clock = Date.now } = {}) {
     // ---- settings ------------------------------------------------------------
     async get(key, fallback = null) {
       const rows = await q("select value from bob.settings where key=$1", [key]);
-      return rows.length ? rows[0].value : fallback;
+      if (!rows.length) return fallback;
+      return key === "faqs" ? refreshFaqs(rows[0].value) : rows[0].value; // saved default answers get the current wording
     },
     async set(key, value) {
       await q(
