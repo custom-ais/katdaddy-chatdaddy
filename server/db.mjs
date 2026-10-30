@@ -73,6 +73,11 @@ export async function createPostgresDb(url) {
     connect_timeout: 10,
     ssl: /localhost|127\.0\.0\.1/.test(url) ? false : "require",
     types: {
+      jsonb: {
+        to: 3802, from: [3802],
+        serialize: (x) => typeof x === "string" ? x : JSON.stringify(x),
+        parse: (x) => JSON.parse(x),
+      },
       bigint: { to: 20, from: [20], serialize: (x) => String(x), parse: (x) => Number(x) },
     },
     onnotice: () => {},
@@ -124,8 +129,3 @@ export async function createDb(env = process.env) {
   if (env.VERCEL) throw new Error("No database is set. Add DATABASE_URL, or NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY, in Vercel.");
   return createPgliteDb(env.BOB_PGLITE_DIR || ".data/pglite");
 }
-jsonb: {
-  to: 3802, from: [3802],
-  serialize: (x) => typeof x === "string" ? x : JSON.stringify(x),
-  parse: (x) => JSON.parse(x),
-},
