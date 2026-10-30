@@ -11,10 +11,21 @@ export function splitName(full) {
   return { firstName: parts[0] || "", lastName: parts.slice(1).join(" ") };
 }
 
+/** A pasted value can carry spaces, quotes or a "Bearer " prefix; LeadConnector rejects all of them. */
+export const cleanSecret = (value) => String(value || "").trim().replace(/^["']+|["']+$/g, "").replace(/^Bearer\s+/i, "").trim();
+
+/** What kind of value is in LC_PRIVATE_TOKEN, without revealing it. */
+export function tokenKind(token) {
+  if (!token) return "missing";
+  if (/^pit-[A-Za-z0-9-]{8,}$/.test(token)) return "private-integration";
+  if (/^eyJ[\w-]+\.[\w-]+\.[\w-]+$/.test(token)) return "jwt"; // an old location API key or an OAuth token
+  return "other";
+}
+
 export function createLeadConnector({ env = process.env, fetchImpl = fetch } = {}) {
   const cfg = {
-    token: env.LC_PRIVATE_TOKEN || "",
-    locationId: env.LC_LOCATION_ID || "",
+    token: cleanSecret(env.LC_PRIVATE_TOKEN),
+    locationId: cleanSecret(env.LC_LOCATION_ID),
     contactsVersion: env.LC_CONTACTS_VERSION || "2021-07-28",
     conversationsVersion: env.LC_CONVERSATIONS_VERSION || "2021-04-15",
     emailFrom: env.LC_EMAIL_FROM || "",
@@ -84,5 +95,5 @@ export function createLeadConnector({ env = process.env, fetchImpl = fetch } = {
   const addNote = (contactId, text) =>
     call(`/contacts/${contactId}/notes`, { body: text }, cfg.contactsVersion).catch((e) => console.warn("[lc] note:", e.message));
 
-  return { configured, cfg, upsertContact, sendSms, sendEmail, addNote };
+  return { configured, cfg, tokenKind: tokenKind(cfg.token), upsertContact, sendSms, sendEmail, addNote };
 }

@@ -48,6 +48,7 @@ function Connections() {
       i.jobber?.appConfigured && (i.jobber?.connected ? <button className={subtleButton} onClick={disconnect} disabled={busy}>Disconnect</button> : <a className={primaryButton} href="/api/admin/jobber/connect">Connect Jobber</a>)],
     ['LeadConnector', !!i.leadConnector?.configured && !i.leadConnector?.issue,
       <>{i.leadConnector?.configured ? 'Sends verification codes, confirmations and approval texts, and saves contacts and requests.' : 'Add LC_PRIVATE_TOKEN and LC_LOCATION_ID in Vercel. Phone verification needs it, so online booking waits for it.'}
+        {i.leadConnector?.configured && ['jwt', 'other'].includes(i.leadConnector?.tokenKind) && <span className="block mt-1 font-semibold text-amber-800">LC_PRIVATE_TOKEN doesn't look like a Private Integration token (those start with “pit-”).{i.leadConnector.tokenKind === 'jwt' ? ' It looks like an older API key or app token.' : ''} Copy the token from the sub-account's Settings → Private Integrations.</span>}
         {i.leadConnector?.issue && <span className="block mt-1 font-semibold text-amber-800">{when(i.leadConnector.issue.at)}: {i.leadConnector.issue.message}</span>}</>],
     ['Smart chat', !!i.assistant?.configured, i.assistant?.configured ? `Gemini (${i.assistant.model}) reads typed messages. It can't set prices or book — BOB's rules do that.` : 'Add GEMINI_API_KEY in Vercel. Until then BOB uses buttons and keyword matching.'],
     ['Maps', i.maps?.provider === 'google' && !i.maps?.issue,
