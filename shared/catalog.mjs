@@ -15,7 +15,7 @@ const s = (id, family, variant, name, description, category, dollars, minutes) =
 export const SERVICE_CATALOG = [
   s("essential-1", "essential", "1-story", "Essential See-It-Clean", SIC_ESSENTIAL, "Cleaning", 189, 60),
   s("essential-2", "essential", "2-story", "Essential See-It-Clean (2 Story)", "Full first floor vent cleaning, live camera inspection during service, airflow verification before and after, lint screen cleaning, lint cavity cleaning, dryer drum cleaning, surrounding dryer area cleaning.", "Cleaning", 229, 90),
-  s("essential-2up", "essential", "2-story-upstairs", "Essential See-It-Clean (2 Story, Upstairs)", "Full second floor vent cleaning, live camera inspection during service, airflow verification before and after, lint screen cleaning, lint cavity cleaning, dryer drum cleaning, surrounding dryer area cleaning.", "Cleaning", 219, 75),
+  s("essential-2up", "essential", "2-story-upstairs", "Essential See-It-Clean (2 Story, Upstairs)", "Full second floor vent cleaning, live camera inspection during service, airflow verification before and after, lint screen cleaning, lint cavity cleaning, dryer drum cleaning, surrounding dryer area cleaning.", "Cleaning", 209, 75),
   s("performance-1", "performance", "1-story", "Performance See-It-Clean", SIC_PERFORMANCE, "Cleaning", 249, 90),
   s("performance-2", "performance", "2-story", "Performance See-It-Clean (2 Story)", `${SIC_PERFORMANCE}—First floor laundry room.`, "Cleaning", 289, 105),
   s("performance-2up", "performance", "2-story-upstairs", "Performance See-It-Clean (2 Story, Upstairs)", `${SIC_PERFORMANCE}—Second floor laundry room.`, "Cleaning", 269, 105),
@@ -23,7 +23,7 @@ export const SERVICE_CATALOG = [
   s("total-2", "total", "2-story", "Total System See-It-Clean (2 Story)", `${SIC_TOTAL}—First floor laundry room.`, "Cleaning", 389, 135),
   s("total-2up", "total", "2-story-upstairs", "Total System See-It-Clean (2 Story, upstairs)", `${SIC_TOTAL}—Second floor laundry room.`, "Cleaning", 369, 135),
   s("express-1", "express", "1-story", "Express Vent Cleaning", `${EXPRESS}.`, "Cleaning", 149, 45),
-  s("express-2", "express", "2-story", "Express Vent Cleaning (2 Story)", `${EXPRESS}—First floor laundry room.`, "Cleaning", 179, 60),
+  s("express-2", "express", "2-story", "Express Vent Cleaning (2 Story)", `${EXPRESS}—First floor laundry room.`, "Cleaning", 189, 60),
   s("express-2up", "express", "2-story-upstairs", "Express Vent Cleaning (2 Story, upstairs)", `${EXPRESS}—Second floor laundry room.`, "Cleaning", 169, 45),
   s("postservice-1", "postservice", "1-story", "Post-Service Vent Cleaning (1-Story)", POST, "Cleaning", 159, 60),
   s("postservice-2", "postservice", "2-story", "Post-Service Vent Cleaning (2-Story)", POST, "Cleaning", 199, 90),
@@ -33,6 +33,8 @@ export const SERVICE_CATALOG = [
   s("addon-fogging", "addon", "fogging", "Sanitation Fogging Add-On", "Antimicrobial fogging treatment", "Add-Ons", 79, 15),
   s("addon-gas", "addon", "gas", "Gas Appliance Safety Procedure", "Flat fee for safe gas dryer disconnect and reconnect", "Add-Ons", 49, 15),
   s("addon-tool", "addon", "tool", "Tool Retrieval", "Foreign object removal from vent system", "Add-Ons", 69, 30),
+  s("addon-pedestal", "addon", "pedestal", "Fixed Pedestal Setup", "Dryer on a fixed pedestal: extra handling to reach and reconnect the vent", "Add-Ons", 20, 10),
+  s("addon-stacked", "addon", "stacked", "Stacked Washer/Dryer Setup", "Stacked washer and dryer: extra handling to reach and reconnect the vent", "Add-Ons", 45, 15),
   s("emergency", "emergency", "any", "Emergency Same-Day Clog Relief", "Urgent blockage removal, airflow restoration, live camera inspection during service, and airflow verification", "Emergency", 349, 75),
 ];
 
@@ -51,6 +53,8 @@ export const TIERS = ["essential", "performance", "total"];
 export const MORE = ["express", "postservice", "nest", "restoration", "emergency"];
 const VARIANT_FAMILIES = new Set(["essential", "performance", "total", "express", "postservice"]);
 const APPLIANCE_FREE = new Set(["express"]);
+// Setup surcharges (pedestal, stacked) apply to the core packages, per the assistant rules manual.
+const SETUP_FAMILIES = new Set(["essential", "performance", "total", "postservice"]);
 
 /** Which home version applies. Unknown details price as the 2-story first-floor version (the highest). */
 export function homeVariant(property = {}) {
@@ -98,6 +102,8 @@ export function addOnLines(services, { family, route, property = {}, addOns = {}
   if (route !== "cleaning") return lines;
   // The dryer is disconnected for every cleaning except vent-only Express.
   if (property.power === "Gas" && !APPLIANCE_FREE.has(family)) add("gas");
+  if (property.mount === "Pedestal" && SETUP_FAMILIES.has(family)) add("pedestal");
+  if (property.mount === "Stacked" && SETUP_FAMILIES.has(family)) add("stacked");
   if (addOns.fogging && family !== "restoration") add("fogging"); // Restoration already includes fogging
   if (addOns.toolRetrieval) add("tool");
   return lines;

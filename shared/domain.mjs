@@ -57,6 +57,8 @@ export const DEFAULT_CONFIG = {
   preparation: 'Please make the laundry area accessible and secure pets before the visit. Do not move or disconnect the dryer yourself. Let the team know about access restrictions.',
   cleaningProcess: 'Every See-It-Clean visit is a full vent cleaning with a live camera inspection during service, and we verify airflow before and after so you can see the difference.',
   assessmentProcess: 'We evaluate the vent issue, document our findings, and explain the recommended repair options so the work can be quoted appropriately.',
+  // Rules manual: the $119 assessment is credited 100% toward the repair when the customer hires DVS for it.
+  assessmentCredited: true,
 };
 export const INITIAL_TECHNICIANS = [
   {id:'tech-ryan',name:'Ryan Boucher',phone:'',status:'available',color:'#f97316',zone:'West Valley',jobberUserId:''},
@@ -106,7 +108,12 @@ export function bookingQuote(route,config=DEFAULT_CONFIG,ctx={}) {
  const lineItems=fee?[...q.lineItems,{id:'travel-fee',name:'Travel fee',description:'Based on drive time to your address.',cents:fee,mins:0}]:q.lineItems;
  return {...q,lineItems,travelFeeCents:fee,totalCents:q.priceCents+fee};
 }
-export const withConfigDefaults = saved => ({...DEFAULT_CONFIG,...(saved||{})});
+// Saved settings win, but catalog items added in a later release (like new add-ons) are filled in.
+export const withConfigDefaults = saved => {
+ const c={...DEFAULT_CONFIG,...(saved||{})};
+ if(Array.isArray(saved?.services)){const ids=new Set(saved.services.map(x=>x.id));c.services=[...saved.services,...SERVICE_CATALOG.filter(x=>!ids.has(x.id))];}
+ return c;
+};
 export function isBookable(config) {
  return !!(config.bookingEnabled && config.scheduleAcknowledged && config.pricesAcknowledged && config.serviceZips.length && config.activeTechnicianIds.length);
 }

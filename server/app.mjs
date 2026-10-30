@@ -429,7 +429,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         price: q.totalCents / 100, servicePriceCents: q.priceCents, travelFeeCents: q.travelFeeCents,
         route: data.route, status: "confirmed", scheduledAt: new Date(slot.start).toISOString(), durationMins: q.durationMins,
         technicianId: slot.technicianId, technicianName: slot.technicianName, notes: contact.notes,
-        concerns: data.concerns, property: data.property, smsConsent: contact.smsConsent,
+        concerns: [...(data.concerns || []), ...(data.notes || [])], property: data.property, smsConsent: contact.smsConsent,
         assessmentAccepted: data.bundleAccepted, urgency: q.package === "emergency" ? "high" : "normal", source: "ai_bot",
         createdAt: new Date(clock()).toISOString(), revision: 1, scheduleSource: c.scheduleSource, jobber: null,
         phoneVerified: Boolean(data.phoneVerified), overflow: Boolean(slot.overflow), sameDay: Boolean(slot.sameDay),
@@ -726,7 +726,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
           service: q.name, packageId: q.package, totalCents: q.totalCents, lineItems: q.lineItems,
           scheduledAt: new Date(hold.start).toISOString(), durationMins: q.durationMins, technicianName: slot.technicianName,
           customer: { name: data.contact.name, phone: data.contact.phone, email: data.contact.email, address: data.contact.address, city: data.contact.city, zip: data.contact.zip },
-          concerns: data.concerns || [], property: data.property || {}, notes: data.contact.notes || "",
+          concerns: [...(data.concerns || []), ...(data.notes || [])], property: data.property || {}, notes: data.contact.notes || "",
           requestedAt: clock(), expiresAt, decision: null, notified: null,
         };
         await store.extendHold(hold.id, expiresAt);
@@ -764,7 +764,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
           id: newId("REQ"), name: body.name.trim(), phone: normalizePhone(body.phone), email: body.email || "",
           zip: body.zip || data.zip || "", message: body.message.trim(), preference: body.preference === "email" ? "email" : "phone",
           smsConsent: body.smsConsent === true, status: "new", createdAt: new Date(clock()).toISOString(),
-          route: data.route, safety: data.safety, concerns: data.concerns, transcript: data.history,
+          route: data.route, safety: data.safety, concerns: [...(data.concerns || []), ...(data.notes || [])], transcript: data.history,
         };
         await store.insertRequest(request, token, body.idempotencyKey);
         await store.enqueue("request.created", request, Boolean(webhookUrl));

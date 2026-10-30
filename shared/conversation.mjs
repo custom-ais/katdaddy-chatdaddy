@@ -1,9 +1,11 @@
 // BOB's deterministic booking conversation.
 //
-// Flow (from the Dryer Vent Squad booking dashboard design):
-//   welcome → evaluation questions, one at a time → recommendation with exact prices
-//   → package details → "Accept & Continue" → contact details (collected by the page)
-//   → phone verification → live times → final approval → booked.
+// Flow (Assistant Instructions & Rules Manual + Master Workflow Playbook, Oct 30 2026):
+//   four starting paths → one question per message, each reply opening with a short
+//   acknowledgment → recommendation with final calculated prices (base + gas / pedestal /
+//   stacked) → Transparent Pricing Promise → "Accept" → contact details in order
+//   (name → email → phone → SMS consent → address → notes, collected by the page)
+//   → phone verification → live Jobber times → final approval → booked in Jobber.
 //
 // Business rules (rulebook / saved September policy) that stay in force:
 //   • gas smell / smoke / fire stops everything; overheating or burning goes to team review
@@ -35,6 +37,13 @@ export const initialSession = () => ({
   concerns: [],
   concernSkipped: false,
   symptomConflict: null, // { tries } while BOB is waiting for a typed clarification
+  help: false, // "Help Me Choose Package" path
+  repairScope: null, // the repair issue picked first on the repair path
+  dryerHot: null, // emergency path: was the dryer running or hot?
+  dryerOffConfirmed: false,
+  concernDescribed: false,
+  otherFor: null, // which question an "Other" answer belongs to, while BOB asks for a description
+  notes: [], // the customer's own descriptions for "Other" answers
   safety: null,
   explained: [],
   addOns: {},
@@ -44,34 +53,58 @@ export const initialSession = () => ({
   options: [],
 });
 
-/** Welcome cards. The page shows these; the engine accepts them as typed text too. */
-export const WELCOME = [
-  "Dryer Vent Cleaning",
-  "Repair / Reroute / Upgrade",
-  "Emergency Clog / Overheating",
-  "Pest / Nest Removal",
-  "Ask a Question (FAQs)",
-  "Help Me Choose",
-];
+/** Welcome cards (the playbook's four starting paths). The engine accepts them as typed text too. */
+export const WELCOME = ["Emergency Clog / Overheating", "Standard Vent Cleaning", "Help Me Choose Package", "Repair / Reroute / Assessment"];
+/** Starting-path names, including earlier button labels that may still be typed or sent by the AI layer. */
+const START = {
+  "emergency clog / overheating": "emergency",
+  "standard vent cleaning": "cleaning",
+  "dryer vent cleaning": "cleaning",
+  "help me choose package": "help",
+  "help me choose": "help",
+  "repair / reroute / assessment": "repair",
+  "repair / reroute / upgrade": "repair",
+  "pest / nest removal": "nest",
+  "ask a question (faqs)": "faq",
+};
+/** Every starting-path name the engine accepts, for the chat server's exact-button shortcut. */
+export const START_LABELS = Object.keys(START);
+export const GREETING = "👋 Hi! Welcome to Dryer Vent Squad West Valley! I'm your AI Booking & Diagnostic Assistant.\n\nHow can I help restore your dryer exhaust system today?";
 
 export const QUESTIONS = {
   zip: { text: "What's the five-digit ZIP code for the service address?", options: [] },
-  hasDryer: { text: "Do you currently have a dryer installed, or is it just the vent?", options: ["Have Dryer", "No Dryer", "Not sure"] },
+  hasDryer: { text: "Do you currently have a dryer installed at the location, or do you only need the exhaust duct line serviced?", options: ["Have Dryer Installed", "No Dryer Present (Duct Only)"] },
   lastCleaned: { text: "Has your dryer vent been professionally cleaned in the last 12 months?", options: ["Yes", "No", "Not sure"] },
-  stories: { text: "Is your home a 1-story or 2-story?", options: ["1-Story", "2-Story", "Not sure"] },
+  stories: { text: "Is your home a 1-story or 2-story residence?", options: ["1-Story Home", "2-Story (1st Floor Laundry)", "2-Story (2nd Floor Laundry)", "Not sure"] },
   laundryFloor: { text: "Is the laundry room on the 1st floor or the 2nd floor?", options: ["1st Floor", "2nd Floor", "Not sure"] },
-  power: { text: "Is your dryer gas or electric?", options: ["Electric", "Gas", "I don't know"], info: ["gas_electric", "why_we_ask"] },
-  mount: { text: "Is your dryer standard, on a fixed pedestal, or stacked with a washer?", options: ["Standard", "Fixed Pedestal", "Stacked", "I don't know"], info: ["why_we_ask"] },
-  exit: { text: "Does the vent exit through the roof or a side wall? Choose “Not sure” rather than climbing up to check.", options: ["Roof Vent", "Side Wall Vent", "Not sure"] },
+  power: { text: "Is your dryer gas or electric?", options: ["Electric Dryer", "Gas Dryer", "I don't know", "Other"], info: ["gas_electric", "why_we_ask"] },
+  mount: { text: "Is your dryer standard, on a fixed pedestal, or stacked with a washer?", options: ["Standard Floor Setup", "Fixed Pedestal", "Stacked Washer/Dryer", "I don't know", "Other"], info: ["why_we_ask"] },
   symptoms: {
     text: "How is the dryer performing right now? Select all that apply.",
-    options: ["Dries in one normal cycle", "Takes about 2 cycles", "Takes 3 or more cycles", "Dryer is overheating or shutting off", "It's showing an airflow error code"],
+    options: ["Dries in one normal cycle", "Takes about 2 cycles", "Takes 3 or more cycles", "Clothes are still damp after multiple cycles", "Dryer is overheating or shutting off", "It's showing an airflow error code", "Other / not sure"],
     multi: true,
   },
   symptomClarify: { text: "Those answers don't match. How many drying cycles does it usually take? Please type it out in your own words.", options: [] },
-  animals: { text: "Have you noticed any bird nests, pests, or animal activity around the outside vent?", options: ["Yes, signs of animals", "No signs", "Not sure"] },
-  concern: { text: "In a sentence, what's going on with the vent? For example: disconnected behind the dryer, crushed, or needs rerouting.", options: ["Skip"] },
+  animals: { text: "Have you noticed any visible signs of animals around the vent?", options: ["Yes, signs of animals", "No signs", "I don't know", "Other"] },
+  concern: { text: "Please describe the issue in a sentence or two. For example: the duct came apart in the attic, or the roof cap is crushed.", options: ["Skip"] },
+  // Emergency path
+  safetyCheck: { text: "🚨 Safety Priority Flag! Is your dryer currently running or extremely hot to the touch right now?", options: ["Yes, it's still running / hot", "No, it's turned off now"] },
+  powerOff: { text: "🛑 Please turn off and unplug your dryer immediately to prevent motor burnout or a fire hazard.\n\nPlease confirm when the appliance is turned off so we can proceed with emergency scheduling.", options: ["Dryer is off now"] },
+  triage: {
+    text: "What is happening with the dryer? Select all that apply.",
+    options: ["Overheating or shutting off", "Error code (D80/D90/D95)", "Little/no airflow outside", "Takes multiple cycles", "Possible nest/blockage", "Burning smell", "Other / something else"],
+    multi: true,
+  },
+  // Repair path
+  repairScope: { text: "What specific issue are you experiencing with your vent system?", options: ["Broken Vent Cap / Exterior Damage", "Disconnected Duct in Wall/Attic", "Bird / Pest Infestation", "Need Duct Rerouted", "Other Repair Issue"] },
+  repairPerf: { text: "How is the dryer working right now?", options: ["Working Normal", "Takes more than 1 cycle", "Not working", "I don't know"] },
+  // Any "Other" answer
+  otherDetail: { text: "Could you briefly describe it in your own words?", options: [] },
 };
+/** Help Me Choose asks performance first, with the playbook's wording. */
+const HELP_SYMPTOMS = { text: "To match you with the right service level, how is your dryer currently performing?", options: ["Dries in 1 normal cycle", "Takes 2+ cycles to dry", "Overheating / Error Code", "Just moved in / Preventative"] };
+/** Questions that offer "Other", and how the description is labeled for the technician. */
+const OTHER_LABELS = { power: "Gas or electric", mount: "Dryer setup", symptoms: "Dryer performance", animals: "Signs of animals", triage: "What's happening", repairScope: "Repair issue" };
 
 /** Property values the AI layer may fill in (anything else is ignored). */
 export const FACT_VALUES = {
@@ -192,9 +225,9 @@ function parseField(key, t) {
 
 export function parseSymptoms(t) {
   const out = [];
-  if (/\b(?:one normal cycle|normal cycle|dries (?:fine|normally|in one)|working normal(?:ly)?|no problems?)\b/.test(t) || /(?<!than )\b(?:one|1) (?:normal )?cycle\b/.test(t)) out.push("normal");
-  if (/\b(?:about 2 cycles|2 cycles|two cycles|more than one(?: cycle| time| load| try)?|takes (?:a )?(?:bit )?longer)\b/.test(t)) out.push("two");
-  if (/\b(?:3 or more|three or more|3 cycles|three cycles|3\+|multiple cycles|forever)\b/.test(t)) out.push("three");
+  if (/\b(?:one normal cycle|normal cycle|dries (?:fine|normally|in one)|working normal(?:ly)?|no problems?|just moved in|preventa?tive)\b/.test(t) || /(?<!than )\b(?:one|1) (?:normal )?cycle\b/.test(t)) out.push("normal");
+  if (/\b(?:about 2 cycles|2 cycles|2\+ cycles|two cycles|more than one(?: cycle| time| load| try)?|takes (?:a )?(?:bit )?longer)\b/.test(t)) out.push("two");
+  if (/\b(?:3 or more|three or more|3 cycles|three cycles|3\+|multiple cycles|forever|still damp)\b/.test(t)) out.push("three");
   if (/\b(?:overheat\w*|shutting off|shuts off|hot to (?:the )?touch)\b/.test(t)) out.push("overheat");
   if (/\b(?:error code|airflow error|d80|d90|d95|check vent)\b/.test(t)) out.push("error");
   return out;
@@ -233,14 +266,75 @@ function learn(text, s) {
   const hypothetical = QUESTION.test(t) || t.endsWith("?") || /\b(?:what if|if i|if we|would it|suppose)\b/.test(t);
   if (s.pending && QUESTIONS[s.pending] && !hypothetical) {
     const key = s.pending;
+    // "Other" on any question: note it, then ask for a short description in the next message.
+    const other = OTHER_LABELS[key] && /(?:^|,\s*)other\b/.test(t);
+    const askOther = () => {
+      s.otherFor = key;
+      s.pending = "otherDetail";
+    };
     if (key === "zip") {
       const m = t.match(/\b(\d{5})\b/);
       if (m) s.zip = m[1];
+    } else if (key === "otherDetail") {
+      if (t.length >= 2 && !UNKNOWN.test(t)) {
+        const note = String(text).trim().slice(0, 500);
+        if (s.otherFor === "repairScope") {
+          s.concerns.push(note);
+          s.concernDescribed = true;
+        } else s.notes.push(`${OTHER_LABELS[s.otherFor] || "Other"}: ${note}`);
+      }
+      if (t.length >= 2) s.otherFor = null;
     } else if (key === "symptoms" || key === "symptomClarify") {
       learnSymptoms(t, s, key === "symptomClarify");
+      if (other && key === "symptoms") {
+        if (!Array.isArray(p.symptoms) && !s.symptomConflict) p.symptoms = [];
+        if (!s.symptomConflict) askOther();
+      }
+    } else if (key === "triage") {
+      const picked = String(text).split(/,\s*/).map((x) => x.trim()).filter((x) => QUESTIONS.triage.options.some((o) => normalize(o) === normalize(x)));
+      if (picked.length || t.length >= 3) {
+        p.triage = picked.length ? picked : [String(text).slice(0, 200)];
+        const found = parseSymptoms(t).filter((x) => x !== "normal");
+        if (found.length && !Array.isArray(p.symptoms)) p.symptoms = [...new Set(found)];
+        if (/possible nest/.test(t)) p.animals = "Yes";
+        if (other) askOther();
+      }
+    } else if (key === "safetyCheck") {
+      if (/^(?:yes|it's still running|still running|running|hot)\b/.test(t)) s.dryerHot = true;
+      else if (/^(?:no|it's (?:turned )?off|turned off|off)\b/.test(t)) {
+        s.dryerHot = false;
+        s.dryerOffConfirmed = true;
+      }
+    } else if (key === "powerOff") {
+      if (/\b(?:off|unplugged|done|yes|ok(?:ay)?)\b/.test(t)) s.dryerOffConfirmed = true;
+    } else if (key === "repairScope") {
+      const option = QUESTIONS.repairScope.options.find((o) => normalize(o) === t);
+      if (other || /^other\b/.test(t)) {
+        s.repairScope = "Other";
+        askOther();
+      } else if (option) {
+        s.repairScope = option;
+        if (!/bird|pest/i.test(option)) s.concerns.push(option);
+      } else if (t.length >= 8 && !ACCEPT.test(t) && !PICKS.some(([, re]) => re.test(t))) {
+        // They described it in their own words.
+        s.repairScope = "Described";
+        s.concerns.push(String(text).slice(0, 500));
+        s.concernDescribed = true;
+      }
+    } else if (key === "repairPerf") {
+      if (/^working normal/.test(t)) p.dryerWorking = "Working normally";
+      else if (/more than (?:1|one) cycle|cycles?/.test(t)) p.dryerWorking = "Takes more than 1 cycle";
+      else if (/not working|won't|doesn't work/.test(t)) p.dryerWorking = "Not working";
+      else if (UNKNOWN.test(t)) p.dryerWorking = "Not sure";
     } else if (key === "concern") {
       if (/^skip$/.test(t)) s.concernSkipped = true;
-      else if (t.length >= 3 && !PICKS.some(([, re]) => re.test(t)) && !WELCOME.map(normalize).includes(t)) s.concerns.push(String(text).slice(0, 500));
+      else if (t.length >= 3 && !PICKS.some(([, re]) => re.test(t)) && !START[t]) {
+        s.concerns.push(String(text).slice(0, 500));
+        s.concernDescribed = true;
+      }
+    } else if (other) {
+      p[key] = "Not sure";
+      askOther();
     } else if (UNKNOWN.test(t) || /^not sure\b/.test(t)) {
       p[key] = "Not sure";
     } else {
@@ -293,38 +387,173 @@ export function applyFacts(session, facts = {}) {
 const hasDryer = (s) => s.property.hasDryer !== "No";
 const twoStory = (s) => s.property.stories === "2-story";
 
-/** Which questions apply, in order, for this visit. */
+/** Which questions apply, in order, for this visit (rules manual §3–4, playbook §3–7). */
 export function questionOrder(s) {
   const p = s.property;
   if (!s.intent) return [];
-  const base = ["zip", "hasDryer"];
+  const layout = ["stories", twoStory(s) && "laundryFloor"];
   if (s.intent === "cleaning") {
+    const help = s.help && s.route !== "bundle";
     return [
-      ...base,
+      help && !s.package && "symptoms", // Help Me Choose starts with performance
+      "zip",
+      "hasDryer",
       hasDryer(s) && "lastCleaned",
-      "stories",
-      twoStory(s) && "laundryFloor",
+      ...layout,
       hasDryer(s) && "power",
       hasDryer(s) && "mount",
-      p.hasDryer === "No" && "exit",
-      hasDryer(s) && !s.package && s.route !== "bundle" && "symptoms",
+      !help && hasDryer(s) && !s.package && s.route !== "bundle" && "symptoms",
       !["nest", "restoration"].includes(s.package) && "animals",
     ].filter(Boolean);
   }
   if (s.intent === "repair") {
-    return [...base, "stories", twoStory(s) && "laundryFloor", hasDryer(s) && "power", hasDryer(s) && "mount", "exit", "concern"].filter(Boolean);
+    return [!s.concernDescribed && "repairScope", "zip", ...layout, "power", "mount", "repairPerf", "concern"].filter(Boolean);
   }
-  // emergency + nest: only what price and access depend on.
-  return [...base, "stories", twoStory(s) && "laundryFloor", hasDryer(s) && "power"].filter(Boolean);
+  if (s.intent === "emergency") {
+    return ["safetyCheck", s.dryerHot && "powerOff", "triage", "zip", ...layout, hasDryer(s) && "power"].filter(Boolean);
+  }
+  // nest: what price and access depend on
+  return ["zip", "hasDryer", ...layout, hasDryer(s) && "power"].filter(Boolean);
 }
 
-const answered = (s, key) =>
-  key === "zip" ? Boolean(s.zip) : key === "concern" ? s.concerns.length > 0 || s.concernSkipped : key === "symptoms" ? Array.isArray(s.property.symptoms) : s.property[key] != null;
+const answered = (s, key) => {
+  switch (key) {
+    case "zip":
+      return Boolean(s.zip);
+    case "concern":
+      return s.concernDescribed || s.concernSkipped;
+    case "symptoms":
+      return Array.isArray(s.property.symptoms);
+    case "triage":
+      return Array.isArray(s.property.triage);
+    case "safetyCheck":
+      return s.dryerHot != null;
+    case "powerOff":
+      return s.dryerOffConfirmed;
+    case "repairScope":
+      return s.repairScope != null;
+    case "repairPerf":
+      return s.property.dryerWorking != null;
+    default:
+      return s.property[key] != null;
+  }
+};
+
+/**
+ * The recommended See-It-Clean package from everything the customer told us.
+ * Performance ⭐ is the standard pick. Total System when drying shows a significant restriction
+ * (3+ cycles, still damp, or an airflow error code), or when 2-cycle drying comes with a vent
+ * that's overdue for cleaning or a stacked/pedestal setup that crushes the transition hose.
+ */
+export function recommendTier(p = {}) {
+  const sym = p.symptoms || [];
+  const severe = sym.includes("three") || sym.includes("error");
+  const slow = sym.includes("two");
+  const overdue = ["No", "Not sure"].includes(p.lastCleaned);
+  const tight = ["Stacked", "Pedestal"].includes(p.mount);
+  return severe || (slow && (overdue || tight)) ? "total" : "performance";
+}
+
+/** Estimated drying efficiency from cycles: 2 cycles ≈ 50%, 3 or more ≈ 33% or less. */
+export function dryingEfficiency(p = {}) {
+  const sym = p.symptoms || [];
+  if (sym.includes("three")) return { percent: "about 33% or less", times: "three times or more" };
+  if (sym.includes("two")) return { percent: "about 50%", times: "about twice" };
+  return null;
+}
+
+/** The airflow analysis shown under the prices: estimate, causes, energy cost, and why this package. */
+export function airflowAnalysis(p = {}, recommended = recommendTier(p)) {
+  const sym = p.symptoms || [];
+  const eff = dryingEfficiency(p);
+  const parts = [];
+  const paragraphs = [];
+  if (sym.includes("three")) parts.push(`Taking 3 or more cycles means each load takes ${eff.times} as long to dry, so your dryer is likely running at ${eff.percent} efficiency. That usually points to a significant airflow restriction in the vent line.`);
+  else if (sym.includes("two")) parts.push(`Taking about 2 cycles means each load takes ${eff.times} as long to dry, so your dryer is likely running at ${eff.percent} efficiency, a sign of a moderate airflow restriction.`);
+  else if (Array.isArray(p.symptoms) && sym.includes("normal")) parts.push("Drying in one normal cycle suggests airflow is in good shape for now.");
+  if (sym.includes("error")) parts.push("The airflow error code means the dryer itself is detecting restricted airflow.");
+  if (p.lastCleaned === "No") parts.push("It hasn't been professionally cleaned in the last 12 months, so lint buildup in the line is likely.");
+  else if (p.lastCleaned === "Not sure") parts.push("If it hasn't been cleaned in the last 12 months, some lint buildup in the line is likely.");
+  if (p.mount === "Stacked" || p.mount === "Pedestal") parts.push(`With a ${p.mount === "Stacked" ? "stacked" : "pedestal"} setup, the transition hose behind the dryer is often kinked or crushed, which the DryerFlex hose upgrade fixes.`);
+  if (p.power === "Gas") parts.push("Gas dryers also get our Gas Appliance Safety Procedure for a safe disconnect and reconnect.");
+  paragraphs.push(parts.splice(0).join(" "));
+  parts.push(
+    eff
+      ? `At ${eff.percent} efficiency you're paying for ${eff.times} the drying time on every load. Restoring airflow brings that back down and saves energy and wear on the dryer.`
+      : "A clear vent keeps drying times short, which saves energy and wear on the dryer.",
+  );
+  parts.push(
+    recommended === "total"
+      ? "That's why I recommend **Total System See-It-Clean**: it adds termination cleanout and airflow restriction correction to restore full airflow."
+      : "That's why I recommend **Performance See-It-Clean**: it includes the DryerFlex transition hose upgrade and before-and-after photos so you can see the result.",
+  );
+  parts.push("Symptoms aren't a diagnosis; your technician measures airflow before and after.");
+  const [energy, ...why] = parts;
+  return [...paragraphs, energy, why.join(" ")].filter(Boolean).join("\n\n");
+}
+
+/**
+ * Estimated airflow restriction (0–100) for the gauge, from the customer's answers.
+ * Cycles set the base (1 cycle ≈ clear, 2 ≈ half efficiency, 3+ ≈ severe); an error code,
+ * an overdue cleaning and a stacked/pedestal setup push it up.
+ */
+export function airflowEstimate(p = {}) {
+  const sym = p.symptoms || [];
+  let score = sym.includes("three") ? 72 : sym.includes("two") ? 50 : sym.includes("normal") ? 12 : 25;
+  if (sym.includes("error")) score = Math.max(score, 66);
+  if (p.lastCleaned === "No") score += 10;
+  else if (p.lastCleaned === "Not sure") score += 5;
+  if (p.mount === "Stacked" || p.mount === "Pedestal") score += 5;
+  score = Math.max(5, Math.min(95, score));
+  const level = score < 34 ? "clear" : score < 67 ? "restricted" : "severe";
+  const eff = dryingEfficiency(p);
+  return {
+    score,
+    level,
+    headline: level === "clear" ? "Airflow looks clear" : level === "restricted" ? "Airflow looks restricted" : "Airflow looks severely restricted",
+    efficiency: eff ? `Estimated drying efficiency: ${eff.percent}` : "",
+  };
+}
+
+/** The answers that shaped the estimate, as short labels for the gauge. */
+export function airflowFactors(p = {}) {
+  const sym = p.symptoms || [];
+  const f = [];
+  if (sym.includes("three")) f.push("Takes 3 or more cycles");
+  else if (sym.includes("two")) f.push("Takes about 2 cycles");
+  else if (sym.includes("normal")) f.push("Dries in one normal cycle");
+  if (sym.includes("error")) f.push("Airflow error code");
+  if (p.lastCleaned === "No") f.push("Not cleaned in the last 12 months");
+  else if (p.lastCleaned === "Not sure") f.push("Last cleaning unknown");
+  else if (p.lastCleaned === "Yes") f.push("Cleaned in the last 12 months");
+  if (p.mount === "Stacked") f.push("Stacked setup: transition hose often crushed");
+  if (p.mount === "Pedestal") f.push("Fixed pedestal: transition hose often crushed");
+  if (p.power === "Gas") f.push("Gas dryer: safe disconnect included");
+  return f;
+}
+
+/** Two sentences under the gauge: what the answers suggest, and why BOB's pick fits. */
+export function airflowSummary(p = {}, recommended = recommendTier(p)) {
+  const sym = p.symptoms || [];
+  const eff = dryingEfficiency(p);
+  const finding = eff
+    ? `Each load is taking ${eff.times} as long to dry, so your dryer is likely running at ${eff.percent} efficiency, and you're paying for that extra drying time on every load.`
+    : sym.includes("error")
+      ? "Your dryer is reporting restricted airflow with an error code."
+      : "Drying in one normal cycle suggests airflow is in good shape for now.";
+  const why =
+    recommended === "total"
+      ? "**Total System See-It-Clean** adds termination cleanout and airflow restriction correction to restore full airflow."
+      : eff || sym.includes("error")
+        ? "**Performance See-It-Clean** clears the line and adds the DryerFlex transition hose upgrade, with before-and-after photos so you can see the result."
+        : "**Performance See-It-Clean** keeps it that way with the DryerFlex transition hose upgrade and before-and-after photos.";
+  return `${finding} ${why}`;
+}
 
 /** What each step up adds, for comparisons. */
 const UPGRADES = {
   performance: "before-and-after photos and a DryerFlex transition hose upgrade",
-  total: "termination cleanout and correction of significant airflow restriction",
+  total: "termination cleanout, roof or attic access when needed, airflow restriction correction, and a set of wool dryer balls",
   restoration: "sanitation fogging, a DryerFlex transition hose upgrade, a full system reset, and a set of four wool dryer lint balls",
 };
 
@@ -337,8 +566,13 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   const approvedFaqs = (faqs || []).filter((f) => f && f.status !== "draft");
   s.history = [...(s.history || []).slice(-39), { role: "user", text: String(text).slice(0, 2000) }];
 
+  let ack = "";
   const respond = (reply, options = [], extra = {}) => {
-    s.history.push({ role: "assistant", text: reply });
+    if (ack) {
+      reply = `${ack}\n\n${reply}`;
+      ack = "";
+    }
+    s.history.push({ role: "assistant", text: reply, ...(extra.card ? { card: extra.card } : {}) });
     s.options = options;
     return { session: s, reply, options, ...extra };
   };
@@ -360,19 +594,67 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       return fromPrice(services, family);
     }
   };
+  /** Final calculated price: base package plus gas, pedestal and stacked surcharges. */
+  const totalOf = (family) => {
+    try {
+      return quoteFor(family).priceCents;
+    } catch {
+      return fromPrice(services, family);
+    }
+  };
   const variantKnown = () => homeVariant(s.property).certain;
   // Before the home questions, sized packages show their lowest ("from") price.
   const sized = (family) => ["essential", "performance", "total", "express", "postservice"].includes(family) && s.property.stories == null;
-  const amountOf = (family) => (sized(family) ? `${money(fromPrice(services, family) ?? 0)}+` : money(exact(family) ?? 0));
+  const amountOf = (family) => (sized(family) ? `${money(fromPrice(services, family) ?? 0)}+` : money(totalOf(family) ?? 0));
   const priceOf = (family) => (priced ? amountOf(family) : "");
   const label = (family) => {
     const amount = priceOf(family);
     return amount ? `${PACKAGES[family].label} · ${amount}` : PACKAGES[family].label;
   };
+  const offerLabel = (family, star) => (TIERS.includes(family) ? selectLabel(family, star) : label(family));
+  const selectLabel = (family, star) => {
+    const amount = priceOf(family);
+    return `Select ${PACKAGES[family].label}${star ? " ⭐" : ""}${amount ? ` (${amount})` : ""}`;
+  };
   const line = (family, star) =>
-    `• **${PACKAGES[family].short}${priced ? ` — ${sized(family) ? "from " + money(fromPrice(services, family) ?? 0) : money(exact(family) ?? 0)}` : ""}**${star ? " ⭐ Suggested" : ""}: ${PACKAGES[family].pitch}.`;
+    `• **${PACKAGES[family].short}${priced ? ` — ${sized(family) ? "from " + money(fromPrice(services, family) ?? 0) : money(totalOf(family) ?? 0)}` : ""}**${star ? " ⭐ Suggested" : ""}: ${PACKAGES[family].pitch}.`;
+  /** One package as a card: final price, length, what's included, and the button text. */
+  const pickCard = (family, recommended) => {
+    let q = null;
+    try {
+      q = quoteFor(family);
+    } catch {}
+    const item = services.find((x) => x.family === family && x.active !== false);
+    const [summary] = (q?.lineItems[0]?.description || item?.description || PACKAGES[family].pitch).replace(/\s*—.*$/, "").split(/\.\s+/);
+    const bullets = summary
+      .replace(/\.$/, "")
+      .split(/,\s*(?:(?:and|plus)\s+)?|\s+plus\s+/i)
+      .filter((x) => x.trim().length > 2)
+      .map((x) => x.trim().replace(/^./, (c) => c.toUpperCase()));
+    return {
+      family,
+      name: PACKAGES[family].short,
+      price: priced ? (sized(family) ? `from ${money(fromPrice(services, family) ?? 0)}` : money(totalOf(family) ?? 0)) : "",
+      minutes: q && !sized(family) ? q.durationMins : null,
+      includes: priced && q && !sized(family) ? q.lineItems.slice(1).map((l) => `${l.name} ${money(l.cents)}`) : [],
+      bullets,
+      option: offerLabel(family, recommended),
+      recommended: Boolean(recommended),
+    };
+  };
+  /** Which surcharges a price already includes, e.g. "the $49 Gas Appliance Safety Procedure". */
+  const feesNote = (family) => {
+    if (!priced) return "";
+    let extras = [];
+    try {
+      extras = quoteFor(family).lineItems.slice(1);
+    } catch {}
+    if (!extras.length) return "";
+    const names = extras.map((l) => `the ${money(l.cents)} ${l.name}`);
+    return `\n\nPrices include ${names.length > 1 ? names.slice(0, -1).join(", ") + " and " + names.at(-1) : names[0]}.`;
+  };
   const unverified = "The team needs to verify the standalone service price before a price-confirmed appointment can be made.";
-  const gasNote = () => (s.property.power === "Gas" ? "\n\nGas dryers add the $49 Gas Appliance Safety Procedure (safe disconnect and reconnect)." : "");
+  const gasNote = () => feesNote(s.package || (s.offerFamilies || [])[0] || "essential");
   const homeLabel = () => {
     const { variant, certain } = homeVariant(s.property);
     if (!certain) return "";
@@ -380,12 +662,74 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   };
   const needsApproval = (family) => (config.approvalServices || ["emergency"]).includes(family);
 
+  const layoutPhrase = () => {
+    const p = s.property;
+    if (p.stories === "1-story") return "1-story home";
+    if (p.stories === "2-story" && p.laundryFloor === "2nd floor") return "2-story home with second-floor laundry";
+    if (p.stories === "2-story" && p.laundryFloor === "1st floor") return "2-story home with first-floor laundry";
+    if (p.stories === "2-story") return "2-story home";
+    return "";
+  };
+  const ackFor = (key) => {
+    const p = s.property;
+    switch (key) {
+      case "zip":
+        return `Thanks, ZIP ${s.zip}.`;
+      case "hasDryer":
+        return p.hasDryer === "No"
+          ? `Got it, duct line service only.${priced ? ` For an unoccupied line cleaning, our Express Vent Cleaning service (from ${money(fromPrice(services, "express") ?? 0)}) is ideal.` : ""}`
+          : "Understood.";
+      case "lastCleaned":
+        return "Thanks.";
+      case "stories":
+      case "laundryFloor":
+        if (p.stories === "Not sure" || p.laundryFloor === "Not sure") return "No problem, your technician will confirm the layout.";
+        if (p.stories === "2-story" && p.laundryFloor === "2nd floor") return "Understood, second-floor laundry setup.";
+        return layoutPhrase() ? `Got it, ${layoutPhrase()} setup.` : "Got it.";
+      case "power":
+        return p.power === "Gas" ? "Got it, a gas dryer line." : p.power === "Electric" ? "Understood, an electric dryer." : "No problem, your technician will confirm it on site.";
+      case "mount":
+        return p.mount === "Stacked" ? "Got it, a stacked setup." : p.mount === "Pedestal" ? "Got it, a fixed pedestal." : "Got it.";
+      case "symptoms":
+      case "symptomClarify":
+        return "Thanks, that helps me match the right service.";
+      case "animals":
+        return p.animals === "Yes" ? "Got it, signs of animals at the vent." : p.animals === "No" ? "Good, no signs of animals." : "No problem.";
+      case "safetyCheck":
+        return s.dryerHot ? "Understood." : "Thank you for confirming the dryer is powered down.";
+      case "powerOff":
+        return "Thank you for confirming the dryer is powered down.";
+      case "triage":
+        return "Thank you, that helps us prepare our emergency equipment.";
+      case "repairScope":
+      case "concern":
+        return "Thanks for providing those details.";
+      case "repairPerf":
+        return "Understood.";
+      case "otherDetail":
+        return "Thanks for the details.";
+      default:
+        return "";
+    }
+  };
+
   // -- steps ---------------------------------------------------------------------------
+  const feeLabel = (variant) => {
+    const item = services.find((x) => x.family === "addon" && x.variant === variant && x.active !== false);
+    return priced && item ? ` (+${money(item.priceCents)})` : "";
+  };
+  const optionsFor = (key) => {
+    const q = QUESTIONS[key];
+    if (key === "power" && s.intent !== "repair") return q.options.map((o) => (o === "Gas Dryer" ? `Gas Dryer${feeLabel("gas")}` : o));
+    if (key === "mount" && s.intent === "cleaning") return q.options.map((o) => (o === "Fixed Pedestal" ? `Fixed Pedestal${feeLabel("pedestal")}` : o === "Stacked Washer/Dryer" ? `Stacked Washer/Dryer${feeLabel("stacked")}` : o));
+    return q.options;
+  };
   const ask = (key) => {
     s.pending = key;
     s.stage = "evaluating";
+    if (key === "symptoms" && s.help) return respond(HELP_SYMPTOMS.text, HELP_SYMPTOMS.options);
     const q = QUESTIONS[key];
-    return respond(q.text, q.options, { ...(q.multi ? { multi: true } : {}), ...(q.info ? { info: q.info } : {}) });
+    return respond(q.text, optionsFor(key), { ...(q.multi ? { multi: true } : {}), ...(q.info ? { info: q.info } : {}) });
   };
 
   const askSymptomClarify = () => {
@@ -398,31 +742,44 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond(`${lead} Please type out how many cycles it usually takes, in your own words. For example: "it dries in one cycle" or "about two cycles".`, []);
   };
 
-  const welcome = (lead = "How can I help with your dryer vent today?") => {
+  const welcome = (lead = GREETING) => {
     s.stage = "welcome";
     s.pending = null;
-    return respond(lead, WELCOME.filter((x) => x !== "Help Me Choose"));
+    return respond(lead, WELCOME);
   };
 
   const tierOffer = (brief) => {
-    const sym = s.property.symptoms || [];
-    const suggested = sym.includes("three") || sym.includes("error") ? "total" : sym.includes("two") ? "performance" : "essential";
+    const suggested = recommendTier(s.property);
     s.suggested = suggested;
     s.offerFamilies = TIERS;
     s.stage = "offer";
-    const why =
-      suggested === "total"
-        ? "Since drying takes 3 or more cycles or shows an airflow error, I'd suggest **Total System**: it adds termination cleanout and correction of significant airflow restriction. Symptoms alone aren't a diagnosis; your technician verifies airflow before and after."
-        : suggested === "performance"
-          ? "Since loads are taking about 2 cycles, I'd suggest **Performance**: it adds before-and-after photos and a DryerFlex transition hose upgrade. Your technician verifies airflow before and after."
-          : "For routine maintenance, **Essential** covers the full vent cleaning and inspection.";
-    const options = [...TIERS.map(label), "Compare Packages", "More services"];
-    if (brief) return respond("Which package would you like?", options, { suggested: label(suggested) });
-    const intro = explain("cleaning");
-    const prices = priced
-      ? `Here are your options${homeLabel()}:\n` + TIERS.map((f) => line(f, f === suggested)).join("\n") + (variantKnown() ? "" : "\n\nPrices shown are for a 2-story home with first-floor laundry; your technician confirms on site.") + gasNote()
-      : TIERS.map((f) => line(f, f === suggested)).join("\n") + "\n\n" + unverified;
-    return respond(`${intro}${why}\n\n${prices}`, options, { suggested: label(suggested), info: ["pricing"] });
+    const others = TIERS.filter((f) => f !== suggested);
+    const options = [selectLabel(suggested, true), ...others.map((f) => selectLabel(f)), "Compare Packages", "More services"];
+    const extra = { suggested: selectLabel(suggested, true) };
+    if (brief) return respond("Which package would you like?", options, extra);
+    const p = s.property;
+    const fuel = p.power === "Gas" ? "a gas dryer" : p.power === "Electric" ? "an electric dryer" : "your dryer";
+    const setup = p.mount === "Stacked" ? "stacked" : p.mount === "Pedestal" ? "fixed pedestal" : p.mount === "Standard" ? "standard" : "";
+    const lead = `Based on your ${layoutPhrase() || "home"} with ${fuel}${setup ? ` in a ${setup} configuration` : ""}:`;
+    const airflow = airflowEstimate(p);
+    const analysis = airflowAnalysis(p, suggested).split("\n\n");
+    const price = (f) => (priced ? ` — ${sized(f) ? "from " + money(fromPrice(services, f) ?? 0) : money(totalOf(f) ?? 0)}` : "");
+    const pricing =
+      `⭐ **BOB's pick for you: ${PACKAGES[suggested].short}${price(suggested)}**\n` +
+      others.map((f) => `• **${PACKAGES[f].short}${price(f)}**: ${PACKAGES[f].pitch}.`).join("\n") +
+      (priced ? (variantKnown() ? "" : "\n\nPrices shown are for a 2-story home with first-floor laundry; your technician confirms on site.") + feesNote(suggested) : `\n\n${unverified}`);
+    const card = {
+      kind: "recommendation",
+      airflow: { ...airflow, factors: airflowFactors(p) },
+      lead,
+      summary: airflowSummary(p, suggested),
+      question: "Which package would you like?",
+      picks: [pickCard(suggested, true), ...others.map((f) => pickCard(f, false))],
+      note: priced ? (variantKnown() ? "" : "Prices shown are for a 2-story home with first-floor laundry; your technician confirms on site.") : unverified,
+    };
+    // Rules manual §5: diagnosis and pricing are separate parts of the message (|||).
+    const reply = `${airflow.headline}. ${airflow.efficiency ? airflow.efficiency + "." : ""}\n\n${lead}\n\n${analysis.join("\n\n")}\n|||\n${explain("cleaning")}${pricing}\n\nWhich package would you like?`;
+    return respond(reply, options, { ...extra, info: ["pricing"], card });
   };
 
   const specialOffer = (families, suggested, lead, brief, extraOptions = ["Ask a question"]) => {
@@ -432,17 +789,22 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     const options = [...families.map(label), ...extraOptions];
     if (brief) return respond("Which option would you like?", options, { suggested: label(suggested) });
     const list = families.map((f) => line(f, families.length > 1 && f === suggested)).join("\n");
-    return respond(`${lead}\n\n${list}${priced ? gasNote() : "\n\n" + unverified}`, options, { suggested: label(suggested) });
+    const card = { kind: "offer", lead, picks: families.map((f) => pickCard(f, families.length > 1 && f === suggested)), note: priced ? "" : unverified };
+    return respond(`${lead}\n\n${list}${priced ? gasNote() : "\n\n" + unverified}`, options, { suggested: label(suggested), card });
   };
 
   const assessmentOffer = (brief) => {
     s.route = "assessment";
     s.stage = "offer";
     s.suggested = null;
-    if (brief) return respond("Would you like to book the assessment?", ["Book assessment", "Ask a question"]);
+    const options = ["Book Assessment", "Ask a Question"];
+    if (brief) return respond("Would you like to book the assessment?", options);
     const q = serviceQuote("assessment", config);
-    const price = priced ? `**Dryer-vent assessment: ${money(q.priceCents)}.** This is the assessment, not the repair. Any repair work is quoted separately for your approval.` : unverified;
-    return respond(`For a vent repair issue, we start with an assessment. ${explain("assessment")}${price}\n\nWould you like to book the assessment?`, ["Book assessment", "Ask a question"]);
+    const credit = config.assessmentCredited === false ? "" : " It's credited 100% toward the repair when you hire us for the work.";
+    const price = priced
+      ? `**Comprehensive Repair Assessment: ${money(q.priceCents)}.**${credit} This is the assessment, not the repair. Any repair work is quoted separately for your approval.`
+      : unverified;
+    return respond(`For a vent repair issue, we start with an assessment. ${explain("assessment")}${price}\n\nWould you like to book the assessment?`, options);
   };
 
   const bundleOffer = () => {
@@ -461,7 +823,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       return specialOffer(
         ["emergency"],
         "emergency",
-        "For a vent that's fully clogged and needs attention fast, there's our same-day service. Same-day visits need a quick approval from our team before they're confirmed — you'll pick a time and we'll ask them right away. If the dryer is overheating or smells like burning, stop using it now.",
+        "For an urgent blockage, our **Emergency Same-Day Clog Relief** is the right service: urgent blockage removal and airflow restoration. Same-day visits need a quick approval from our team before they're confirmed. You'll pick a time and we'll ask them right away. Keep the dryer off until the technician arrives.",
         brief,
         ["Schedule regular cleaning", "Ask a question"],
       );
@@ -486,8 +848,8 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       s.package = null;
       return respond("That service isn't available online right now. You can choose another option or send the team a request.", ["Back to packages", "Request a callback"]);
     }
-    const options = ["Accept & Continue", s.intent === "cleaning" && TIERS.includes(q.package) ? "Compare Packages" : "Back to options", "Ask a question"];
-    const title = `**${q.name}${priced ? ` — ${money(q.lineItems[0].cents)}` : ""}**`;
+    const options = ["Accept", s.intent === "cleaning" && TIERS.includes(q.package) ? "Compare Packages" : "Back to options", "Ask a question"];
+    const title = `**${q.name}${priced ? ` — ${money(q.priceCents)}` : ""}**`;
     if (brief) return respond(`Ready to continue with ${title}?`, options);
     const switched =
       s.package !== q.package
@@ -496,13 +858,14 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
           : `Since a dryer is installed, this visit is our ${PACKAGES[q.package].short}.\n\n`
         : "";
     s.package = q.package;
-    const bullets = q.lineItems[0].description
-      .replace(/\s*—.*$/, "")
+    const [summary, ...fine] = q.lineItems[0].description.replace(/\s*—.*$/, "").split(/\.\s+/);
+    const finePrint = fine.join(". ").replace(/\.?$/, ".");
+    const bullets = summary
       .replace(/\.$/, "")
       .split(/,\s*(?:(?:and|plus)\s+)?|\s+plus\s+/i)
       .filter((x) => x.trim().length > 2)
       .map((x) => "• " + x.trim().replace(/^./, (c) => c.toUpperCase()))
-      .join("\n");
+      .join("\n") + (fine.length ? `\n\n${finePrint}` : "");
     const extras = q.lineItems.slice(1);
     const total = priced
       ? extras.length
@@ -511,14 +874,20 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       : `\n\n${unverified}`;
     const note = q.priceNote && priced ? `\n\n${q.priceNote}` : "";
     const approval = needsApproval(q.package) ? "\n\nThis service needs approval from our team before it's confirmed." : "";
-    return respond(`${switched}${title}\n${bullets}${total}${note}${approval}\n\n**Upfront pricing:** most visits are completed at the package price.`, options, { info: ["pricing"] });
+    return respond(`${switched}${title}\n${bullets}${total}${note}${approval}\n\n**Transparent Pricing Promise**\nMost dryer vent cleanings are completed at the package price selected.`, options, { info: ["pricing"] });
   };
 
   const contactStep = () => {
     s.stage = "contact";
     s.pending = null;
+    let locked = "";
+    try {
+      const q = s.route === "assessment" || s.route === "bundle" ? serviceQuote(s.route, config) : quoteFor(s.package);
+      const name = s.route === "assessment" ? "the Comprehensive Repair Assessment" : s.route === "bundle" ? "cleaning + assessment" : q.name;
+      locked = `I have locked in **${name}**${priced ? ` at **${money(q.priceCents)}**` : ""}. `;
+    } catch {}
     return respond(
-      "Let's get your contact details and service address. Then I'll check live availability for the full visit. Your appointment isn't booked until you approve the final summary and receive a confirmation.",
+      `${locked}Next I'll collect your details one at a time, then show live openings on our schedule. Nothing is booked until you approve the final summary and get a confirmation.`,
       [],
       { action: "contact" },
     );
@@ -532,6 +901,11 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       s.pending = null;
       return respond("I need the team to confirm service coverage for that ZIP code before offering an appointment. You can send a request for review below.", [], { action: "request" });
     }
+    // An "Other" answer gets a short description before anything else.
+    if (s.otherFor) {
+      if (s.pending === "otherDetail") return ask("otherDetail");
+      s.otherFor = null;
+    }
     // A contradictory symptom answer is clarified in the customer's own words before anything else.
     if (s.symptomConflict) {
       if (s.pending === "symptomClarify") return askSymptomClarify();
@@ -539,9 +913,6 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     }
     // An open $248 offer needs a yes or no before anything else.
     if (s.stage === "bundle_offer" && s.offered && !s.bundleAccepted && !s.bundleDeclined) return bundleOffer();
-    // Repairs, same-day and nest removal don't depend on the home's size: show the offer
-    // first, then ask the questions the visit needs.
-    if (!s.serviceAccepted && !s.package && ["repair", "emergency", "nest"].includes(s.intent)) return offer(brief);
     const missing = questionOrder(s).find((k) => !answered(s, k));
     if (missing) return ask(missing);
     s.pending = null;
@@ -550,24 +921,19 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return offer(brief);
   };
 
-  /** A short reminder of the unfinished step, for after an answered question. */
-  const resume = (lead) => {
-    const before = { stage: s.stage, pending: s.pending, explained: [...s.explained] };
-    if (s.stage === "review") return respond(lead, [], { action: "request" });
-    if (["emergency", "confirmed"].includes(s.stage)) return respond(lead, []);
-    if (["contact", "verify", "slots", "approval"].includes(s.stage)) return respond(`${lead}\n\nWhen you're ready, continue with the booking below.`, [], { action: "resume" });
-    if (!s.intent) return welcome(`${lead}\n\nIs there anything I can help you book?`);
-    if (s.stage === "bundle_offer") return respond(`${lead}\n\nWould you like to include the assessment with cleaning for ${money(BUNDLE_PRICE_CENTS)} total?`, ["Include assessment", "Cleaning only"]);
-    const step = next(true);
-    s.explained = before.explained;
-    s.history.pop();
-    const body = `${lead}\n\n${step.reply}`;
-    s.history.push({ role: "assistant", text: body });
-    return { ...step, reply: body };
+  /** An answer to a side question, then an offer to continue scheduling (playbook §9). */
+  const resume = (lead, { faq = false } = {}) => {
+    const body = faq ? `💡 I can answer that for you:\n\n${lead}` : lead;
+    if (s.stage === "review") return respond(body, [], { action: "request" });
+    if (["emergency", "confirmed"].includes(s.stage)) return respond(body, []);
+    if (["contact", "verify", "slots", "approval"].includes(s.stage)) return respond(`${body}\n\nWhen you're ready, continue with the booking below.`, [], { action: "resume" });
+    if (s.stage === "bundle_offer") return respond(`${body}\n\nWould you like to include the assessment with cleaning for ${money(BUNDLE_PRICE_CENTS)} total?`, ["Include assessment", "Cleaning only"]);
+    return respond(`${body}\n\nWould you like to continue scheduling your service visit?`, ["Yes, let's schedule", "Ask another question"]);
   };
 
-  const startIntent = (intent, { keepPackage = false } = {}) => {
+  const startIntent = (intent, { keepPackage = false, help = false } = {}) => {
     s.intent = intent;
+    s.help = help;
     s.serviceAccepted = false;
     s.pending = null;
     if (!keepPackage) s.package = null;
@@ -576,8 +942,11 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   };
 
   // -- safety first ----------------------------------------------------------------------
-  const welcomeCard = WELCOME.map(normalize).indexOf(t);
-  const safety = welcomeCard >= 0 ? null : detectSafety(t);
+  const start = START[t];
+  const emergencyAnswer = ["safetyCheck", "powerOff", "triage", "otherDetail"].includes(s.pending) && s.intent === "emergency";
+  const detected = start ? null : detectSafety(t);
+  // On the emergency path, "overheating" or "burning smell" is the reason for the visit; gas, smoke and fire still stop everything.
+  const safety = emergencyAnswer && detected === "stop" ? null : detected;
   if (safety === "gas" || safety === "fire") {
     s.stage = "emergency";
     s.safety = safety;
@@ -592,6 +961,14 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     );
   }
   if (s.stage === "emergency") return respond("Do not resume using the dryer. Emergency responders or a qualified professional must confirm the immediate danger is resolved. For non-emergency follow-up, you can send the DVS team a request.", [], { action: "request" });
+  // Help Me Choose: "Overheating / Error Code" moves to the emergency path, which starts with the safety check.
+  if (safety === "stop" && s.help && s.pending === "symptoms" && s.intent === "cleaning") {
+    const found = parseSymptoms(t);
+    startIntent("emergency");
+    if (found.length) s.property.symptoms = found;
+    ack = "Overheating needs priority attention, so let's handle this as an emergency.";
+    return next();
+  }
   if (safety === "stop") {
     s.safety = "stop";
     s.stage = "review";
@@ -600,8 +977,8 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond("Stop using the dryer if you can do so safely, and arrange a professional evaluation. If there is smoke, fire, or a suspected gas leak, leave immediately and call 911 from a safe location. I'll route this to our team for review rather than book a routine cleaning.", [], { action: "request" });
   }
 
-  // An answer written by the AI layer: show it, then return to the unfinished step.
-  if (typeof opts.answer === "string" && opts.answer.trim()) return { ...resume(opts.answer.trim()), ai: true };
+  // An answer written by the AI layer: show it, then offer to continue scheduling.
+  if (typeof opts.answer === "string" && opts.answer.trim()) return { ...resume(opts.answer.trim(), { faq: true }), ai: true };
 
   // -- global commands -------------------------------------------------------------------
   if (/^(?:start over|restart|new conversation|reset)$/.test(t)) {
@@ -613,47 +990,69 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond("I can help with approved DVS services, prices, and booking requests. I can't change pricing or confirm an appointment outside the booking system.", s.intent ? ["Continue booking", "Ask a question"] : WELCOME.slice(0, 4));
   }
   if (/\b(?:are you (?:a |an )?(?:real person|human|ai|bot|robot)|who are you|is this (?:a |an )?(?:ai|bot|automated assistant))\b/.test(t)) {
-    return respond("I'm BOB, Dryer Vent Squad's automated online booking assistant — not a person. I can explain our services and prices, check the live schedule, and send a request to the team.", ["Request a callback", ...(s.intent ? ["Continue booking"] : ["Dryer Vent Cleaning", "Repair / Reroute / Upgrade"])]);
+    return respond("I'm BOB, Dryer Vent Squad's automated online booking assistant — not a person. I can explain our services and prices, check the live schedule, and send a request to the team.", ["Request a callback", ...(s.intent ? ["Continue booking"] : [WELCOME[1], WELCOME[3]])]);
   }
   if (s.stage === "review" && !/^(?:continue|continue booking)$/.test(t)) {
     return respond("You can send the request below. The team will review it; no appointment or appointment change is confirmed by a request.", [], { action: "request" });
   }
   if (s.stage === "confirmed") return respond("This conversation already has a confirmed booking. Start a new conversation for another visit.", ["Start over"]);
 
-  // -- welcome cards ---------------------------------------------------------------------
-  if (welcomeCard === 0 || welcomeCard === 5 || /^(?:schedule (?:a )?(?:regular )?cleaning|book (?:dryer vent )?cleaning|book dryer vent cleaning)$/.test(t)) {
+  // -- starting paths (playbook §2) --------------------------------------------------------
+  if (start === "cleaning" || /^(?:schedule (?:a )?(?:regular )?cleaning|book (?:dryer vent )?cleaning|book dryer vent cleaning)$/.test(t)) {
     if (s.intent === "cleaning" && s.package && !/regular/.test(t)) return next();
     startIntent("cleaning");
     s.bundleAccepted = false;
     s.route = "cleaning";
+    ack = "Great, let's get your standard vent cleaning set up.";
     return next();
   }
-  if (welcomeCard === 1 || /^(?:vent issue or repair|book assessment|assessment)$/.test(t) && !s.intent) {
+  if (start === "help") {
+    startIntent("cleaning", { help: true });
+    s.bundleAccepted = false;
+    s.route = "cleaning";
+    ack = "I'd be glad to help you pick the perfect package.";
+    return next();
+  }
+  if (start === "repair" || (/^(?:vent issue or repair|book assessment|assessment)$/.test(t) && !s.intent)) {
     startIntent("repair");
+    ack = "Understood, specialized repair and assessment inquiry.";
     return next();
   }
-  if (welcomeCard === 2 || /^emergency clog(?: relief)?$/.test(t)) {
+  if (start === "emergency" || /^emergency clog(?: relief)?$/.test(t)) {
     startIntent("emergency");
+    ack = "Emergency priority acknowledged.";
     return next();
   }
-  if (welcomeCard === 3) {
+  if (start === "nest") {
     startIntent("nest");
+    s.property.animals = "Yes";
+    ack = "Understood, a bird or pest problem.";
     return next();
   }
-  if (welcomeCard === 4 || /^(?:ask (?:a|another) question|faqs?)$/.test(t)) {
+  if (start === "faq" || /^(?:ask (?:a|another) question|faqs?)$/.test(t)) {
     const picks = approvedFaqs.slice(0, 5).map((f) => f.question);
     return respond("What would you like to know? Your booking answers stay in this conversation.", [...picks, ...(s.intent ? ["Continue booking"] : [])]);
   }
+  if (/^(?:yes,? let'?s schedule|let'?s schedule)[.!]?$/.test(t)) return s.intent ? next() : welcome("Great! How can I help restore your dryer exhaust system today?");
   if (/^(?:continue|continue booking|back to (?:my )?booking|resume)$/.test(t)) return s.intent ? next() : welcome();
 
   const pendingBefore = s.pending;
   learn(text, s);
-  const changed = (x) => JSON.stringify(x?.property || {}) + (x?.zip || "") + (x?.concerns?.length || 0) + Boolean(x?.concernSkipped) + "|" + (x?.symptomConflict?.tries || 0);
+  const changed = (x) =>
+    [JSON.stringify(x?.property || {}), x?.zip || "", x?.concerns?.length || 0, Boolean(x?.concernSkipped), x?.symptomConflict?.tries || 0, x?.otherFor || "", x?.notes?.length || 0, x?.repairScope || "", x?.dryerHot, Boolean(x?.dryerOffConfirmed), Boolean(x?.concernDescribed)].join("|");
+  if (changed(current) !== changed(s) && pendingBefore && !s.symptomConflict && !s.otherFor) ack = ackFor(pendingBefore);
+  if (pendingBefore === "repairScope" && s.repairScope === "Bird / Pest Infestation") {
+    startIntent("nest");
+    s.property.animals = "Yes";
+    ack = "Understood, a bird or pest problem. Those need to be removed before the vent is cleaned.";
+    return next();
+  }
   // A free-text answer to "what's going on with the vent?" is recorded, not re-routed.
-  if (pendingBefore === "concern" && changed(current) !== changed(s)) return next();
+  if (["concern", "repairScope", "otherDetail", "triage", "safetyCheck", "powerOff"].includes(pendingBefore) && changed(current) !== changed(s)) return next();
 
   // -- package picks -----------------------------------------------------------------------
-  const pick = s.stage !== "bundle_offer" && PICKS.find(([, re]) => re.test(t));
+  const pickText = t.replace(/^select\s+/, "");
+  const pick = s.stage !== "bundle_offer" && PICKS.find(([, re]) => re.test(pickText));
   if (pick) {
     const family = pick[0];
     if (!s.intent || (s.intent === "repair" && s.route !== "bundle")) s.intent = family === "emergency" ? "emergency" : ["nest", "restoration"].includes(family) ? "nest" : "cleaning";
@@ -669,7 +1068,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     // Compare what the customer is actually looking at: nest work compares nest options, not the routine tiers.
     const nestFlow = s.intent === "nest" || ["nest", "restoration"].includes(s.package) || (s.offerFamilies || []).includes("restoration");
     const families = nestFlow ? ["nest", "restoration"] : TIERS;
-    const price = (f) => (priced ? exact(f) ?? 0 : null);
+    const price = (f) => (priced ? totalOf(f) ?? 0 : null);
     // Cheapest first; each step up says what the extra money adds.
     const rows = families.map((f, i) => {
       const item = services.find((x) => x.family === f && x.active !== false);
@@ -779,8 +1178,8 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   }
   if (intent.faq === "repair") {
     const yes = "Yes. For a vent repair concern, we start with an assessment, and repairs are quoted separately.";
-    if (!s.intent) return respond(`${yes} Is there a specific vent issue you need evaluated?`, ["Repair / Reroute / Upgrade", "Dryer Vent Cleaning", "Ask a question"]);
-    return resume(yes);
+    if (!s.intent) return respond(`${yes} Is there a specific vent issue you need evaluated?`, [WELCOME[3], WELCOME[1], "Ask a question"]);
+    return resume(yes, { faq: true });
   }
   const early = ["welcome", "evaluating", "offer", "details"].includes(s.stage) && !s.serviceAccepted;
   if (intent.route === "bundle_offer" && early && !s.bundleAccepted && !s.bundleDeclined && ["cleaning", "repair", null].includes(s.intent) && (!s.package || TIERS.includes(s.package))) {
@@ -796,6 +1195,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     }
     startIntent("repair");
     s.concerns.push(String(text).slice(0, 500));
+    s.concernDescribed = true;
     return next();
   }
   if (["nest_offer", "emergency_offer", "clog_offer"].includes(intent.route) && early && !s.package) {
@@ -828,7 +1228,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       const lead = bare ? "" : explain("cleaning");
       answer = `${lead}Cleaning packages${homeLabel() || ""}: ` + TIERS.map((f) => `${PACKAGES[f].label} ${variantKnown() ? "" : "from "}${money(variantKnown() ? exact(f) : fromPrice(services, f))}`).join(", ") + `. Vent-only Express (no dryer installed) ${variantKnown() ? "" : "from "}${money(variantKnown() ? exact("express") : fromPrice(services, "express"))}.` + (s.property.power === "Gas" ? " Gas dryers add the $49 Gas Appliance Safety Procedure." : variantKnown() ? "" : " Your exact price depends on your home and dryer.");
     }
-    return resume(answer);
+    return resume(answer, { faq: true });
   }
   if (intent.route === "cleaning" && !s.intent) {
     startIntent("cleaning");
@@ -841,15 +1241,15 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score)[0]?.f;
   const faq = exactFaq || (isQuestion ? scored : null);
-  if (faq) return { ...resume(faq.answer), faq: faq.id };
+  if (faq) return { ...resume(faq.answer, { faq: true }), faq: faq.id };
 
   // -- answers to the pending question ---------------------------------------------------------
   if (s.stage === "evaluating" || (s.intent && !s.serviceAccepted && !["offer", "details", "bundle_offer"].includes(s.stage))) {
     if (changed(current) !== changed(s)) return next();
     if (s.pending === "zip") return respond("Please enter the five-digit ZIP code for the service address.", []);
     if (s.pending && !isQuestion) {
-      const q = QUESTIONS[s.pending];
-      return respond(`Sorry, I didn't catch that. ${q.text}`, q.options, { ...(q.multi ? { multi: true } : {}), ...(q.info ? { info: q.info } : {}) });
+      ack = "Sorry, I didn't catch that.";
+      return ask(s.pending);
     }
   }
   if (s.stage === "contact" || s.serviceAccepted) return resume("Your service is selected.");
@@ -859,9 +1259,9 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond("Send your details below and the team will follow up. A request doesn't book an appointment by itself.", [], { action: "request" });
   }
   if (intent.route === "clarify" || /^help me choose$/.test(t)) {
-    return respond("Are you looking to schedule a routine cleaning, or is there a specific vent problem you need evaluated?", ["Dryer Vent Cleaning", "Repair / Reroute / Upgrade"]);
+    return respond("Are you looking to schedule a routine cleaning, or is there a specific vent problem you need evaluated?", [WELCOME[1], WELCOME[3]]);
   }
-  if (!s.intent && /^(?:hi|hello|hey|good (?:morning|afternoon|evening))[.!]?$/.test(t)) return welcome("Hi! I'm BOB, Dryer Vent Squad's online booking assistant. What can I help you with?");
+  if (!s.intent && /^(?:hi|hello|hey|good (?:morning|afternoon|evening))[.!]?$/.test(t)) return welcome();
   return {
     ...resume("I don't have a verified answer to that yet. I can send the question to the team, or we can keep going with your booking."),
     unanswered: true,

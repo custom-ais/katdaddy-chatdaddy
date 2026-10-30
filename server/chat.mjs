@@ -1,6 +1,6 @@
 // One chat turn: rules engine first for anything exact, Gemini for free-typed messages.
 
-import { turn, detectSafety, applyFacts, WELCOME } from "../shared/conversation.mjs";
+import { turn, detectSafety, applyFacts, WELCOME, START_LABELS } from "../shared/conversation.mjs";
 
 const DIRECT = /^(?:continue(?: booking)?|start over|restart|reset|accept(?: & continue)?|compare packages|more services|back to (?:packages|options)|book this service|book assessment|include assessment|cleaning only|skip|not sure|i don't know|yes|no|ask a question(?: \(faqs\))?|request a callback|\d{5})$/i;
 const PICK_LABEL = /^(?:essential|performance|total system|express|post-service|nest removal \+ cleaning|full system restoration|emergency same-day)(?: · \$[\d,]+\+?)?$/i;
@@ -11,6 +11,9 @@ const isDirect = (message, session) => {
   return (
     (session.options || []).some((o) => o.toLowerCase() === lower) ||
     WELCOME.some((o) => o.toLowerCase() === lower) ||
+    START_LABELS.includes(lower) ||
+    /^select\s+/i.test(m) ||
+    /^(?:yes,? let'?s schedule|ask another question)$/i.test(m) ||
     DIRECT.test(m) ||
     PICK_LABEL.test(m) ||
     // multi-select symptom answers arrive as comma-joined option labels
@@ -82,7 +85,10 @@ export async function chatTurn({ message, session, config, faqs, assistant }) {
     let text = ai.commandText;
     if (ai.command === "ACCEPT" && working.stage === "bundle_offer") text = "Include assessment";
     if (ai.command === "DECLINE" && working.stage === "bundle_offer") text = "Cleaning only";
-    if (ai.command === "START_REPAIR" && ai.facts.concern && !working.concerns.length) working.concerns.push(ai.facts.concern);
+    if (ai.command === "START_REPAIR" && ai.facts.concern && !working.concerns.length) {
+      working.concerns.push(ai.facts.concern);
+      working.concernDescribed = true; // their own words describe the issue, so BOB skips the issue list
+    }
     const stand = ai.command === "CLEANING_WITH_CONCERN" ? COMMAND_CONCERN : null;
     result = restoreWords(turn(text, working, config, faqs), message, stand);
     if (stand && ai.facts.concern) result.session.concerns = result.session.concerns.map((c) => (c === message.slice(0, 500) ? ai.facts.concern : c));

@@ -25,20 +25,22 @@ test("free text with several home details fills them in and skips those question
   assert.equal(r.session.intent, "cleaning");
   assert.deepEqual(r.session.property, { stories: "2-story", laundryFloor: "2nd floor", power: "Gas", hasDryer: "Yes", symptoms: ["three"] });
   assert.equal(r.session.pending, "zip");
-  assert.match(r.reply, /^Sorry the dryer is taking so long\.\n\nWhat's the five-digit ZIP/);
+  assert.match(r.reply, /^Sorry the dryer is taking so long\.\n\n(?:.+\n\n)?What's the five-digit ZIP/);
   assert.equal(r.session.history.at(-2).text, "Need my vent cleaned — 2 story house, gas dryer upstairs, takes 3 loads to dry", "customer's own words are kept");
 });
 
-test("a question is answered from the FAQ knowledge, then the pending question returns", async () => {
+test("a question is answered from the FAQ knowledge, then BOB offers to continue to the pending question", async () => {
   let s = turn("Dryer Vent Cleaning", initialSession(), config, INITIAL_FAQS).session;
   s = turn("85326", s, config, INITIAL_FAQS).session;
   const { assistant, calls } = reply({ ...base, question: true, answer: "Yes. Your technician pulls the dryer out to reach the vent." });
   const r = await step("will your guy be able to slide my dryer out? it's heavy", s, assistant);
-  assert.match(r.reply, /^Yes\. Your technician pulls the dryer out to reach the vent\.\n\nDo you currently have a dryer installed/);
+  assert.match(r.reply, /^💡 I can answer that for you:\n\nYes\. Your technician pulls the dryer out to reach the vent\.\n\nWould you like to continue scheduling your service visit\?$/);
   assert.equal(r.session.pending, "hasDryer");
-  assert.deepEqual(r.options, ["Have Dryer", "No Dryer", "Not sure"]);
+  assert.deepEqual(r.options, ["Yes, let's schedule", "Ask another question"]);
+  const back = turn("Yes, let's schedule", r.session, config, INITIAL_FAQS);
+  assert.deepEqual(back.options, ["Have Dryer Installed", "No Dryer Present (Duct Only)"]);
   assert.match(calls[0].system, /APPROVED FAQ ANSWERS/);
-  assert.doesNotMatch(calls[0].system, /\$20 off for active military/, "draft FAQs are not given to the model");
+  assert.doesNotMatch(calls[0].system, /official digital certificates/, "draft FAQs are not given to the model");
 });
 
 test("an answer with an invented price is thrown away; the rules engine answers instead", async () => {
@@ -119,7 +121,8 @@ test("the smart chat is used through the API when configured, and can be switche
   const token = await h.fresh();
   const r = await h.chat(token, "my vent pipe in the attic fell apart, can someone come fix it");
   assert.equal(r.via, "ai");
-  assert.match(r.reply, /we start with an assessment/);
+  assert.equal(r.session.intent, "repair");
+  assert.equal(r.session.pending, "zip", "the customer's own words describe the issue, so the issue list is skipped");
   assert.equal(calls.length, 1);
   assert.equal((await h.call("/api/public/config")).data.smartChat, true);
   await h.store.set("config", { ...(await h.store.config()), aiAssistant: false });
