@@ -290,8 +290,11 @@ function RequestForm({ token, session, onDone }: { token: string; session: any; 
 }
 
 function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { token: string; verification: any; onVerified: (s: any) => void; onEdit: () => void; onRequest: () => void }) {
-  const [code, setCode] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [info, setInfo] = useState<any>(verification), [now, setNow] = useState(Date.now());
-  const [sentAt, setSentAt] = useState(Date.now());
+  const notSent = verification?.available && !verification.sent && !verification.reused;
+  const [code, setCode] = useState(''), [busy, setBusy] = useState(false), [info, setInfo] = useState<any>(verification), [now, setNow] = useState(Date.now());
+  // If the first text didn't go out, say so and let them resend right away.
+  const [error, setError] = useState(notSent && !verification.retryInSeconds ? "We couldn't send the code. Tap Resend code, or send the team a request." : '');
+  const [sentAt, setSentAt] = useState(notSent ? Date.now() - 30_000 + (verification.retryInSeconds || 0) * 1000 : Date.now());
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
   const wait = Math.max(0, 30 - Math.floor((now - sentAt) / 1000));
   if (!info?.available) {
@@ -562,6 +565,9 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const [action, setAction] = useState(''), [receipt, setReceipt] = useState<any>(null), [pending, setPending] = useState(false), [requestId, setRequestId] = useState(''), [faqOpen, setFaqOpen] = useState(false);
   const [contactStep, setContactStep] = useState<ContactStep | null>(null), [draft, setDraft] = useState<any>({}), [verification, setVerification] = useState<any>(null), [approval, setApproval] = useState<any>(null);
   const scroll = useRef<HTMLDivElement>(null), busyRef = useRef(false), mounted = useRef(true);
+  // Address suggestions (Google, through BOB's server) while the customer types the street address.
+  const [addrItems, setAddrItems] = useState<{ id: string; main: string; secondary: string }[]>([]), [addrActive, setAddrActive] = useState(-1), [addrLoading, setAddrLoading] = useState(false);
+  const addrSession = useRef(''), inputRef = useRef<HTMLInputElement>(null), addrPicked = useRef('');
   const storageKey = preview ? 'bob.preview.session' : 'bob.session';
 
   const initialize = useCallback(async (fresh = false) => {
@@ -665,6 +671,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   // -- contact capture --------------------------------------------------------------------------
   const stepsFor = (s: any): ContactStep[] => [...CONTACT_ORDER, ...(s?.route === 'cleaning' && addOnLabels(s).length ? (['addons'] as ContactStep[]) : [])];
   const askContact = (step: ContactStep, d: any = draft) => {
+    if (step === 'address') { addrSession.current = crypto.randomUUID(); addrPicked.current = ''; }
     setContactStep(step);
     say('model', contactPrompt(step, d));
     setOptions(step === 'email' ? ['Skip'] : step === 'notes' ? ['No special notes', 'Gate code required'] : step === 'sms' ? ['Yes, SMS updates are fine', 'No, call or email only'] : step === 'addons' ? [...addOnLabels(session), 'No add-ons'] : []);
@@ -681,6 +688,53 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     if (i < order.length - 1) return askContact(order[i + 1], d);
     void submitContact(d);
   };
+  const suggestOn = contactStep === 'address' && !!config?.addressSuggestions;
+  useEffect(() => {
+    const q = text.trim();
+    if (!suggestOn || q.length < 3 || q === addrPicked.current) { setAddrItems([]); setAddrActive(-1); return; }
+    const ctrl = new AbortController();
+    const t = setTimeout(async () => {
+      try {
+        const r = await api(`/api/address/suggest?q=${encodeURIComponent(q)}&s=${addrSession.current}`, { token, signal: ctrl.signal });
+        setAddrItems(r.suggestions || []); setAddrActive(-1);
+      } catch { /* typing still works without suggestions */ }
+    }, 250);
+    return () => { clearTimeout(t); ctrl.abort(); };
+  }, [text, suggestOn, token]);
+  const pickAddress = async (item: { id: string; main: string; secondary: string }) => {
+    setAddrItems([]); setAddrActive(-1); setAddrLoading(true);
+    try {
+      const { address: a } = await api(`/api/address/details?id=${encodeURIComponent(item.id)}&s=${addrSession.current}`, { token });
+      addrSession.current = crypto.randomUUID(); // choosing a place ends Google's billing session
+      if (!a?.precise || !a.city || !a.zip) {
+        // A street without a house number: keep it in the box for them to finish.
+        addrPicked.current = `${item.main} `;
+        setText(`${item.main} `);
+        say('model', 'Please add the house number to that street, then send.');
+        inputRef.current?.focus();
+        return;
+      }
+      const d = { ...draft, address: a.street, city: a.city, zip: a.zip };
+      setText('');
+      say('user', String(a.formatted || `${a.street}, ${a.city}, AZ ${a.zip}`).replace(/, USA$/, ''));
+      setDraft(d);
+      setPicked([]);
+      nextContact('city', d); // the city came with the address
+    } catch {
+      addrPicked.current = item.main;
+      setText(item.main);
+      say('model', "I couldn't load that address. Please finish typing it and send.");
+      inputRef.current?.focus();
+    } finally { setAddrLoading(false); }
+  };
+  const onInputKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!addrItems.length) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setAddrActive((i) => (i + 1) % addrItems.length); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setAddrActive((i) => (i <= 0 ? addrItems.length - 1 : i - 1)); }
+    else if (e.key === 'Escape') { setAddrItems([]); setAddrActive(-1); }
+    else if (e.key === 'Enter' && addrActive >= 0) { e.preventDefault(); void pickAddress(addrItems[addrActive]); }
+  };
+
   const answerContact = (raw: string) => {
     const step = contactStep!;
     const value = raw.trim();
@@ -906,10 +960,32 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
 
       <div className="p-3 sm:p-4 bg-slate-800/90 border-t border-slate-700/60 shrink-0">
         <form onSubmit={(e) => { e.preventDefault(); void send(); }} className="relative flex items-center max-w-3xl mx-auto">
+          {suggestOn && (addrItems.length > 0 || addrLoading) && (
+            <div className="absolute bottom-full inset-x-0 mb-2 bg-white rounded-2xl shadow-2xl shadow-slate-900/30 border border-slate-200 overflow-hidden animate-in">
+              {addrLoading ? (
+                <p className="px-4 py-3.5 text-sm font-semibold text-slate-500 flex items-center gap-2"><Loader2 size={16} className="animate-spin text-orange-500" />Getting that address…</p>
+              ) : (
+                <ul id="bob-address-options" role="listbox" aria-label="Address suggestions" className="py-1.5">
+                  {addrItems.map((a, i) => (
+                    <li key={a.id} id={`bob-address-${i}`} role="option" aria-selected={i === addrActive}>
+                      <button type="button" tabIndex={-1} onMouseDown={(e) => e.preventDefault()} onClick={() => void pickAddress(a)} onMouseEnter={() => setAddrActive(i)}
+                        className={`w-full text-left px-4 py-2.5 flex items-start gap-3 ${i === addrActive ? 'bg-orange-50' : ''}`}>
+                        <MapPin size={17} className="text-orange-500 mt-0.5 shrink-0" />
+                        <span className="min-w-0"><span className="block text-sm font-bold text-slate-900 truncate">{a.main}</span>{a.secondary && <span className="block text-xs text-slate-500 truncate">{a.secondary.replace(/, USA$/, '')}</span>}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="px-4 py-1.5 border-t border-slate-100 text-[10px] text-slate-400 text-right">Google Maps</p>
+            </div>
+          )}
           <input
-            aria-label="Message BOB" maxLength={2000} value={text} onChange={(e) => setText(e.target.value)}
-            type={inputHints?.type || 'text'} autoComplete={inputHints?.autoComplete || 'off'} inputMode={inputHints?.inputMode}
-            disabled={!ready || busy || !!receipt || !!requestId || contactStep === 'sms' || contactStep === 'addons'}
+            ref={inputRef}
+            aria-label={suggestOn ? 'Street address' : 'Message BOB'} maxLength={2000} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onInputKey}
+            {...(suggestOn ? { role: 'combobox', 'aria-autocomplete': 'list' as const, 'aria-expanded': addrItems.length > 0, 'aria-controls': 'bob-address-options', 'aria-activedescendant': addrActive >= 0 ? `bob-address-${addrActive}` : undefined } : {})}
+            type={inputHints?.type || 'text'} autoComplete={suggestOn ? 'off' : inputHints?.autoComplete || 'off'} inputMode={inputHints?.inputMode}
+            disabled={!ready || busy || addrLoading || !!receipt || !!requestId || contactStep === 'sms' || contactStep === 'addons'}
             placeholder={receipt ? 'Your visit is booked.' : inputHints?.placeholder || 'Type your message or answer…'}
             className="w-full bg-slate-900/90 border-2 border-slate-700 focus:border-orange-500 rounded-full pl-5 pr-14 py-3.5 text-sm font-semibold text-white placeholder-slate-400 outline-none transition-all disabled:opacity-50"
           />

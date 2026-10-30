@@ -31,6 +31,8 @@ function Dot({ ok }: { ok: boolean }) {
   return <span className={`mt-1.5 w-2.5 h-2.5 rounded-full shrink-0 ${ok ? 'bg-emerald-500' : 'bg-slate-300'}`} />;
 }
 
+const when = (ms: number) => new Date(ms).toLocaleString('en-US', { timeZone: 'America/Phoenix', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
 function Connections() {
   const { data, mutate, showToast } = useDashboard();
   const i = data.integrations || {};
@@ -40,21 +42,26 @@ function Connections() {
     setBusy(true);
     try { await mutate('/api/admin/jobber/disconnect', {}, 'POST', 'Jobber disconnected'); } catch (e) { showToast({ type: 'error', title: "Couldn't disconnect", description: (e as Error).message }); } finally { setBusy(false); }
   };
-  const rows: [string, boolean, string, React.ReactNode?][] = [
+  const rows: [string, boolean, React.ReactNode, React.ReactNode?][] = [
     ['Jobber', !!i.jobber?.connected,
       i.jobber?.connected ? 'Reading the live calendar and creating scheduled jobs with visits.' : i.jobber?.appConfigured ? 'Not connected yet. Online booking stays off until it is.' : 'Add JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET and JOBBER_REDIRECT_URI in Vercel first.',
       i.jobber?.appConfigured && (i.jobber?.connected ? <button className={subtleButton} onClick={disconnect} disabled={busy}>Disconnect</button> : <a className={primaryButton} href="/api/admin/jobber/connect">Connect Jobber</a>)],
-    ['LeadConnector', !!i.leadConnector?.configured, i.leadConnector?.configured ? 'Sends verification codes, confirmations and approval texts, and saves contacts and requests.' : 'Add LC_PRIVATE_TOKEN and LC_LOCATION_ID in Vercel. Phone verification needs it, so online booking waits for it.'],
+    ['LeadConnector', !!i.leadConnector?.configured && !i.leadConnector?.issue,
+      <>{i.leadConnector?.configured ? 'Sends verification codes, confirmations and approval texts, and saves contacts and requests.' : 'Add LC_PRIVATE_TOKEN and LC_LOCATION_ID in Vercel. Phone verification needs it, so online booking waits for it.'}
+        {i.leadConnector?.issue && <span className="block mt-1 font-semibold text-amber-800">{when(i.leadConnector.issue.at)}: {i.leadConnector.issue.message}</span>}</>],
     ['Smart chat', !!i.assistant?.configured, i.assistant?.configured ? `Gemini (${i.assistant.model}) reads typed messages. It can't set prices or book — BOB's rules do that.` : 'Add GEMINI_API_KEY in Vercel. Until then BOB uses buttons and keyword matching.'],
-    ['Maps', i.maps?.provider === 'google', i.maps?.provider === 'google' ? 'Google drive times enforce the drive-time rules.' : 'Using straight-line estimates. Add GOOGLE_MAPS_API_KEY for real drive times.'],
+    ['Maps', i.maps?.provider === 'google' && !i.maps?.issue,
+      <>{i.maps?.provider === 'google' ? 'Google finds addresses and drive times enforce the drive-time rules. If Google refuses, the free Census lookup is used.' : 'Free Census address lookup with straight-line drive estimates. Add GOOGLE_MAPS_API_KEY for real drive times.'}
+        {i.maps?.issue && <span className="block mt-1 font-semibold text-amber-800">Address lookup failed {when(i.maps.issue.at)}: {i.maps.issue.message}</span>}</>],
     ['Database', !!i.database, i.database === 'supabase-rest' ? 'Supabase (ChatDaddy project), through the service key.' : i.database === 'postgres' ? 'Postgres connection string.' : 'Local test database — data is not kept.'],
+    ...(i.lastError ? [['Last server error', false, <span className="text-rose-800">{when(i.lastError.at)} on {i.lastError.path}: {i.lastError.message}</span>] as [string, boolean, React.ReactNode]] : []),
   ];
   return (
     <Section icon={<Link2 size={18} />} title="Connections" description="Keys live in Vercel environment variables. Nothing secret is shown here.">
       <div className="divide-y divide-slate-100">
         {rows.map(([name, ok, detail, action]) => (
           <div key={name} className="flex items-start justify-between gap-3 py-3">
-            <div className="flex items-start gap-3"><Dot ok={ok} /><div><p className="text-sm font-extrabold text-slate-900">{name}</p><p className="text-xs text-slate-500 leading-snug max-w-xl">{detail}</p></div></div>
+            <div className="flex items-start gap-3"><Dot ok={ok} /><div><p className="text-sm font-extrabold text-slate-900">{name}</p><div className="text-xs text-slate-500 leading-snug max-w-xl">{detail}</div></div></div>
             {action}
           </div>
         ))}
