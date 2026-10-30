@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BookOpen, Bot, Building2, CalendarClock, Code, Download, KeyRound, Link2, MapPin, Plus, Route, ShieldCheck, Tag, Trash2, Users } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import type { Technician } from './DashboardContext';
+import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, MapPin, Plus, Route, Save, ShieldCheck, Tag, Trash2, Users } from 'lucide-react';
 import { api, saveText } from '../lib/api';
 import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Modal, Section, Toggle, inputClass, primaryButton, secondaryButton, subtleButton } from './ui';
@@ -61,23 +63,17 @@ function Connections() {
   );
 }
 
-function Technicians() {
-  const { data, mutate } = useDashboard();
-  const [techs, setTechs] = useState(data.technicians);
+/** Edits are saved by the floating Save button with the rest of the page. */
+function Technicians({ techs, onChange }: { techs: Technician[]; onChange: (next: Technician[]) => void }) {
+  const { data } = useDashboard();
   const [users, setUsers] = useState<any[] | null>(null);
-  const [busy, setBusy] = useState(false), [error, setError] = useState(''), [dirty, setDirty] = useState(false);
-  useEffect(() => { if (!dirty) setTechs(data.technicians); }, [data.technicians, dirty]);
   useEffect(() => {
     if (data.integrations?.jobber?.connected) api('/api/admin/jobber/users').then((r) => setUsers(r.users)).catch(() => setUsers([]));
   }, [data.integrations?.jobber?.connected]);
-  const edit = (i: number, patch: any) => { setTechs((t) => t.map((x, j) => (j === i ? { ...x, ...patch } : x))); setDirty(true); };
-  const save = async () => {
-    setBusy(true); setError('');
-    try { await mutate('/api/admin/technicians', { technicians: techs }, 'POST', 'Technicians saved'); setDirty(false); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
-  };
+  const edit = (i: number, patch: any) => onChange(techs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   return (
     <Section icon={<Users size={18} />} title="Technicians" description="Link each tech to their Jobber user so BOB reads their own calendar and assigns visits to them."
-      action={<button className={secondaryButton} onClick={() => { setTechs([...techs, { id: `tech-${crypto.randomUUID().slice(0, 8)}`, name: '', phone: '', zone: 'West Valley', status: 'off_duty', color: '#3b82f6', jobberUserId: '', vehicle: '', bio: '' }]); setDirty(true); }}><Plus size={15} />Add technician</button>}>
+      action={<button className={secondaryButton} onClick={() => onChange([...techs, { id: `tech-${crypto.randomUUID().slice(0, 8)}`, name: '', phone: '', zone: 'West Valley', status: 'off_duty', color: '#3b82f6', jobberUserId: '', vehicle: '', bio: '' } as Technician])}><Plus size={15} />Add technician</button>}>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {techs.map((t, i) => (
           <div key={t.id} className="rounded-2xl border border-slate-200 p-4 space-y-3 bg-slate-50/50">
@@ -103,13 +99,11 @@ function Technicians() {
             </Field>
             <Field label="Short bio for the office"><textarea rows={2} className={inputClass} value={t.bio || ''} onChange={(e) => edit(i, { bio: e.target.value })} /></Field>
             {techs.length > 1 && !data.appointments.some((a) => a.technicianId === t.id) && (
-              <button className={`${subtleButton} text-rose-700`} onClick={() => { setTechs(techs.filter((_, j) => j !== i)); setDirty(true); }}><Trash2 size={14} />Remove</button>
+              <button className={`${subtleButton} text-rose-700`} onClick={() => onChange(techs.filter((_, j) => j !== i))}><Trash2 size={14} />Remove</button>
             )}
           </div>
         ))}
       </div>
-      {error && <ErrorNote>{error}</ErrorNote>}
-      <div className="flex justify-end"><button className={primaryButton} onClick={save} disabled={busy || !dirty}>{busy ? 'Saving…' : 'Save technicians'}</button></div>
     </Section>
   );
 }
@@ -200,6 +194,41 @@ function Password() {
   );
 }
 
+/** Floating Save button, always on screen while the settings page is open. Rendered on <body>:
+ *  the page's entrance animation leaves a transform that would pin a fixed child to the page instead of the screen. */
+function SaveDock({ changed, busy, error, onSave, onDiscard }: { changed: string[]; busy: boolean; error: string; onSave: () => void; onDiscard: () => void }) {
+  const pending = changed.length > 0;
+  // Lift toasts above the dock while it is on screen.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty('--save-dock-space', '5.5rem');
+    return () => { root.style.removeProperty('--save-dock-space'); };
+  }, []);
+  const message = error || (busy ? 'Saving your changes…' : pending ? 'Unsaved changes' : 'All changes saved');
+  const detail = pending && !error && !busy ? ` to ${changed.join(' and ')}` : ''; // shown from tablet width up
+  const icon = busy ? <Loader2 size={16} className="animate-spin shrink-0" />
+    : pending || error ? <span className={`size-2.5 rounded-full shrink-0 ${error ? 'bg-rose-400' : 'bg-orange-400'}`} />
+    : <CheckCircle2 size={16} className="text-emerald-500 shrink-0" />;
+  return createPortal(
+    <div className="fixed z-50 inset-x-3 bottom-[max(0.75rem,env(safe-area-inset-bottom))] sm:inset-x-auto sm:right-6 sm:bottom-6 pointer-events-none flex justify-end">
+      <div className={`pointer-events-auto w-full sm:w-auto flex items-center gap-3 pl-4 pr-2 py-2 rounded-2xl border shadow-xl transition-colors ${pending || error
+        ? 'bg-slate-900 border-slate-900 text-white shadow-slate-900/25'
+        : 'bg-white border-slate-200 text-slate-600 shadow-slate-900/10'}`}>
+        <p className={`flex-1 sm:flex-none flex items-center gap-2 text-sm font-bold min-w-0 ${error ? 'text-rose-300' : ''}`} role="status" aria-live="polite">
+          {icon}<span className={`${error ? 'line-clamp-3' : 'truncate'} sm:max-w-[22rem]`}>{message}{detail && <span className="hidden sm:inline">{detail}</span>}</span>
+        </p>
+        {pending && !busy && (
+          <button type="button" onClick={onDiscard} className="px-3 py-2 rounded-xl text-sm font-bold text-slate-300 hover:text-white hover:bg-white/10 transition-colors">Discard</button>
+        )}
+        <button type="button" onClick={onSave} disabled={!pending || busy} className={`${primaryButton} shadow-none disabled:from-slate-200 disabled:to-slate-200 disabled:text-slate-500 disabled:opacity-100`}>
+          <Save size={15} />{busy ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 export function SettingsPage() {
   const { data, mutate } = useDashboard();
   const [c, setC] = useState<any>(() => structuredClone(data.config));
@@ -207,6 +236,8 @@ export function SettingsPage() {
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [text, setText] = useState(() => ({ zips: data.config.serviceZips.join(', '), blocked: data.config.blockedDates.join(', '), weekday: data.config.weekdayStarts.join(', '), saturday: data.config.saturdayStarts.join(', ') }));
   const [address, setAddress] = useState(''), [check, setCheck] = useState<any>(null);
+  const [techs, setTechs] = useState<Technician[]>(data.technicians), [techDirty, setTechDirty] = useState(false);
+  useEffect(() => { if (!techDirty) setTechs(data.technicians); }, [data.technicians, techDirty]);
   useEffect(() => {
     if (dirty) return;
     setC(structuredClone(data.config));
@@ -221,11 +252,18 @@ export function SettingsPage() {
   const westValley: string[] = data.westValleyZips || [];
   const missingWestValley = westValley.filter((z) => !c.serviceZips.includes(z));
 
+  const changed = [dirty && 'settings', techDirty && 'technicians'].filter(Boolean) as string[];
+  // Technicians first, so a newly added tech exists before the settings that may name them.
   const save = async () => {
+    if (!changed.length || busy) return;
     setBusy(true); setError('');
-    try { await mutate('/api/admin/config', c, 'PATCH', 'Settings saved'); setDirty(false); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+    const done = changed.length > 1 ? 'Settings and technicians saved' : techDirty ? 'Technicians saved' : 'Settings saved';
+    try {
+      if (techDirty) { await mutate('/api/admin/technicians', { technicians: techs }, 'POST', dirty ? '' : done); setTechDirty(false); }
+      if (dirty) { await mutate('/api/admin/config', c, 'PATCH', done); setDirty(false); }
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
-  const discard = () => { setDirty(false); setError(''); };
+  const discard = () => { setDirty(false); setTechDirty(false); setError(''); };
   const checkAddress = async () => {
     setCheck(null);
     try { setCheck(await api('/api/admin/geo/check', { method: 'POST', body: { address } })); } catch (e) { setCheck({ error: (e as Error).message }); }
@@ -241,7 +279,7 @@ export function SettingsPage() {
   ] as [boolean, string][];
 
   return (
-    <div className="space-y-6 animate-in pb-24">
+    <div className="space-y-6 animate-in pb-32">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
         <div><h2 className="text-2xl font-black text-slate-900 tracking-tight">Settings</h2><p className="text-sm text-slate-500">Saved changes apply to the next customer right away.</p></div>
         <a className={secondaryButton} href="/api/admin/export"><Download size={15} />Download backup</a>
@@ -417,7 +455,7 @@ export function SettingsPage() {
         <Field label="What customers should do before the visit"><textarea rows={3} className={inputClass} value={c.preparation} onChange={(e) => update('preparation', e.target.value)} /></Field>
       </Section>
 
-      <Technicians />
+      <Technicians techs={techs} onChange={(next) => { setTechs(next); setTechDirty(true); }} />
       <Answers />
 
       <Section icon={<Code size={18} />} title="Add BOB to dryerventsquadaz.com" description="Paste this before the closing </body> tag on the website. It adds the chat button; the office dashboard is never exposed.">
@@ -430,14 +468,7 @@ export function SettingsPage() {
 
       <Password />
 
-      {(dirty || error) && (
-        <div className="fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur border-t border-slate-200 shadow-[0_-8px_24px_rgba(15,23,42,0.06)]">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="text-sm font-semibold text-slate-700 flex items-center gap-2"><Bot size={16} className="text-orange-500" />{error ? <span className="text-rose-700">{error}</span> : 'You have unsaved settings.'}</div>
-            <div className="flex gap-2.5 justify-end"><button className={secondaryButton} onClick={discard} disabled={busy}>Discard</button><button className={primaryButton} onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save settings'}</button></div>
-          </div>
-        </div>
-      )}
+      <SaveDock changed={changed} busy={busy} error={error} onSave={save} onDiscard={discard} />
     </div>
   );
 }
