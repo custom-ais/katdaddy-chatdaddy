@@ -56,6 +56,7 @@ const INFO: Record<string, () => React.ReactElement> = {
             <li>A regular-size power cord.</li>
             <li>A <strong className="text-slate-700">flexible metal or yellow-coated line</strong> from the back of the dryer to a gas valve.</li>
           </ul>
+          <img src="/gas-line-connector.jpg" alt="A yellow-coated flexible gas line with metal fittings at each end" width={600} height={600} loading="lazy" decoding="async" className="mt-3 w-full max-w-[220px] mx-auto rounded-xl border border-orange-100 bg-white" />
         </div>
       </div>
       <p className="mt-3 text-xs text-slate-500">Only look if you can see it easily. Don't move the dryer to check — “I don't know” is fine.</p>
