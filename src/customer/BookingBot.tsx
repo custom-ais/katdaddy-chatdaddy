@@ -211,16 +211,16 @@ const WELCOME_CARDS: [string, React.ReactElement][] = [
 // one question per message, each opening with a short acknowledgment of the last answer.
 type ContactStep = 'name' | 'phone' | 'email' | 'address' | 'city' | 'notes' | 'gate' | 'addons' | 'sms';
 const CONTACT_ORDER: ContactStep[] = ['name', 'email', 'phone', 'sms', 'address', 'city', 'notes'];
-const contactPrompt = (step: ContactStep, d: any): string => {
+const contactPrompt = (step: ContactStep, d: any, cfg?: any): string => {
   const first = String(d?.name || '').trim().split(/\s+/)[0];
   switch (step) {
     case 'name': return 'To reserve your appointment slot, what is your first and last name?';
     case 'email': return `${first ? `Thanks, ${first}. ` : ''}What is the best email address for your booking confirmation and receipt?`;
-    case 'phone': return `${d?.email ? 'Got it. ' : ''}What is your mobile phone number? We'll text a code to confirm it.`;
+    case 'phone': return `${d?.email ? 'Got it. ' : ''}What is your mobile phone number?${cfg?.phoneVerification === false ? '' : " We'll text a code to confirm it."}`;
     case 'sms': return `Understood. Is it okay to send automated text updates and technician arrival notifications to ${d?.phone || 'this number'}? Not marketing. Message and data rates may apply; reply STOP anytime.`;
     case 'address': return 'Thank you. What is the street address for the service location? Include a unit number if there is one.';
     case 'city': return 'And the city?';
-    case 'notes': return 'Thanks for providing that address. Are there any gate codes, parking instructions, or pets we should be aware of?';
+    case 'notes': return `${d?.addressFromChat ? 'Got it.' : 'Thanks for providing that address.'} Are there any gate codes, parking instructions, or pets we should be aware of?`;
     case 'gate': return "What's the gate code, and anything else the technician should know?";
     case 'addons': return 'Want to add anything to your visit?';
   }
@@ -234,7 +234,8 @@ const INPUT_FOR: Partial<Record<ContactStep, { type: string; autoComplete: strin
   notes: { type: 'text', autoComplete: 'off', placeholder: 'Gate code, parking, pets…' },
   gate: { type: 'text', autoComplete: 'off', placeholder: 'Gate code and notes' },
 };
-// The ZIP question comes from the chat itself (session.pending), not the contact steps.
+// The address and ZIP questions come from the chat itself (session.pending), not the contact steps.
+const ADDRESS_INPUT = { type: 'text', autoComplete: 'street-address', placeholder: 'Service address', inputMode: undefined as React.HTMLAttributes<HTMLInputElement>['inputMode'] };
 const ZIP_INPUT = { type: 'text', autoComplete: 'postal-code', placeholder: '5-digit ZIP code', inputMode: 'numeric' as const };
 
 // ---- pieces ---------------------------------------------------------------------------------
@@ -699,17 +700,22 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   };
 
   // -- contact capture --------------------------------------------------------------------------
-  const stepsFor = (s: any): ContactStep[] => [...CONTACT_ORDER, ...(s?.route === 'cleaning' && addOnLabels(s).length ? (['addons'] as ContactStep[]) : [])];
+  // The address from the first question isn't asked again (the summary still shows it, and Edit details can change it).
+  const stepsFor = (s: any): ContactStep[] => [
+    ...CONTACT_ORDER.filter((k) => !(k === 'address' && s?.serviceAddress?.street) && !(k === 'city' && s?.serviceAddress?.street && s?.serviceAddress?.city) && !(k === 'sms' && config?.textMessages === false)),
+    ...(s?.route === 'cleaning' && addOnLabels(s).length ? (['addons'] as ContactStep[]) : []),
+  ];
   const askContact = (step: ContactStep, d: any = draft) => {
     if (step === 'address') { addrSession.current = crypto.randomUUID(); addrPicked.current = ''; }
     setContactStep(step);
-    say('model', contactPrompt(step, d));
+    say('model', contactPrompt(step, d, config));
     setOptions(step === 'email' ? ['Skip'] : step === 'notes' ? ['No special notes', 'Gate code required'] : step === 'sms' ? ['Yes, SMS updates are fine', 'No, call or email only'] : step === 'addons' ? [...addOnLabels(session), 'No add-ons'] : []);
     setMulti(step === 'addons');
     setSuggested('');
   };
   function startContact(s: any) {
-    setDraft({ name: s?.contact?.name || '', phone: s?.contact?.phone || '', email: s?.contact?.email || '', address: s?.contact?.address || '', city: s?.contact?.city || '', zip: s?.zip || s?.contact?.zip || '', notes: '', addOns: {}, smsConsent: false });
+    const known = s?.serviceAddress || {};
+    setDraft({ name: s?.contact?.name || '', phone: s?.contact?.phone || '', email: s?.contact?.email || '', address: s?.contact?.address || known.street || '', city: s?.contact?.city || known.city || '', zip: known.zip || s?.zip || s?.contact?.zip || '', notes: '', addOns: {}, smsConsent: false, ...(known.street ? { addressFromChat: true } : {}) });
     setTimeout(() => askContact('name', {}), 50);
   }
   const nextContact = (step: ContactStep, d: any) => {
@@ -718,7 +724,9 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     if (i < order.length - 1) return askContact(order[i + 1], d);
     void submitContact(d);
   };
-  const suggestOn = contactStep === 'address' && !!config?.addressSuggestions;
+  const chatAddress = !contactStep && session?.pending === 'serviceAddress';
+  const suggestOn = (contactStep === 'address' || chatAddress) && !!config?.addressSuggestions;
+  useEffect(() => { if (chatAddress) { addrSession.current = crypto.randomUUID(); addrPicked.current = ''; } }, [chatAddress]);
   useEffect(() => {
     const q = text.trim();
     if (!suggestOn || q.length < 3 || q === addrPicked.current) { setAddrItems([]); setAddrActive(-1); return; }
@@ -732,7 +740,8 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     return () => { clearTimeout(t); ctrl.abort(); };
   }, [text, suggestOn, token]);
   const pickAddress = async (item: { id: string; main: string; secondary: string }) => {
-    remember('contact');
+    const forChat = chatAddress; // the first question: the picked address is sent to BOB as the answer
+    if (!forChat) remember('contact');
     setAddrItems([]); setAddrActive(-1); setAddrLoading(true);
     try {
       const { address: a } = await api(`/api/address/details?id=${encodeURIComponent(item.id)}&s=${addrSession.current}`, { token });
@@ -743,6 +752,11 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
         setText(`${item.main} `);
         say('model', 'Please add the house number to that street, then send.');
         inputRef.current?.focus();
+        return;
+      }
+      if (forChat) {
+        setText('');
+        void send(`${a.street}, ${a.city}, AZ ${a.zip}`);
         return;
       }
       const d = { ...draft, address: a.street, city: a.city, zip: a.zip };
@@ -840,7 +854,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const toggle = (label: string) => setPicked((p) => (p.includes(label) ? p.filter((x) => x !== label) : [...p, label]));
   const last = messages[messages.length - 1];
   const canGoBack = undoCount > 0 && ready && !receipt && !requestId && !['verify', 'slots', 'approval', 'emergency'].includes(action);
-  const inputHints = contactStep ? INPUT_FOR[contactStep] : session?.pending === 'zip' ? ZIP_INPUT : undefined;
+  const inputHints = contactStep ? INPUT_FOR[contactStep] : session?.pending === 'serviceAddress' ? ADDRESS_INPUT : session?.pending === 'zip' ? ZIP_INPUT : undefined;
   const showOptions = !busy && !receipt && !requestId && action !== 'emergency' && options.length > 0 && (last?.role === 'model' || !!contactStep);
   const started = messages.length > 0;
 

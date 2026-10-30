@@ -34,6 +34,8 @@ export const PLACES = {
   "900 far ave": { lat: 33.64, lng: -112.36 }, // Surprise, ~21 miles
   "1 base way": { lat: 33.45, lng: -112.45 }, // the truck's base
   "50 edge blvd": { lat: 33.22, lng: -112.95 }, // far west Buckeye
+  "4515 n 59th ave": { lat: 33.5, lng: -112.19 }, // Phoenix 85033: just outside the service area
+  "123 e main st": { lat: 33.41, lng: -111.83 }, // Mesa 85201: not served
 };
 
 export function fakeGeo() {
@@ -143,7 +145,7 @@ export function fakeLc({ configured = true, failSms = false } = {}) {
 /** Chat steps that reach the contact step for each kind of visit. */
 export const FLOWS = {
   cleaning: (zip) => ["Dryer Vent Cleaning", zip, "Have Dryer", "No", "1-Story", "Electric", "Standard", "Dries in one normal cycle", "No signs", "Premium 1-2-3 · $179", "Accept & Continue"],
-  assessment: (zip) => ["Repair / Reroute / Assessment", "Disconnected Duct in Wall/Attic", zip, "1-Story Home", "Electric Dryer", "Standard Floor Setup", "Working Normal", "The vent is disconnected behind the dryer", "Book Assessment"],
+  assessment: (zip) => ["Repair / Reroute / Assessment", zip, "Disconnected Duct in Wall/Attic", "1-Story Home", "Electric Dryer", "Standard Floor Setup", "Working Normal", "The vent is disconnected behind the dryer", "Book Assessment"],
   bundle: (zip) => ["Dryer Vent Cleaning", "The vent also has damage.", "Include assessment", zip, "Have Dryer", "No", "1-Story", "Electric", "Standard", "Dries in one normal cycle", "No signs", "Select Premium 1-2-3 ⭐ ($238.50)", "Accept"],
   emergency: (zip) => ["Emergency Clog / Overheating", "No, it's turned off now", "Possible nest/blockage", zip, "1-Story Home", "Electric Dryer", "Emergency Same-Day · $349", "Accept"],
 };

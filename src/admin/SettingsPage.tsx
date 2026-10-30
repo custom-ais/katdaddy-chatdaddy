@@ -242,14 +242,14 @@ export function SettingsPage() {
   const [c, setC] = useState<any>(() => structuredClone(data.config));
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const [text, setText] = useState(() => ({ zips: data.config.serviceZips.join(', '), blocked: data.config.blockedDates.join(', '), weekday: data.config.weekdayStarts.join(', '), saturday: data.config.saturdayStarts.join(', ') }));
+  const [text, setText] = useState(() => ({ zips: data.config.serviceZips.join(', '), travel: (data.config.travelZips || []).join(', '), blocked: data.config.blockedDates.join(', '), weekday: data.config.weekdayStarts.join(', '), saturday: data.config.saturdayStarts.join(', ') }));
   const [address, setAddress] = useState(''), [check, setCheck] = useState<any>(null);
   const [techs, setTechs] = useState<Technician[]>(data.technicians), [techDirty, setTechDirty] = useState(false);
   useEffect(() => { if (!techDirty) setTechs(data.technicians); }, [data.technicians, techDirty]);
   useEffect(() => {
     if (dirty) return;
     setC(structuredClone(data.config));
-    setText({ zips: data.config.serviceZips.join(', '), blocked: data.config.blockedDates.join(', '), weekday: data.config.weekdayStarts.join(', '), saturday: data.config.saturdayStarts.join(', ') });
+    setText({ zips: data.config.serviceZips.join(', '), travel: (data.config.travelZips || []).join(', '), blocked: data.config.blockedDates.join(', '), weekday: data.config.weekdayStarts.join(', '), saturday: data.config.saturdayStarts.join(', ') });
   }, [data.config, dirty]);
 
   const update = (key: string, value: any) => { setC((s: any) => ({ ...s, [key]: value })); setDirty(true); };
@@ -283,7 +283,7 @@ export function SettingsPage() {
     [c.serviceZips.length > 0, 'Service ZIPs entered'],
     [c.activeTechnicianIds.length > 0, 'A technician takes bookings'],
     [c.scheduleSource !== 'Jobber' || data.integrations?.jobber?.connected, 'Jobber connected'],
-    [!c.requirePhoneVerification || data.integrations?.leadConnector?.configured, 'Phone verification can send codes'],
+    [!(c.requirePhoneVerification && c.smsConfirmations) || data.integrations?.leadConnector?.configured, 'Phone verification can send codes'],
   ] as [boolean, string][];
 
   return (
@@ -307,10 +307,10 @@ export function SettingsPage() {
             </Field>
             <Toggle checked={c.scheduleAcknowledged} onChange={(v) => update('scheduleAcknowledged', v)} label="The schedule source above is accurate and kept up to date" />
             <Toggle checked={c.bookingEnabled} onChange={(v) => update('bookingEnabled', v)} label="Let customers book visits online" detail="When off, BOB still answers questions and takes callback requests." />
-            <Toggle checked={c.requirePhoneVerification} onChange={(v) => update('requirePhoneVerification', v)} label="Text a code to verify the customer's phone before booking" detail="Rulebook requirement. Sent through LeadConnector." />
+            <Toggle checked={c.requirePhoneVerification && c.smsConfirmations} disabled={!c.smsConfirmations} onChange={(v) => update('requirePhoneVerification', v)} label="Text a code to verify the customer's phone before booking" detail={c.smsConfirmations ? 'Rulebook requirement. Sent through LeadConnector.' : 'Off while text confirmations are off: BOB sends no texts to customers.'} />
             <Toggle checked={c.aiAssistant} onChange={(v) => update('aiAssistant', v)} label="Smart chat (Gemini) reads typed messages" detail="Off = buttons and keyword matching only. Prices and booking never depend on it." />
             <div className="flex flex-wrap gap-x-6">
-              <Toggle checked={c.smsConfirmations} onChange={(v) => update('smsConfirmations', v)} label="Text confirmations" detail="Only to customers who agree to texts." />
+              <Toggle checked={c.smsConfirmations} onChange={(v) => update('smsConfirmations', v)} label="Text confirmations" detail="Only to customers who agree to texts. Off: BOB sends no texts to customers (no phone code, no confirmation text, no texting question)." />
               <Toggle checked={c.emailConfirmations} onChange={(v) => update('emailConfirmations', v)} label="Email confirmations" />
             </div>
           </div>
@@ -391,7 +391,7 @@ export function SettingsPage() {
         </div>
       </Section>
 
-      <Section icon={<MapPin size={18} />} title="Service area and drive time" description="Customers outside these ZIP codes or past the drive limit are sent to the team instead of a calendar.">
+      <Section icon={<MapPin size={18} />} title="Service area and drive time" description="BOB asks for the address first. Approved ZIP codes book normally, just-outside ZIP codes are offered a travel charge, and every other address is told politely that we don't service the area.">
         <Field label="Approved ZIP codes" hint={`${c.serviceZips.length} ZIP code${c.serviceZips.length === 1 ? '' : 's'}`}>
           <textarea rows={3} className={inputClass} value={text.zips} placeholder="85326, 85338, 85374…" onChange={(e) => { setText({ ...text, zips: e.target.value }); update('serviceZips', list(e.target.value)); }} />
         </Field>
@@ -400,6 +400,12 @@ export function SettingsPage() {
             <Plus size={15} />Add the {missingWestValley.length} West Valley ZIP{missingWestValley.length === 1 ? '' : 's'} from the territory map
           </button>
         )}
+        <div className="grid grid-cols-1 sm:grid-cols-[1fr_200px] gap-3">
+          <Field label="Just outside the service area (travel charge)" hint={`${(c.travelZips || []).length} ZIP code${(c.travelZips || []).length === 1 ? '' : 's'}. BOB tells these customers they're just outside the area, mentions the travel charge, and lets them continue or find someone more local.`}>
+            <textarea rows={3} className={inputClass} value={text.travel} placeholder="85033, 85043…" onChange={(e) => { setText({ ...text, travel: e.target.value }); update('travelZips', list(e.target.value)); }} />
+          </Field>
+          <Dollars label="Travel charge" value={c.travelZoneFeeCents || 0} onChange={(v) => update('travelZoneFeeCents', v)} hint={c.travelZoneFeeCents ? 'Added to the booking as a travel fee.' : 'Not set: BOB says there is a travel charge without an amount, and the booking is flagged for you to confirm it.'} />
+        </div>
         <Field label="Where the truck starts (base address)" hint="Used for the farthest-drive limit and travel fees."><input className={inputClass} value={c.baseAddress} onChange={(e) => update('baseAddress', e.target.value)} /></Field>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Num label="Farthest drive from base" suffix="min" value={c.maxDriveFromBaseMin} onChange={(n) => update('maxDriveFromBaseMin', n)} />

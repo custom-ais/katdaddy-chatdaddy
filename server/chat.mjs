@@ -46,10 +46,11 @@ function prepend(result, text) {
 /**
  * @returns {{ session, reply, options, ..., via: 'rules' | 'ai' }}
  */
-export async function chatTurn({ message, session, config, faqs, assistant }) {
-  const rules = () => ({ ...turn(message, session, config, faqs), via: "rules" });
+export async function chatTurn({ message, session, config, faqs, assistant, place = null }) {
+  const rules = () => ({ ...turn(message, session, config, faqs, place ? { place } : {}), via: "rules" });
   const aiOn = assistant?.configured && config.aiAssistant !== false;
   if (!aiOn) return rules();
+  if (place) return rules(); // an address the server already looked up
   if (isDirect(message, session)) return rules();
   if (detectSafety(message)) return rules();
   if (["emergency", "confirmed", "review"].includes(session.stage)) return rules();
