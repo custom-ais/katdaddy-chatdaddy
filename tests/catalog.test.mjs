@@ -75,7 +75,7 @@ test("an urgent clog offers Emergency Same-Day Clog Relief", () => {
   assert.equal(r.options[0], "Emergency Same-Day · $349");
   const regular = turn("Schedule regular cleaning", r.session, config, INITIAL_FAQS);
   assert.equal(regular.session.intent, "cleaning");
-  assert.equal(regular.session.pending, "lastCleaned", "answers already given are kept (\"my dryer\" means one is installed)");
+  assert.equal(regular.session.pending, "recentService", "answers already given are kept (\"my dryer\" means one is installed)");
 });
 
 test("More services lists Express, Post-Service, Nest, Restoration and Emergency", () => {

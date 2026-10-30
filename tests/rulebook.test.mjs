@@ -171,9 +171,10 @@ test("5 PM overflow: short, nearby, high enough ticket — and it needs approval
   const cheap = await h.prepare();
   assert.ok(![...(await h.slots(cheap, "?date=2026-09-23")), ...(await h.slots(cheap, "?date=2026-09-23&cursor=3"))].some((s) => s.overflow));
   // Performance 1-story with a gas dryer: $249 + $49, 105 minutes → too long.
-  // Bundle ($248, 150 min) → too long. Express 2-story is too cheap. Use Performance electric: $249, 90 min.
+  // Bundle ($248, 150 min) → too long. Express 2-story is too cheap. Use Performance electric with normal
+  // drying: $249, 90 min (2-cycle drying adds 15 minutes of difficulty time, which would be too long).
   const token = await h.fresh();
-  for (const m of ["Dryer Vent Cleaning", "85326", "Have Dryer", "No", "1-Story", "Electric", "Standard", "Takes about 2 cycles", "No signs", "Performance · $249", "Accept & Continue"]) await h.chat(token, m);
+  for (const m of ["Dryer Vent Cleaning", "85326", "Have Dryer", "No", "1-Story", "Electric", "Standard", "Dries in one normal cycle", "No signs", "Performance · $249", "Accept & Continue"]) await h.chat(token, m);
   await h.contactAndVerify(token);
   const day = [...(await h.slots(token, "?date=2026-09-23")), ...(await h.slots(token, "?date=2026-09-23&cursor=3"))];
   const pm = day.find((s) => s.overflow);

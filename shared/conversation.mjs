@@ -20,6 +20,7 @@
 
 import { DEFAULT_CONFIG, money, serviceQuote, BUNDLE_PRICE_CENTS } from "./domain.mjs";
 import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant } from "./catalog.mjs";
+import { restrictionScore, restrictionLevel } from "./airflow.mjs";
 
 export const initialSession = () => ({
   v: 3,
@@ -74,7 +75,7 @@ export const GREETING = "👋 Hi! Welcome to Dryer Vent Squad West Valley! I'm y
 export const QUESTIONS = {
   zip: { text: "What's the five-digit ZIP code for the service address?", options: [] },
   hasDryer: { text: "Do you currently have a dryer installed at the location, or do you only need the exhaust duct line serviced?", options: ["Have Dryer Installed", "No Dryer Present (Duct Only)"] },
-  lastCleaned: { text: "Has your dryer vent been professionally cleaned in the last 12 months?", options: ["Yes", "No", "Not sure"] },
+  recentService: { text: "Has your dryer been purchased or serviced in the last 90 days?", options: ["Yes", "No", "Not sure"] },
   stories: { text: "Is your home a 1-story or 2-story residence?", options: ["1-Story Home", "2-Story (1st Floor Laundry)", "2-Story (2nd Floor Laundry)", "Not sure"] },
   laundryFloor: { text: "Is the laundry room on the 1st floor or the 2nd floor?", options: ["1st Floor", "2nd Floor", "Not sure"] },
   power: { text: "Is your dryer gas or electric?", options: ["Electric Dryer", "Gas Dryer", "I don't know", "Other"], info: ["gas_electric", "why_we_ask"] },
@@ -111,13 +112,15 @@ const SETUP_KEY = { "Gas Appliance Safety Procedure": "gas", "Stacked Washer/Dry
 
 /** Help Me Choose asks performance first, with the playbook's wording. */
 const HELP_SYMPTOMS = { text: "To match you with the right service level, how is your dryer currently performing?", options: ["Dries in 1 normal cycle", "Takes 2+ cycles to dry", "Overheating / Error Code", "Just moved in / Preventative"] };
+/** With no dryer installed, the performance question asks about the last dryer on that vent. */
+const NO_DRYER_SYMPTOMS = "Since there's no dryer there now, how was the last dryer on this vent performing? Select all that apply.";
 /** Questions that offer "Other", and how the description is labeled for the technician. */
 const OTHER_LABELS = { power: "Gas or electric", mount: "Dryer setup", symptoms: "Dryer performance", animals: "Signs of animals", triage: "What's happening", repairScope: "Repair issue" };
 
 /** Property values the AI layer may fill in (anything else is ignored). */
 export const FACT_VALUES = {
   hasDryer: ["Yes", "No", "Not sure"],
-  lastCleaned: ["Yes", "No", "Not sure"],
+  recentService: ["Yes", "No", "Not sure"],
   stories: ["1-story", "2-story", "Not sure"],
   laundryFloor: ["1st floor", "2nd floor", "Not sure"],
   power: ["Electric", "Gas", "Not sure"],
@@ -200,7 +203,7 @@ function parseField(key, t) {
       if (/^(?:have dryer|yes|yep|yeah|i have (?:a |one)|dryer is installed|it's installed)/.test(t)) return "Yes";
       if (/^(?:no dryer|no|nope|just the vent|vent only|not installed)/.test(t)) return "No";
       return null;
-    case "lastCleaned":
+    case "recentService":
     case "animals":
       if (/^(?:yes|yep|yeah)\b/.test(t)) return "Yes";
       if (/^(?:no|nope|never|no signs)\b/.test(t)) return "No";
@@ -406,11 +409,12 @@ export function questionOrder(s) {
       help && !s.package && "symptoms", // Help Me Choose starts with performance
       "zip",
       "hasDryer",
-      hasDryer(s) && "lastCleaned",
+      hasDryer(s) && "recentService",
       ...layout,
       hasDryer(s) && "power",
       hasDryer(s) && "mount",
-      !help && hasDryer(s) && !s.package && s.route !== "bundle" && "symptoms",
+      // asked with or without a dryer: a vent with no dryer on it can still be badly clogged
+      !help && !s.package && s.route !== "bundle" && "symptoms",
       !["nest", "restoration"].includes(s.package) && "animals",
     ].filter(Boolean);
   }
@@ -457,9 +461,9 @@ export function recommendTier(p = {}) {
   const sym = p.symptoms || [];
   const severe = sym.includes("three") || sym.includes("error");
   const slow = sym.includes("two");
-  const overdue = ["No", "Not sure"].includes(p.lastCleaned);
+  const fresh = p.recentService === "Yes"; // a new or just-serviced dryer that still dries slowly points to the vent
   const tight = ["Stacked", "Pedestal"].includes(p.mount);
-  return severe || (slow && (overdue || tight)) ? "total" : "performance";
+  return severe || (slow && (fresh || tight)) ? "total" : "performance";
 }
 
 /** Estimated drying efficiency from cycles: 2 cycles ≈ 50%, 3 or more ≈ 33% or less. */
@@ -480,8 +484,9 @@ export function airflowAnalysis(p = {}, recommended = recommendTier(p)) {
   else if (sym.includes("two")) parts.push(`Taking about 2 cycles means each load takes ${eff.times} as long to dry, so your dryer is likely running at ${eff.percent} efficiency, a sign of a moderate airflow restriction.`);
   else if (Array.isArray(p.symptoms) && sym.includes("normal")) parts.push("Drying in one normal cycle suggests airflow is in good shape for now.");
   if (sym.includes("error")) parts.push("The airflow error code means the dryer itself is detecting restricted airflow.");
-  if (p.lastCleaned === "No") parts.push("It hasn't been professionally cleaned in the last 12 months, so lint buildup in the line is likely.");
-  else if (p.lastCleaned === "Not sure") parts.push("If it hasn't been cleaned in the last 12 months, some lint buildup in the line is likely.");
+  const slowOrWorse = sym.includes("two") || sym.includes("three") || sym.includes("error");
+  if (p.recentService === "Yes" && slowOrWorse) parts.push("Since the dryer was purchased or serviced in the last 90 days, the slow drying most likely comes from the vent, not the dryer.");
+  if (p.hasDryer === "No") parts.push("Even with no dryer connected, lint left in the line stays there, so the vent may still be clogged.");
   if (p.mount === "Stacked" || p.mount === "Pedestal") parts.push(`With a ${p.mount === "Stacked" ? "stacked" : "pedestal"} setup, the transition hose behind the dryer is often kinked or crushed, which the DryerFlex hose upgrade fixes.`);
   if (p.power === "Gas") parts.push("Gas dryers also get our Gas Appliance Safety Procedure: a safe disconnect and reconnect, plus a gas leak test before we leave.");
   paragraphs.push(parts.splice(0).join(" "));
@@ -506,14 +511,8 @@ export function airflowAnalysis(p = {}, recommended = recommendTier(p)) {
  * an overdue cleaning and a stacked/pedestal setup push it up.
  */
 export function airflowEstimate(p = {}) {
-  const sym = p.symptoms || [];
-  let score = sym.includes("three") ? 72 : sym.includes("two") ? 50 : sym.includes("normal") ? 12 : 25;
-  if (sym.includes("error")) score = Math.max(score, 66);
-  if (p.lastCleaned === "No") score += 10;
-  else if (p.lastCleaned === "Not sure") score += 5;
-  if (p.mount === "Stacked" || p.mount === "Pedestal") score += 5;
-  score = Math.max(5, Math.min(95, score));
-  const level = score < 34 ? "clear" : score < 67 ? "restricted" : "severe";
+  const score = restrictionScore(p);
+  const level = restrictionLevel(score);
   const eff = dryingEfficiency(p);
   return {
     score,
@@ -531,9 +530,8 @@ export function airflowFactors(p = {}) {
   else if (sym.includes("two")) f.push("Takes about 2 cycles");
   else if (sym.includes("normal")) f.push("Dries in one normal cycle");
   if (sym.includes("error")) f.push("Airflow error code");
-  if (p.lastCleaned === "No") f.push("Not cleaned in the last 12 months");
-  else if (p.lastCleaned === "Not sure") f.push("Last cleaning unknown");
-  else if (p.lastCleaned === "Yes") f.push("Cleaned in the last 12 months");
+  if (p.recentService === "Yes") f.push("Dryer new or serviced in the last 90 days");
+  if (p.hasDryer === "No") f.push("No dryer connected now");
   if (p.mount === "Stacked") f.push("Stacked setup: transition hose often crushed");
   if (p.mount === "Pedestal") f.push("Fixed pedestal: transition hose often crushed");
   if (p.power === "Gas") f.push("Gas dryer: disconnect, reconnect & leak test");
@@ -684,11 +682,9 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       case "zip":
         return `Thanks, ZIP ${s.zip}.`;
       case "hasDryer":
-        return p.hasDryer === "No"
-          ? `Got it, duct line service only.${priced ? ` For an unoccupied line cleaning, our Express Vent Cleaning service (from ${money(fromPrice(services, "express") ?? 0)}) is ideal.` : ""}`
-          : "Understood.";
-      case "lastCleaned":
-        return "Thanks.";
+        return p.hasDryer === "No" ? "Got it, duct line service only." : "Understood.";
+      case "recentService":
+        return p.recentService === "Yes" ? "Thanks, a new or recently serviced dryer." : "Thanks.";
       case "stories":
       case "laundryFloor":
         if (p.stories === "Not sure" || p.laundryFloor === "Not sure") return "No problem, your technician will confirm the layout.";
@@ -748,6 +744,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.pending = key;
     s.stage = "evaluating";
     if (key === "symptoms" && s.help) return respond(HELP_SYMPTOMS.text, HELP_SYMPTOMS.options);
+    if (key === "symptoms" && s.property.hasDryer === "No") return respond(NO_DRYER_SYMPTOMS, QUESTIONS.symptoms.options, { multi: true });
     const q = QUESTIONS[key];
     return respond(q.text, optionsFor(key), { ...(q.multi ? { multi: true } : {}), ...(q.info ? { info: q.info } : {}) });
   };
@@ -802,14 +799,14 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond(reply, options, { ...extra, info: ["pricing"], card });
   };
 
-  const specialOffer = (families, suggested, lead, brief, extraOptions = ["Ask a question"]) => {
+  const specialOffer = (families, suggested, lead, brief, extraOptions = ["Ask a question"], { airflow = null, summary = "" } = {}) => {
     s.suggested = suggested;
     s.offerFamilies = families;
     s.stage = "offer";
     const options = [...families.map(label), ...extraOptions];
     if (brief) return respond("Which option would you like?", options, { suggested: label(suggested) });
     const list = families.map((f) => line(f, families.length > 1 && f === suggested)).join("\n");
-    const card = { kind: "offer", lead, picks: families.map((f) => pickCard(f, families.length > 1 && f === suggested)), note: priced ? "" : unverified };
+    const card = { kind: "offer", lead, ...(airflow ? { airflow, summary: summary || lead } : {}), picks: families.map((f) => pickCard(f, families.length > 1 && f === suggested)), note: priced ? "" : unverified };
     return respond(`${lead}\n\n${list}${priced ? gasNote() : "\n\n" + unverified}`, options, { suggested: label(suggested), card });
   };
 
@@ -852,7 +849,14 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       return specialOffer(["nest", "restoration"], "nest", "Birds or pests in a vent need to be removed before the vent is cleaned.", brief);
     }
     if (s.property.hasDryer === "No") {
-      return specialOffer(["express"], "express", "With no dryer installed, the visit is our **Express Vent Cleaning** — vent only, so there's no appliance to move or disconnect.", brief);
+      // Shorter visit with no appliance to move, but a vent left clogged still adds difficulty (and time).
+      const p = s.property;
+      const known = Array.isArray(p.symptoms) && p.symptoms.length;
+      const airflow = known ? { ...airflowEstimate(p), factors: airflowFactors(p) } : null;
+      const eff = dryingEfficiency(p);
+      const finding = eff ? `The last dryer on this vent was likely running at ${eff.percent} efficiency, so expect a heavier cleaning.` : "";
+      const lead = "With no dryer installed, the visit is our **Express Vent Cleaning**: vent only, so there's no appliance to move or disconnect.";
+      return specialOffer(["express"], "express", finding ? `${finding} ${lead}` : lead, brief, ["Ask a question"], { airflow, summary: [finding, lead].filter(Boolean).join(" ") });
     }
     return tierOffer(brief);
   };

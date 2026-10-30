@@ -49,7 +49,7 @@ const schema = {
       properties: {
         zip: { type: ["string", "null"] },
         hasDryer: { type: ["string", "null"], enum: [...FACT_VALUES.hasDryer, null] },
-        lastCleaned: { type: ["string", "null"], enum: [...FACT_VALUES.lastCleaned, null] },
+        recentService: { type: ["string", "null"], enum: [...FACT_VALUES.recentService, null] },
         stories: { type: ["string", "null"], enum: [...FACT_VALUES.stories, null] },
         laundryFloor: { type: ["string", "null"], enum: [...FACT_VALUES.laundryFloor, null] },
         power: { type: ["string", "null"], enum: [...FACT_VALUES.power, null] },

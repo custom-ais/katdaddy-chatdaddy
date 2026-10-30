@@ -1,4 +1,7 @@
 import {SERVICE_CATALOG,effectiveFamily,lineForService,addOnLines} from './catalog.mjs';
+import {difficultyMinutes} from './airflow.mjs';
+// Cleaning packages get extra time when the answers point to a restricted or severe vent.
+const DIFFICULTY_FAMILIES=new Set(['essential','performance','total','express','postservice']);
 export const TIME_ZONE = 'America/Phoenix';
 export const BUNDLE_PRICE_CENTS = 24800;
 export const DEFAULT_CONFIG = {
@@ -90,7 +93,8 @@ export function serviceQuote(route,config=DEFAULT_CONFIG,ctx={}) {
  else throw new Error('Choose cleaning, assessment, or cleaning + assessment.');
  if(!base)throw new Error('That service is not available right now.');
  const lines=[base,...addOnLines(services,{family,route,property,addOns:ctx.addOns||{}})];
- return {route,package:family,serviceId:base.id,name:base.name,priceCents:lines.reduce((n,l)=>n+l.cents,0),durationMins:lines.reduce((n,l)=>n+l.mins,0),
+ const difficultyMins=route==='cleaning'&&DIFFICULTY_FAMILIES.has(family)?difficultyMinutes(property):0;
+ return {route,package:family,serviceId:base.id,name:base.name,priceCents:lines.reduce((n,l)=>n+l.cents,0),durationMins:lines.reduce((n,l)=>n+l.mins,0)+difficultyMins,difficultyMins,
   lineItems:lines.map(({id,name,description,cents,mins})=>({id,name,description,cents,mins})),
   priceNote:base.certain?'':'Priced for a 2-story home with first-floor laundry. Your technician lowers it on site if your home is smaller.',
   version:config.version,repairsIncluded:false};

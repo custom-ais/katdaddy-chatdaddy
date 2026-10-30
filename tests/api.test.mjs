@@ -450,7 +450,7 @@ test("package, 2-story upstairs home, gas dryer and fogging flow through to the 
   for (const m of ["Dryer Vent Cleaning", "85326", "Have Dryer", "No", "2-Story", "2nd Floor", "Gas", "Standard", "Takes about 2 cycles", "No signs", "Performance · $269", "Accept & Continue"]) await h.chat(token, m);
   const r = await h.contactAndVerify(token, { ...contact, addOns: { fogging: true } });
   assert.equal(r.data.quote.totalCents, 26900 + 4900 + 7900);
-  assert.equal(r.data.quote.durationMins, 105 + 15 + 15);
+  assert.equal(r.data.quote.durationMins, 105 + 15 + 15 + 15, "package + gas + fogging + 15 min difficulty for 2-cycle drying");
   const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
   const done = await h.confirm(token, held.data.hold);
   assert.equal(done.status, 201, JSON.stringify(done.data));
@@ -458,7 +458,7 @@ test("package, 2-story upstairs home, gas dryer and fogging flow through to the 
   assert.deepEqual(h.jobber.jobs[0].lineItems.map((l) => l.name), [
     "Performance See-It-Clean (2 Story, Upstairs)", "Gas Appliance Safety Procedure", "Sanitation Fogging Add-On",
   ]);
-  assert.equal(h.jobber.jobs[0].end - h.jobber.jobs[0].start, 135 * 60_000);
+  assert.equal(h.jobber.jobs[0].end - h.jobber.jobs[0].start, 150 * 60_000, "the Jobber visit includes the difficulty time");
 });
 
 test("emergency clog relief is offered inside normal notice, but books only after a named approval", async (t) => {
