@@ -1,25 +1,35 @@
 {
-  "name": "dryer-vent-squad-dashboard",
-  "version": "1.0.0",
+  "name": "dvs-bob-booking-bot",
+  "version": "2.0.0",
   "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.16.0"
+  },
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint"
+    "dev": "node scripts/dev.mjs",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --test-concurrency=6 tests/*.test.mjs",
+    "db:schema": "node scripts/print-schema.mjs"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^0.9.0",
-    "@supabase/supabase-js": "^2.39.0",
-    "lucide-react": "^0.344.0",
-    "next": "^14.1.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "recharts": "^2.12.0"
+    "@fontsource-variable/atkinson-hyperlegible-next": "^5.3.0",
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "lucide-react": "^0.546.0",
+    "postgres": "^3.4.9",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "recharts": "^3.10.1",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
-    "autoprefixer": "^10.4.18",
-    "postcss": "^8.4.35",
-    "tailwindcss": "^3.4.1"
+    "@electric-sql/pglite": "^0.5.13",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "^5.8.3",
+    "vite": "^8.3.5"
   }
 }
