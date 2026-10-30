@@ -46,7 +46,9 @@ function Connections() {
     ['Jobber', !!i.jobber?.connected,
       i.jobber?.connected ? 'Reading the live calendar and creating scheduled jobs with visits.' : i.jobber?.appConfigured ? 'Not connected yet. Online booking stays off until it is.' : 'Add JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET and JOBBER_REDIRECT_URI in Vercel first.',
       i.jobber?.appConfigured && (i.jobber?.connected ? <button className={subtleButton} onClick={disconnect} disabled={busy}>Disconnect</button> : <a className={primaryButton} href="/api/admin/jobber/connect">Connect Jobber</a>)],
-    ['LeadConnector', !!i.leadConnector?.configured, i.leadConnector?.configured ? 'Sends verification codes, confirmations and approval texts, and saves contacts and requests.' : 'Add LC_PRIVATE_TOKEN and LC_LOCATION_ID in Vercel. Phone verification needs it, so online booking waits for it.'],
+    ['LeadConnector', !!i.leadConnector?.configured && !i.leadConnector?.issue,
+      <>{i.leadConnector?.configured ? 'Sends verification codes, confirmations and approval texts, and saves contacts and requests.' : 'Add LC_PRIVATE_TOKEN and LC_LOCATION_ID in Vercel. Phone verification needs it, so online booking waits for it.'}
+        {i.leadConnector?.issue && <span className="block mt-1 font-semibold text-amber-800">{when(i.leadConnector.issue.at)}: {i.leadConnector.issue.message}</span>}</>],
     ['Smart chat', !!i.assistant?.configured, i.assistant?.configured ? `Gemini (${i.assistant.model}) reads typed messages. It can't set prices or book — BOB's rules do that.` : 'Add GEMINI_API_KEY in Vercel. Until then BOB uses buttons and keyword matching.'],
     ['Maps', i.maps?.provider === 'google' && !i.maps?.issue,
       <>{i.maps?.provider === 'google' ? 'Google finds addresses and drive times enforce the drive-time rules. If Google refuses, the free Census lookup is used.' : 'Free Census address lookup with straight-line drive estimates. Add GOOGLE_MAPS_API_KEY for real drive times.'}

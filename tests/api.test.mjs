@@ -662,3 +662,13 @@ test("an unexpected server error is shown to the office in Connections", async (
   assert.equal(data.data.integrations.lastError.path, "POST /api/contact");
   assert.equal(data.data.integrations.lastError.message, "Something unexpected");
 });
+test("a text code LeadConnector won't send is explained to the office in Connections", async (t) => {
+  const h = await harness(t, { lc: { failSms: true } });
+  const token = await h.accept();
+  const r = await h.call("/api/contact", { method: "POST", token, body: contact });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.verification.sent, false);
+  assert.equal(r.data.verification.error, true);
+  const data = await h.call("/api/admin/data", { cookie: await h.login() });
+  assert.match(data.data.integrations.leadConnector.issue.message, /^Text code not sent: sms down/);
+});

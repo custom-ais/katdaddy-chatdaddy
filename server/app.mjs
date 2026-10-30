@@ -157,7 +157,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
 
   const integrations = async () => ({
     jobber: { appConfigured: jobber.appConfigured, connected: await jobber.connected() },
-    leadConnector: { configured: lc.configured },
+    leadConnector: { configured: lc.configured, issue: (await store.kvGet("diag:lc").catch(() => null)) || null },
     maps: { provider: geo.provider, issue: (await geo.lastIssue?.()) || null },
     lastError: (await store.kvGet("diag:last-error").catch(() => null)) || null,
     assistant: { configured: Boolean(assistant?.configured), model: assistant?.model || "" },
@@ -371,6 +371,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
       await lc.sendSms(contactId, verificationSms(code));
     } catch (error) {
       console.error("[lc] verification", error.message);
+      await store.kvSet("diag:lc", { at: now, message: `Text code not sent: ${String(error.message).slice(0, 300)}` }, 60 * 60 * 24 * 7).catch(() => {});
       return { required: true, sent: false, available: true, error: true, to: maskPhone(phone) };
     }
     data.verification = { phone, hash: digest(`${code}:${token}:${phone}`), expires: now + VERIFY_TTL, attempts: 0, sends: [...sends, now] };

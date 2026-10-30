@@ -290,8 +290,11 @@ function RequestForm({ token, session, onDone }: { token: string; session: any; 
 }
 
 function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { token: string; verification: any; onVerified: (s: any) => void; onEdit: () => void; onRequest: () => void }) {
-  const [code, setCode] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [info, setInfo] = useState<any>(verification), [now, setNow] = useState(Date.now());
-  const [sentAt, setSentAt] = useState(Date.now());
+  const notSent = verification?.available && !verification.sent && !verification.reused;
+  const [code, setCode] = useState(''), [busy, setBusy] = useState(false), [info, setInfo] = useState<any>(verification), [now, setNow] = useState(Date.now());
+  // If the first text didn't go out, say so and let them resend right away.
+  const [error, setError] = useState(notSent && !verification.retryInSeconds ? "We couldn't send the code. Tap Resend code, or send the team a request." : '');
+  const [sentAt, setSentAt] = useState(notSent ? Date.now() - 30_000 + (verification.retryInSeconds || 0) * 1000 : Date.now());
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
   const wait = Math.max(0, 30 - Math.floor((now - sentAt) / 1000));
   if (!info?.available) {
