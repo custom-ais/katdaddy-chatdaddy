@@ -234,6 +234,8 @@ const INPUT_FOR: Partial<Record<ContactStep, { type: string; autoComplete: strin
   notes: { type: 'text', autoComplete: 'off', placeholder: 'Gate code, parking, pets…' },
   gate: { type: 'text', autoComplete: 'off', placeholder: 'Gate code and notes' },
 };
+// The ZIP question comes from the chat itself (session.pending), not the contact steps.
+const ZIP_INPUT = { type: 'text', autoComplete: 'postal-code', placeholder: '5-digit ZIP code', inputMode: 'numeric' as const };
 
 // ---- pieces ---------------------------------------------------------------------------------
 
@@ -275,7 +277,7 @@ function RequestForm({ token, session, onDone }: { token: string; session: any; 
           <label className="text-xs font-bold text-slate-700">Full name<input className={input} required autoComplete="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
           <label className="text-xs font-bold text-slate-700">Callback number<input className={input} required type="tel" autoComplete="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label>
           <label className="text-xs font-bold text-slate-700">Email (optional)<input className={input} type="email" autoComplete="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
-          <label className="text-xs font-bold text-slate-700">Service ZIP (optional)<input className={input} autoComplete="postal-code" value={form.zip} onChange={(e) => setForm({ ...form, zip: e.target.value })} /></label>
+          <label className="text-xs font-bold text-slate-700">Service ZIP (optional)<input className={input} autoComplete="postal-code" inputMode="numeric" maxLength={5} value={form.zip} onChange={(e) => setForm({ ...form, zip: e.target.value })} /></label>
         </div>
         <label className="block text-xs font-bold text-slate-700">What do you need?<textarea className={`${input} min-h-24`} required maxLength={4000} value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} /></label>
         <label className="block text-xs font-bold text-slate-700">Best way to reach you
@@ -806,7 +808,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   };
   const toggle = (label: string) => setPicked((p) => (p.includes(label) ? p.filter((x) => x !== label) : [...p, label]));
   const last = messages[messages.length - 1];
-  const inputHints = contactStep ? INPUT_FOR[contactStep] : undefined;
+  const inputHints = contactStep ? INPUT_FOR[contactStep] : session?.pending === 'zip' ? ZIP_INPUT : undefined;
   const showOptions = !busy && !receipt && !requestId && action !== 'emergency' && options.length > 0 && (last?.role === 'model' || !!contactStep);
   const started = messages.length > 0;
 
@@ -984,7 +986,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
             ref={inputRef}
             aria-label={suggestOn ? 'Street address' : 'Message BOB'} maxLength={2000} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onInputKey}
             {...(suggestOn ? { role: 'combobox', 'aria-autocomplete': 'list' as const, 'aria-expanded': addrItems.length > 0, 'aria-controls': 'bob-address-options', 'aria-activedescendant': addrActive >= 0 ? `bob-address-${addrActive}` : undefined } : {})}
-            type={inputHints?.type || 'text'} autoComplete={suggestOn ? 'off' : inputHints?.autoComplete || 'off'} inputMode={inputHints?.inputMode}
+            type={inputHints?.type || 'text'} autoComplete={suggestOn ? 'off' : inputHints?.autoComplete || 'off'} inputMode={inputHints?.inputMode} enterKeyHint="send"
             disabled={!ready || busy || addrLoading || !!receipt || !!requestId || contactStep === 'sms' || contactStep === 'addons'}
             placeholder={receipt ? 'Your visit is booked.' : inputHints?.placeholder || 'Type your message or answer…'}
             className="w-full bg-slate-900/90 border-2 border-slate-700 focus:border-orange-500 rounded-full pl-5 pr-14 py-3.5 text-sm font-semibold text-white placeholder-slate-400 outline-none transition-all disabled:opacity-50"
