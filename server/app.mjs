@@ -158,7 +158,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
 
   const integrations = async () => ({
     jobber: { appConfigured: jobber.appConfigured, connected: await jobber.connected() },
-    leadConnector: { configured: lc.configured, issue: (await store.kvGet("diag:lc").catch(() => null)) || null },
+    leadConnector: { configured: lc.configured, tokenKind: lc.tokenKind || "", issue: (await store.kvGet("diag:lc").catch(() => null)) || null },
     maps: { provider: geo.provider, issue: (await geo.lastIssue?.()) || null },
     lastError: (await store.kvGet("diag:last-error").catch(() => null)) || null,
     assistant: { configured: Boolean(assistant?.configured), model: assistant?.model || "" },
