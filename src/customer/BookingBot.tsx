@@ -69,6 +69,15 @@ const INFO: Record<string, () => React.ReactElement> = {
   ),
 };
 
+/** BOB's own picture, as in the original chat. */
+function BobFace({ size }: { size: number }) {
+  return (
+    <span className="block rounded-full bg-white border border-sky-100 overflow-hidden shrink-0 shadow-sm" style={{ width: size, height: size }}>
+      <img src="/bob-avatar.png" alt="" width={size} height={size} decoding="async" className="w-full h-full object-cover" />
+    </span>
+  );
+}
+
 function Rich({ text }: { text: string }) {
   return (
     <>
@@ -633,7 +642,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     <div className={`bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden flex flex-col relative text-white ${shell}`}>
       <div className="bg-slate-800/90 backdrop-blur-md px-4 py-3 border-b border-slate-700/60 flex items-center justify-between z-20">
         <div className="flex items-center gap-3">
-          <div className="p-2 rounded-xl bg-gradient-to-br from-orange-500 to-orange-600 text-white shadow-md"><Wind size={20} /></div>
+          <BobFace size={40} />
           <div>
             <h1 className="font-extrabold text-base text-white tracking-tight leading-none">Dryer Vent Squad West Valley</h1>
             <p className="text-[11px] font-semibold text-orange-400 mt-1 flex items-center gap-1.5">
@@ -670,9 +679,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       <div ref={scroll} className={`flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 ${started ? 'bg-slate-50 text-slate-800' : 'bg-slate-900'}`} aria-live="polite" aria-relevant="additions text">
         {!started ? (
           <div className="flex flex-col items-center max-w-xl mx-auto py-4 animate-in">
-            <div className="w-20 h-20 bg-slate-800 rounded-3xl shadow-2xl flex items-center justify-center mb-5 border border-slate-700">
-              <div className="bg-gradient-to-br from-orange-500 to-orange-600 rounded-2xl w-14 h-14 flex items-center justify-center"><Bot className="text-white w-7 h-7" /></div>
-            </div>
+            <div className="mb-5"><BobFace size={112} /></div>
             <h2 className="text-2xl sm:text-3xl font-black text-white mb-2 text-center tracking-tight">Hi, we're glad you're here.</h2>
             <p className="text-slate-400 text-center mb-6 text-sm max-w-sm leading-relaxed">I'm BOB. Pick an option or just type what's going on — I'll get you an exact price and a real opening on our schedule.</p>
             <div className="w-full flex flex-col gap-3">
@@ -695,7 +702,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
                 <div key={i} className={`flex w-full ${model ? 'justify-start' : 'justify-end'} animate-in`}>
                   <div className={`flex max-w-[90%] sm:max-w-[80%] gap-2.5 ${model ? 'flex-row' : 'flex-row-reverse'}`}>
                     <div className="shrink-0 mt-auto mb-1">
-                      {model ? <div className="bg-orange-100 text-orange-600 p-2 rounded-full border border-orange-200"><Bot size={16} /></div> : <div className="bg-slate-700 text-slate-300 p-2 rounded-full border border-slate-600"><User size={16} /></div>}
+                      {model ? <BobFace size={32} /> : <div className="bg-slate-700 text-slate-300 p-2 rounded-full border border-slate-600"><User size={16} /></div>}
                     </div>
                     <div className="min-w-0">
                       <div className={`p-4 rounded-2xl text-sm sm:text-[15px] leading-relaxed whitespace-pre-wrap shadow-xs ${model ? 'bg-white text-slate-800 border border-slate-200/90 rounded-bl-xs' : 'bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-br-xs font-medium'}`}>
