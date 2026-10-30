@@ -357,6 +357,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
   });
 
   const newId = (prefix) => `${prefix}-${randomBytes(4).toString("hex").toUpperCase()}`;
+  const UNDO_DEPTH = 30, UNDO_TTL = 60 * 60 * 24;
 
   // ---- phone verification (LeadConnector text code) ---------------------------------
   async function sendCode(token, data) {
@@ -558,9 +559,30 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         const c = await store.config();
         const result = await chatTurn({ message: body.message, session: data, config: c, faqs: await store.get("faqs"), assistant: aiReady(c) ? assistant : null });
         await store.saveSession(token, result.session);
+        // Keep the state before this answer so the customer can go back and change it.
+        const { history: before = [], ...snapshot } = data;
+        const undo = [...((await store.kvGet(`undo:${token}`)) || []).slice(-(UNDO_DEPTH - 1)), { ...snapshot, historyLen: before.length }];
+        await store.kvSet(`undo:${token}`, undo, UNDO_TTL);
         const s = result.session;
         if (s.route !== data.route || s.package !== data.package || s.stage === "review" || s.safety) await store.releaseHolds(token);
-        return send(200, result);
+        return send(200, { ...result, canGoBack: true });
+      }
+      // Back: restore the state before the last chat answer. The server keeps those states, so a
+      // customer can change an answer but can't hand BOB a made-up conversation.
+      if (method === "POST" && pathname === "/api/chat/back") {
+        await rate(req, "chat-back", 60);
+        const { token, data } = await session(req);
+        if (data.bookingId || ["verify", "slots", "approval", "confirmed"].includes(data.stage) || data.contact?.phone) fail(409, "Your details are already in. Use “Edit details” to change them.");
+        if (data.stage === "emergency") fail(409, "For your safety, this conversation can't go back. Please follow the safety steps above.");
+        const undo = (await store.kvGet(`undo:${token}`)) || [];
+        const prev = undo.pop();
+        if (!prev) fail(409, "There's nothing to go back to.");
+        const { historyLen = 0, ...restored } = prev;
+        restored.history = (data.history || []).slice(0, historyLen);
+        await store.saveSession(token, restored);
+        await store.kvSet(`undo:${token}`, undo, UNDO_TTL);
+        await store.releaseHolds(token);
+        return send(200, { session: restored, canGoBack: undo.length > 0 });
       }
 
       // Address suggestions for the contact step. The Google key stays on the server.

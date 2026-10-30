@@ -20,6 +20,24 @@ body { margin: 0; background: #f1f5f9; color: #0f172a; font-family: var(--font-s
 
 :focus-visible { outline: 3px solid #fdba74; outline-offset: 2px; }
 
+/* The chat's message box: a light neon-blue outline, instruction text and send arrow that glow. */
+.neon-field {
+  border: 1.5px solid #7dd3fc;
+  box-shadow: 0 0 3px rgb(56 189 248 / 0.9), 0 0 12px rgb(56 189 248 / 0.5), 0 0 26px rgb(56 189 248 / 0.22), inset 0 0 10px rgb(56 189 248 / 0.16);
+  transition: box-shadow 200ms ease, border-color 200ms ease;
+}
+.neon-field:focus {
+  border-color: #bae6fd;
+  box-shadow: 0 0 4px rgb(125 211 252 / 1), 0 0 16px rgb(56 189 248 / 0.7), 0 0 36px rgb(56 189 248 / 0.35), inset 0 0 14px rgb(56 189 248 / 0.22);
+}
+/* A tight glow: browsers clip placeholder shadows to the text box, so a wide one shows its edges. */
+.neon-field::placeholder { color: #a5f3fc; opacity: 1; text-shadow: 0 0 3px rgb(56 189 248 / 0.85); }
+.neon-field:focus-visible { outline: none; }
+.neon-send { color: #a5f3fc; background: transparent; filter: drop-shadow(0 0 3px rgb(56 189 248 / 1)) drop-shadow(0 0 9px rgb(56 189 248 / 0.65)); transition: filter 200ms ease, color 200ms ease, opacity 200ms ease; }
+.neon-send:hover:not(:disabled) { color: #e0f7ff; filter: drop-shadow(0 0 4px rgb(125 211 252 / 1)) drop-shadow(0 0 14px rgb(56 189 248 / 0.85)); }
+/* Still glowing with nothing typed yet, just a touch softer. */
+.neon-send:disabled { opacity: 0.85; filter: drop-shadow(0 0 3px rgb(56 189 248 / 0.9)) drop-shadow(0 0 7px rgb(56 189 248 / 0.5)); }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; scroll-behavior: auto !important; }
 }
