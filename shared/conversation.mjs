@@ -21,7 +21,7 @@
 // facts below; every decision about price and booking happens here or on the server.
 
 import { DEFAULT_CONFIG, money, serviceQuote, halfAssessmentCents } from "./domain.mjs";
-import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant } from "./catalog.mjs";
+import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant, noDryerNeedsPremium } from "./catalog.mjs";
 import { restrictionScore, restrictionLevel } from "./airflow.mjs";
 
 export const initialSession = () => ({
@@ -650,6 +650,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       .replace(/\.$/, "")
       .split(/,\s*(?:(?:and|plus)\s+)?|\s+plus\s+/i)
       .filter((x) => x.trim().length > 2)
+      .filter((x) => !(s.property.hasDryer === "No" && /lint screen|dryer cavity|dryer drum/i.test(x)))
       .map((x) => x.trim().replace(/^./, (c) => c.toUpperCase()));
     return {
       family,
@@ -870,6 +871,11 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       const airflow = known ? { ...airflowEstimate(p), factors: airflowFactors(p) } : null;
       const eff = dryingEfficiency(p);
       const finding = eff ? `The last dryer on this vent was likely running at ${eff.percent} efficiency, so expect a heavier cleaning.` : "";
+      if (noDryerNeedsPremium(p)) {
+        // A badly restricted vent: the dryer-cleaning time in Premium goes into the vent instead.
+        const pick = "With no dryer installed and a vent this restricted, I recommend our **Premium 1-2-3 See-It-Clean**. The time we'd normally spend cleaning the dryer goes into clearing the vent line instead, so there's room for a heavier cleaning. **Express Vent Cleaning** is the shorter, vent-only visit.";
+        return specialOffer(["premium", "express"], "premium", finding ? `${finding} ${pick}` : pick, brief, ["Ask a question"], { airflow, summary: [finding, pick.split(". ").slice(0, 2).join(". ") + "."].filter(Boolean).join(" ") });
+      }
       const lead = "With no dryer installed, the visit is our **Express Vent Cleaning**: vent only, so there's no appliance to move or disconnect.";
       return specialOffer(["express"], "express", finding ? `${finding} ${lead}` : lead, brief, ["Ask a question"], { airflow, summary: [finding, lead].filter(Boolean).join(" ") });
     }
@@ -887,24 +893,29 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       s.package = null;
       return respond("That service isn't available online right now. You can choose another option or send the team a request.", ["Back to packages", "Request a callback"]);
     }
-    const options = ["Accept", s.intent === "cleaning" && TIERS.includes(q.package) ? "Compare Packages" : "Back to options", "Ask a question"];
+    // With no dryer, Ultimate's DryerFlex upgrade has nothing to connect to, so there's no tier comparison.
+    const options = ["Accept", s.intent === "cleaning" && TIERS.includes(q.package) && s.property.hasDryer !== "No" ? "Compare Packages" : "Back to options", "Ask a question"];
     const title = `**${q.name}${priced ? ` — ${money(q.priceCents)}` : ""}**`;
     if (brief) return respond(`Ready to continue with ${title}?`, options);
     const switched =
       s.package !== q.package
         ? q.package === "express"
           ? "Since no dryer is installed, this visit is our Express Vent Cleaning (vent only).\n\n"
-          : `Since a dryer is installed, this visit is our ${PACKAGES[q.package].short}.\n\n`
+          : s.property.hasDryer === "No"
+            ? `With no dryer installed, this visit is our ${PACKAGES[q.package].short}: the time normally spent on the dryer goes into the vent.\n\n`
+            : `Since a dryer is installed, this visit is our ${PACKAGES[q.package].short}.\n\n`
         : "";
     s.package = q.package;
     const [summary, ...fine] = q.lineItems[0].description.replace(/\s*—.*$/, "").split(/\.\s+/);
     const finePrint = fine.join(". ").replace(/\.?$/, ".");
+    const noDryer = s.property.hasDryer === "No" && q.package !== "express";
     const bullets = summary
       .replace(/\.$/, "")
       .split(/,\s*(?:(?:and|plus)\s+)?|\s+plus\s+/i)
       .filter((x) => x.trim().length > 2)
+      .filter((x) => !(noDryer && /lint screen|dryer cavity|dryer drum/i.test(x))) // nothing to clean without a dryer
       .map((x) => "• " + x.trim().replace(/^./, (c) => c.toUpperCase()))
-      .join("\n") + (fine.length ? `\n\n${finePrint}` : "");
+      .join("\n") + (noDryer ? "\n\nWith no dryer installed, the time for the lint screen and dryer cavity goes into the vent line." : "") + (fine.length ? `\n\n${finePrint}` : "");
     const extras = q.lineItems.slice(1);
     const covers = extras.filter((l) => SETUP_KEY[l.name]).map((l) => `• **${l.name}:** ${SETUP_WHY[SETUP_KEY[l.name]].replace(/^./, (c) => c.toUpperCase())}.`);
     const total = priced

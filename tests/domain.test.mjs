@@ -136,4 +136,41 @@ test('the recommendation opens on the airflow estimate, then BOB\'s pick, then t
 test('a bird or pest repair goes to nest removal',()=>{const r=chat('Bird / Pest Infestation',chat('Repair / Reroute / Assessment').session);assert.equal(r.session.intent,'nest');assert.equal(r.session.property.animals,'Yes');});
 test('the service question asks about the last 90 days, and nothing is suggested before the last answer',()=>{let r=run(['85326','Have Dryer Installed'],cleaning());assert.match(r.reply,/Has your dryer been purchased or serviced in the last 90 days\?$/);const none=run(['85326','No Dryer Present (Duct Only)'],cleaning());assert.doesNotMatch(none.reply,/Express|\$/);});
 test('visit length: shorter with no dryer to move, longer for a restricted or severe vent',()=>{const len=(pkg,has,sym)=>serviceQuote('cleaning',config,{package:pkg,property:{stories:'1-story',hasDryer:has,symptoms:sym}}).durationMins;assert.ok(len('express','No',['normal'])<len('ultimate','Yes',['normal']));assert.equal(len('express','No',['two'])-len('express','No',['normal']),15);assert.equal(len('premium','Yes',['three'])-len('premium','Yes',['normal']),30);assert.equal(serviceQuote('cleaning',config,{package:'nest',property:{symptoms:['three']}}).durationMins,90,'nest removal keeps its own time');});
-test('no dryer: the offer opens on the airflow estimate from the last dryer\'s performance',()=>{const r=run(['85326','No Dryer Present (Duct Only)','1-Story Home','Takes 3 or more cycles','No signs'],cleaning());assert.equal(r.card.airflow.level,'severe');assert.ok(r.card.airflow.factors.includes('No dryer connected now'));assert.equal(r.card.picks[0].family,'express');assert.equal(r.card.picks[0].minutes,75);});
+test('no dryer: the offer opens on the airflow estimate from the last dryer\'s performance',()=>{const r=run(['85326','No Dryer Present (Duct Only)','1-Story Home','Takes 3 or more cycles','No signs'],cleaning());assert.equal(r.card.airflow.level,'severe');assert.ok(r.card.airflow.factors.includes('No dryer connected now'));assert.deepEqual(r.card.picks.map((p)=>[p.family,p.minutes]),[['premium',60],['express',75]],'Premium keeps its usual time; Express gets the extra difficulty time');});
+
+// ---- no dryer + a badly restricted vent -------------------------------------------------
+const NO_DRYER = ['Dryer Vent Cleaning', '85326', 'No Dryer Present (Duct Only)', '1-Story Home'];
+const sayAll = (msgs) => msgs.reduce((r, m) => turn(m, r ? r.session : initialSession(), config, INITIAL_FAQS), null);
+test('no dryer and a clear vent is still Express', () => {
+  const r = sayAll([...NO_DRYER, 'Dries in one normal cycle', 'No signs']);
+  assert.deepEqual(r.card.picks.map((p) => p.family), ['express']);
+  assert.equal(r.session.suggested, 'express');
+});
+test('no dryer and an estimated restriction of 50% or more recommends Premium 1-2-3, with Express as the shorter option', () => {
+  for (const cycles of ['Takes about 2 cycles', 'Takes 3 or more cycles', "It's showing an airflow error code"]) {
+    const r = sayAll([...NO_DRYER, cycles, 'No signs']);
+    assert.ok(r.card.airflow.score >= 50, cycles);
+    assert.deepEqual(r.card.picks.map((p) => [p.family, p.recommended]), [['premium', true], ['express', false]], cycles);
+    assert.match(r.reply, /time we'd normally spend cleaning the dryer goes into clearing the vent line/);
+  }
+});
+test('no dryer Premium keeps its usual time (the dryer-cleaning time covers the vent) and has no dryer fees', () => {
+  const p = { hasDryer: 'No', stories: '1-story', symptoms: ['three'], power: 'Gas', mount: 'Stacked' };
+  const q = serviceQuote('cleaning', config, { package: 'premium', property: p });
+  assert.equal(q.package, 'premium');
+  assert.equal(q.difficultyMins, 0);
+  assert.equal(q.durationMins, 60);
+  assert.deepEqual(q.lineItems.map((l) => l.id), ['premium-1'], 'no gas or setup fee without a dryer');
+  assert.equal(serviceQuote('cleaning', config, { package: 'ultimate', property: p }).package, 'premium', "Ultimate's DryerFlex upgrade needs a dryer");
+  assert.equal(serviceQuote('cleaning', config, { package: 'premium', property: { ...p, symptoms: ['normal'] } }).package, 'express');
+  const express = serviceQuote('cleaning', config, { package: 'express', property: p });
+  assert.equal(express.package, 'express', 'the customer can still choose Express');
+  assert.equal(express.difficultyMins, 30);
+});
+test('the no-dryer Premium details leave out the dryer parts and offer no tier comparison', () => {
+  const r = sayAll([...NO_DRYER, 'Takes about 2 cycles', 'No signs', 'Premium 1-2-3 · $179']);
+  assert.equal(r.session.stage, 'details');
+  assert.doesNotMatch(r.reply, /Lint screen and dryer cavity cleaning/);
+  assert.match(r.reply, /time for the lint screen and dryer cavity goes into the vent line/);
+  assert.ok(!r.options.includes('Compare Packages'));
+});

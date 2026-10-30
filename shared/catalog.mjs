@@ -2,6 +2,8 @@
 // Names match the Jobber Products & Services list exactly so booked line items line up.
 // Prices and minutes are editable in BOB's admin; these are the starting values.
 
+import { restrictionScore } from "./airflow.mjs";
+
 // Package wording follows the website's pricing cards (dryerventsquadaz.com, Oct 30 2026).
 const PREMIUM = "Live camera inspection before cleaning, lint screen and dryer cavity cleaning, full-path rotary brush cleaning from the appliance to the termination, sealed HEPA-filter vacuum system with no blow-back into the home, post-clean camera verification";
 const ULTIMATE = "Everything in Premium 1-2-3 See-It-Clean, plus exterior termination cleanout for maximum airflow, DryerFlex transition upgrade with professional installation, before-and-after photo documentation, 3-year warranty on parts and labor, complimentary 4-pack of reusable wool dryer balls. Complete clogs and nest removals are excluded from the package but receive $50 off if removal is needed";
@@ -67,12 +69,23 @@ export function homeVariant(property = {}) {
   return { variant: "2-story", certain: false };
 }
 
-/** No dryer installed turns a See-It-Clean or Post-Service visit into Express (vent only). */
+/**
+ * No dryer installed and an estimated airflow restriction of 50% or more: the Premium visit, not
+ * Express. The time normally spent cleaning the dryer goes into the clogged vent instead.
+ */
+export const NO_DRYER_PREMIUM_AT = 50;
+export const noDryerNeedsPremium = (property = {}) =>
+  property.hasDryer === "No" && Array.isArray(property.symptoms) && property.symptoms.length > 0 && restrictionScore(property) >= NO_DRYER_PREMIUM_AT;
+
+/** No dryer installed turns a See-It-Clean or Post-Service visit into Express (vent only), unless the vent is badly restricted. */
 export function effectiveFamily(pkg, property = {}) {
   const legacy = { essential: "premium", performance: "premium", total: "ultimate" }; // bookings and links from before Oct 30
   const named = legacy[pkg] || pkg;
   const family = PACKAGES[named] ? named : "premium";
-  if (property.hasDryer === "No" && ["premium", "ultimate", "postservice"].includes(family)) return "express";
+  if (property.hasDryer === "No" && ["premium", "ultimate", "postservice"].includes(family)) {
+    // Ultimate's DryerFlex upgrade needs a dryer, so a badly restricted vent with no dryer is Premium.
+    return family !== "postservice" && noDryerNeedsPremium(property) ? "premium" : "express";
+  }
   // Express is vent-only; with a dryer installed the visit is the Premium package.
   if (property.hasDryer === "Yes" && family === "express") return "premium";
   return family;
@@ -105,10 +118,11 @@ export function addOnLines(services, { family, route, property = {}, addOns = {}
   // Add-ons belong to cleaning visits (a cleaning + assessment visit gets them through its cleaning
   // package). An assessment by itself is quoted without extras.
   if (route !== "cleaning") return lines;
-  // The dryer is disconnected for every cleaning except vent-only Express.
-  if (property.power === "Gas" && !APPLIANCE_FREE.has(family)) add("gas");
-  if (property.mount === "Pedestal" && SETUP_FAMILIES.has(family)) add("pedestal");
-  if (property.mount === "Stacked" && SETUP_FAMILIES.has(family)) add("stacked");
+  // The dryer is disconnected for every cleaning except vent-only Express (and there's none to move without one).
+  const appliance = property.hasDryer !== "No";
+  if (appliance && property.power === "Gas" && !APPLIANCE_FREE.has(family)) add("gas");
+  if (appliance && property.mount === "Pedestal" && SETUP_FAMILIES.has(family)) add("pedestal");
+  if (appliance && property.mount === "Stacked" && SETUP_FAMILIES.has(family)) add("stacked");
   if (addOns.fogging && family !== "restoration") add("fogging"); // Restoration already includes fogging
   if (addOns.toolRetrieval) add("tool");
   return lines;
