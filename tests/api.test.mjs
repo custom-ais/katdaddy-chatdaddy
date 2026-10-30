@@ -90,7 +90,7 @@ test("complete cleaning workflow returns a genuine booking", async (t) => {
   const r = await h.confirm(token, held.data.hold);
   assert.equal(r.status, 201, JSON.stringify(r.data));
   assert.match(r.data.receipt.id, /^DVS-/);
-  assert.equal(r.data.receipt.priceCents, 18900);
+  assert.equal(r.data.receipt.priceCents, 17900);
   const appts = await h.store.appointments();
   assert.equal(appts.length, 1);
   assert.equal(appts[0].airflowReadings, undefined);
@@ -101,12 +101,13 @@ test("complete standalone assessment workflow uses $119", async (t) => {
   assert.equal(r.data.receipt.priceCents, 11900);
   assert.equal(r.data.receipt.durationMins, 60);
 });
-test("complete combined workflow uses $248 and full duration", async (t) => {
+test("complete combined workflow is the cleaning package plus the assessment at 50% off, for both services' time", async (t) => {
   const h = await harness(t);
   const r = await h.book("bundle");
   assert.equal(r.status, 201);
-  assert.equal(r.data.receipt.priceCents, 24800);
-  assert.equal(r.data.receipt.durationMins, 150);
+  assert.equal(r.data.receipt.priceCents, 17900 + 5950);
+  assert.equal(r.data.receipt.durationMins, 60 + 60);
+  assert.deepEqual(h.jobber.jobs[0].lineItems.map((i) => [i.name, i.cents]), [["Premium 1-2-3 See-It-Clean", 17900], ["Comprehensive Repair Assessment (50% off with cleaning)", 5950]]);
   assert.equal((await h.store.appointments())[0].assessmentAccepted, true);
 });
 test("customer cannot alter price, technician, or route in booking payload", async (t) => {
@@ -114,7 +115,7 @@ test("customer cannot alter price, technician, or route in booking payload", asy
   const token = await h.prepare("bundle");
   const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
   const r = await h.confirm(token, held.data.hold, { priceCents: 0, price: 0, route: "free", technicianId: "fake" });
-  assert.equal(r.data.receipt.priceCents, 24800);
+  assert.equal(r.data.receipt.priceCents, 23850);
   const [a] = await h.store.appointments();
   assert.equal(a.technicianId, "tech-ryan");
   assert.equal(a.route, "bundle");
@@ -270,7 +271,7 @@ test("admin office booking uses the same schedule checks", async (t) => {
   const cookie = await h.login();
   const r = await h.call("/api/admin/appointments", { method: "POST", cookie, body: { ...contact, route: "bundle", scheduledAt: "2026-09-22T16:00:00Z" } });
   assert.equal(r.status, 201, JSON.stringify(r.data));
-  assert.equal(r.data.appointment.price, 248);
+  assert.equal(r.data.appointment.price, 238.5, "Premium 1-2-3 by default, plus the assessment at 50% off");
   assert.equal(r.data.appointment.jobber.jobNumber, 101, "office booking lands in Jobber");
   assert.equal((await h.call("/api/admin/appointments", { method: "POST", cookie, body: { ...contact, route: "cleaning", scheduledAt: "2026-09-22T18:00:00Z" } })).status, 409);
 });
@@ -366,11 +367,11 @@ test("a booking becomes a Jobber client, property, job and scheduled visit", asy
   const r = await h.book("cleaning", { ...contact, email: "test@example.com" });
   assert.equal(r.status, 201);
   const [job] = h.jobber.jobs;
-  assert.equal(job.title, "Essential See-It-Clean");
-  assert.deepEqual(job.lineItems.map((i) => [i.name, i.cents]), [["Essential See-It-Clean", 18900]]);
+  assert.equal(job.title, "Premium 1-2-3 See-It-Clean");
+  assert.deepEqual(job.lineItems.map((i) => [i.name, i.cents]), [["Premium 1-2-3 See-It-Clean", 17900]]);
   assert.equal(job.jobberUserId, "J-RYAN");
   assert.equal(new Date(job.start).toISOString(), r.data.receipt.scheduledAt);
-  assert.equal(job.end - job.start, 60 * 60_000, "Essential 1-story is 60 minutes in the catalog");
+  assert.equal(job.end - job.start, 60 * 60_000, "Premium 1-2-3 1-story is 60 minutes in the catalog");
   assert.match(job.instructions, /Phone verified by text code/);
   assert.match(job.instructions, /Booked by BOB/);
   assert.deepEqual(h.jobber.clients[0].address, { street1: "100 W Test St", city: "Buckeye", zip: "85326" });
@@ -447,18 +448,18 @@ test("disconnected Jobber turns online confirmation off instead of guessing", as
 test("package, 2-story upstairs home, gas dryer and fogging flow through to the receipt and Jobber", async (t) => {
   const h = await harness(t);
   const token = await h.fresh();
-  for (const m of ["Dryer Vent Cleaning", "85326", "Have Dryer", "No", "2-Story", "2nd Floor", "Gas", "Standard", "Takes about 2 cycles", "No signs", "Performance · $269", "Accept & Continue"]) await h.chat(token, m);
+  for (const m of ["Dryer Vent Cleaning", "85326", "Have Dryer", "No", "2-Story", "2nd Floor", "Gas", "Standard", "Takes about 2 cycles", "No signs", "Premium 1-2-3 · $199", "Accept & Continue"]) await h.chat(token, m);
   const r = await h.contactAndVerify(token, { ...contact, addOns: { fogging: true } });
-  assert.equal(r.data.quote.totalCents, 26900 + 4900 + 7900);
-  assert.equal(r.data.quote.durationMins, 105 + 15 + 15);
+  assert.equal(r.data.quote.totalCents, 19900 + 4900 + 7900);
+  assert.equal(r.data.quote.durationMins, 75 + 15 + 15 + 15, "package + gas + fogging + 15 min difficulty for 2-cycle drying");
   const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
   const done = await h.confirm(token, held.data.hold);
   assert.equal(done.status, 201, JSON.stringify(done.data));
-  assert.equal(done.data.receipt.priceCents, 39700);
+  assert.equal(done.data.receipt.priceCents, 32700);
   assert.deepEqual(h.jobber.jobs[0].lineItems.map((l) => l.name), [
-    "Performance See-It-Clean (2 Story, Upstairs)", "Gas Appliance Safety Procedure", "Sanitation Fogging Add-On",
+    "Premium 1-2-3 See-It-Clean (2 Story, Upstairs)", "Gas Appliance Safety Procedure", "Sanitation Fogging Add-On",
   ]);
-  assert.equal(h.jobber.jobs[0].end - h.jobber.jobs[0].start, 135 * 60_000);
+  assert.equal(h.jobber.jobs[0].end - h.jobber.jobs[0].start, 120 * 60_000, "the Jobber visit includes the difficulty time");
 });
 
 test("emergency clog relief is offered inside normal notice, but books only after a named approval", async (t) => {
@@ -539,8 +540,8 @@ test("travel fee tier is added to the quote, receipt and Jobber line items", asy
   });
   const r = await h.book();
   assert.equal(r.data.receipt.travelFeeCents, 2500);
-  assert.equal(r.data.receipt.priceCents, 21400);
-  assert.deepEqual(h.jobber.jobs[0].lineItems.map((i) => i.cents), [18900, 2500]);
+  assert.equal(r.data.receipt.priceCents, 20400);
+  assert.deepEqual(h.jobber.jobs[0].lineItems.map((i) => i.cents), [17900, 2500]);
 });
 
 // ---- LeadConnector confirmations ---------------------------------------------------

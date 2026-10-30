@@ -1,6 +1,12 @@
-import {SERVICE_CATALOG,effectiveFamily,lineForService,addOnLines} from './catalog.mjs';
+import {SERVICE_CATALOG,RETIRED_FAMILIES,effectiveFamily,lineForService,addOnLines} from './catalog.mjs';
+import {difficultyMinutes} from './airflow.mjs';
+// Cleaning packages get extra time when the answers point to a restricted or severe vent.
+const DIFFICULTY_FAMILIES=new Set(['premium','ultimate','express','postservice']);
 export const TIME_ZONE = 'America/Phoenix';
+// Before Oct 30 2026 cleaning + assessment was a fixed $248. Now the assessment is 50% off when added to a cleaning.
 export const BUNDLE_PRICE_CENTS = 24800;
+export const ASSESSMENT_WITH_CLEANING_DISCOUNT = 0.5;
+export const halfAssessmentCents = (config) => Math.round((config.assessmentPriceCents ?? 11900) * (1 - ASSESSMENT_WITH_CLEANING_DISCOUNT));
 export const DEFAULT_CONFIG = {
   version: 1,
   businessName: 'Dryer Vent Squad West Valley',
@@ -44,7 +50,7 @@ export const DEFAULT_CONFIG = {
   overflow: { enabled: false, start: '17:00', maxDurationMins: 90, minTicketCents: 22000, requireNearby: true },
   // Daily revenue target per technician, shown on the dashboard only.
   dailyRevenueTargetCents: 75000,
-  cleaningPriceCents: 18900,
+  cleaningPriceCents: 17900,
   assessmentPriceCents: 11900,
   bundlePriceCents: BUNDLE_PRICE_CENTS,
   cleaningMinutes: 90, assessmentMinutes: 60, bundleMinutes: 150,
@@ -57,6 +63,8 @@ export const DEFAULT_CONFIG = {
   preparation: 'Please make the laundry area accessible and secure pets before the visit. Do not move or disconnect the dryer yourself. Let the team know about access restrictions.',
   cleaningProcess: 'Every See-It-Clean visit is a full vent cleaning with a live camera inspection during service, and we verify airflow before and after so you can see the difference.',
   assessmentProcess: 'We evaluate the vent issue, document our findings, and explain the recommended repair options so the work can be quoted appropriately.',
+  // Rules manual: the $119 assessment is credited 100% toward the repair when the customer hires DVS for it.
+  assessmentCredited: true,
 };
 export const INITIAL_TECHNICIANS = [
   {id:'tech-ryan',name:'Ryan Boucher',phone:'',status:'available',color:'#f97316',zone:'West Valley',jobberUserId:''},
@@ -83,12 +91,14 @@ export function serviceQuote(route,config=DEFAULT_CONFIG,ctx={}) {
  const services=config.services||SERVICE_CATALOG,property=ctx.property||{};
  let base,family;
  if(route==='assessment'){family='assessment';base={id:'assessment',name:'Dryer-vent assessment',description:'Evaluation of the vent issue with documented findings. Repairs are quoted separately.',cents:config.assessmentPriceCents,mins:config.assessmentMinutes,certain:true};}
- else if(route==='bundle'){family='bundle';base={id:'bundle',name:'Cleaning + assessment',description:'Essential See-It-Clean plus an assessment at 50% off. Repairs and parts are quoted separately.',cents:BUNDLE_PRICE_CENTS,mins:config.bundleMinutes,certain:true};}
+ else if(route==='bundle'){family=effectiveFamily(ctx.package||'premium',property);base=lineForService(services,family,property);}
  else if(route==='cleaning'){family=effectiveFamily(ctx.package||'essential',property);base=lineForService(services,family,property);}
  else throw new Error('Choose cleaning, assessment, or cleaning + assessment.');
  if(!base)throw new Error('That service is not available right now.');
- const lines=[base,...addOnLines(services,{family,route,property,addOns:ctx.addOns||{}})];
- return {route,package:family,serviceId:base.id,name:base.name,priceCents:lines.reduce((n,l)=>n+l.cents,0),durationMins:lines.reduce((n,l)=>n+l.mins,0),
+ const lines=[base,...addOnLines(services,{family,route:route==='bundle'?'cleaning':route,property,addOns:ctx.addOns||{}})];
+ if(route==='bundle')lines.push({id:'assessment-with-cleaning',name:'Comprehensive Repair Assessment (50% off with cleaning)',description:'Evaluation of the vent issue with documented findings, at half price with a cleaning. Repairs are quoted separately.',cents:halfAssessmentCents(config),mins:config.assessmentMinutes,certain:true});
+ const difficultyMins=(route==='cleaning'||route==='bundle')&&DIFFICULTY_FAMILIES.has(family)?difficultyMinutes(property):0;
+ return {route,package:family,serviceId:base.id,name:route==='bundle'?`${base.name} + assessment`:base.name,priceCents:lines.reduce((n,l)=>n+l.cents,0),durationMins:lines.reduce((n,l)=>n+l.mins,0)+difficultyMins,difficultyMins,
   lineItems:lines.map(({id,name,description,cents,mins})=>({id,name,description,cents,mins})),
   priceNote:base.certain?'':'Priced for a 2-story home with first-floor laundry. Your technician lowers it on site if your home is smaller.',
   version:config.version,repairsIncluded:false};
@@ -106,7 +116,12 @@ export function bookingQuote(route,config=DEFAULT_CONFIG,ctx={}) {
  const lineItems=fee?[...q.lineItems,{id:'travel-fee',name:'Travel fee',description:'Based on drive time to your address.',cents:fee,mins:0}]:q.lineItems;
  return {...q,lineItems,travelFeeCents:fee,totalCents:q.priceCents+fee};
 }
-export const withConfigDefaults = saved => ({...DEFAULT_CONFIG,...(saved||{})});
+// Saved settings win, but catalog items added in a later release (like new add-ons) are filled in.
+export const withConfigDefaults = saved => {
+ const c={...DEFAULT_CONFIG,...(saved||{})};
+ if(Array.isArray(saved?.services)){const ids=new Set(saved.services.map(x=>x.id));c.services=[...saved.services.map(x=>RETIRED_FAMILIES.has(x.family)?{...x,active:false}:x),...SERVICE_CATALOG.filter(x=>!ids.has(x.id))];}
+ return c;
+};
 export function isBookable(config) {
  return !!(config.bookingEnabled && config.scheduleAcknowledged && config.pricesAcknowledged && config.serviceZips.length && config.activeTechnicianIds.length);
 }
@@ -132,8 +147,6 @@ export function validateConfig(c) {
  for(const [key,min,max] of [['cleaningPriceCents',0,1000000],['assessmentPriceCents',0,1000000],['cleaningMinutes',30,480],['assessmentMinutes',30,480],['bundleMinutes',30,600],['bufferMinutes',0,180],['maxJobsPerDay',1,30],['leadHours',0,168],['horizonDays',1,180]]) {
   if(!Number.isInteger(c[key])||c[key]<min||c[key]>max)errors.push(`Invalid ${key}.`);
  }
- if(c.bundlePriceCents!==BUNDLE_PRICE_CENTS)errors.push('The approved cleaning + assessment total is $248.');
- if(c.bundleMinutes<Math.max(c.cleaningMinutes,c.assessmentMinutes))errors.push('The combined visit cannot be shorter than either service.');
  for(const key of ['weekdayStarts','saturdayStarts'])if(!Array.isArray(c[key])||c[key].length>12||c[key].some(t=>!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)))errors.push(`Invalid ${key}.`);
  for(const key of ['weekdayClose','saturdayClose'])if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(c[key]||''))errors.push(`Invalid ${key}.`);
  if(!Array.isArray(c.serviceZips)||c.serviceZips.length>1000||c.serviceZips.some(z=>!/^\d{5}$/.test(z)))errors.push('Coverage must contain five-digit ZIP codes.');

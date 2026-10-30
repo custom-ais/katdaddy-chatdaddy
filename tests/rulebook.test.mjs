@@ -167,13 +167,14 @@ test("5 PM overflow: short, nearby, high enough ticket — and it needs approval
     config: { overflow: { enabled: true, start: "17:00", maxDurationMins: 90, minTicketCents: 22000, requireNearby: true }, approver: { name: "Ryan", phone: "", email: "" } },
   });
   h.jobber.visits.push({ id: "V-pm", start: Date.parse("2026-09-23T22:00:00Z"), end: Date.parse("2026-09-23T23:30:00Z"), allDay: false, jobberUserIds: [], address: "200 Near Rd, Buckeye, AZ 85326" });
-  // Essential 1-story is $189: under the $220 ticket rule, so no 5 PM.
+  // Premium 1-2-3 1-story is $179: under the $220 ticket rule, so no 5 PM.
   const cheap = await h.prepare();
   assert.ok(![...(await h.slots(cheap, "?date=2026-09-23")), ...(await h.slots(cheap, "?date=2026-09-23&cursor=3"))].some((s) => s.overflow));
-  // Performance 1-story with a gas dryer: $249 + $49, 105 minutes → too long.
-  // Bundle ($248, 150 min) → too long. Express 2-story is too cheap. Use Performance electric: $249, 90 min.
+  // Ultimate 1-story is 120 minutes and the cleaning + assessment visit is 120 minutes → too long.
+  // Use Premium 1-2-3 1-story with a gas dryer and normal drying: $179 + $49 = $228, 75 minutes
+  // (2-cycle drying would add 15 minutes of difficulty time).
   const token = await h.fresh();
-  for (const m of ["Dryer Vent Cleaning", "85326", "Have Dryer", "No", "1-Story", "Electric", "Standard", "Takes about 2 cycles", "No signs", "Performance · $249", "Accept & Continue"]) await h.chat(token, m);
+  for (const m of ["Dryer Vent Cleaning", "85326", "Have Dryer", "No", "1-Story", "Gas", "Standard", "Dries in one normal cycle", "No signs", "Premium 1-2-3 · $228", "Accept & Continue"]) await h.chat(token, m);
   await h.contactAndVerify(token);
   const day = [...(await h.slots(token, "?date=2026-09-23")), ...(await h.slots(token, "?date=2026-09-23&cursor=3"))];
   const pm = day.find((s) => s.overflow);

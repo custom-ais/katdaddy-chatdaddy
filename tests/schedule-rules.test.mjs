@@ -108,9 +108,9 @@ test("travel fee tiers by drive time; empty tiers = no fee; beyond last tier = o
   assert.equal(travelFeeFor(50, cfg), null);
   assert.equal(travelFeeFor(50, config), 0);
   assert.equal(travelFeeFor(null, cfg), 0);
-  const q = bookingQuote("bundle", cfg, { travelFeeCents: 2500 });
-  assert.equal(q.priceCents, 24800);
-  assert.equal(q.totalCents, 27300);
+  const q = bookingQuote("bundle", cfg, { package: "premium", property: { stories: "1-story", hasDryer: "Yes" }, travelFeeCents: 2500 });
+  assert.equal(q.priceCents, 17900 + 5950);
+  assert.equal(q.totalCents, 17900 + 5950 + 2500);
 });
 
 test("settings validation covers the new geo rules", () => {

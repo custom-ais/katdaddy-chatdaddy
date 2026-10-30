@@ -13,16 +13,16 @@ const f = (id, category, subcategory, question, answer, keywords, status = "appr
 
 export const INITIAL_FAQS = [
   f("faq-1", "Pricing", "Cost", "How much does it cost to get my dryer vent cleaned?",
-    "Our See-It-Clean packages start at $189 for Essential, $249 for Performance (adds before-and-after photos and a DryerFlex transition hose upgrade), and $349 for Total System. Vent-only Express cleaning, for when no dryer is installed, starts at $149. Your exact price depends on whether your home is 1-story or 2-story and which floor the laundry is on. Gas dryers add the $49 Gas Appliance Safety Procedure.",
+    "Premium 1-2-3 See-It-Clean is $179 for a 1-story home, $219 for a 2-story with first-floor laundry, and $199 with second-floor laundry. Ultimate Protection is $299, $339, and $319. A Dryer Vent Safety Inspection is $119, $139, and $129, and the fee applies toward approved repairs. Vent-only Express cleaning, for when no dryer is installed, starts at $149. Gas dryers add the $49 Gas Appliance Safety Procedure, a fixed pedestal adds $20, and a stacked washer and dryer adds $45.",
     ["cost", "price", "pricing", "how much", "rate", "quote", "estimate", "fee"]),
   f("faq-2", "Service", "Process", "What is the cleaning process?",
-    "Every See-It-Clean visit is a full vent cleaning with a live camera inspection during service, and airflow is checked before and after so you can see the difference. Essential also cleans the lint screen, lint cavity, dryer drum, and the area around the dryer. Performance adds before-and-after photos and a DryerFlex transition hose upgrade. Total System adds termination cleanout and correction of significant airflow restriction.",
+    "Premium 1-2-3 See-It-Clean starts with a live camera inspection, cleans the lint screen and dryer cavity, runs a rotary brush along the full path from the appliance to the exterior termination with a sealed HEPA-filter vacuum (no blow-back into your home), and finishes with a post-clean camera check so you can see the result. Ultimate Protection adds exterior termination cleanout, a DryerFlex transition upgrade, before-and-after photos, a 3-year parts and labor warranty, and a 4-pack of wool dryer balls.",
     ["process", "how do you clean", "steps", "procedure", "method", "what is included", "inspection"]),
   f("faq-3", "Service", "Access", "Do you need to get on the roof?",
-    "If your vent exits through the roof, let us know when you book, or choose “Not sure.” Total System includes termination cleanout and roof access when needed, and your technician confirms what your vent needs on site. Please don't climb onto the roof to check.",
+    "If your vent exits through the roof, let us know when you book, or choose “Not sure.” Ultimate Protection includes exterior termination cleanout, and your technician confirms what your vent needs on site. Please don't climb onto the roof to check.",
     ["roof", "ladder", "access roof", "rooftop", "termination", "roof vent"]),
   f("faq-4", "Service", "Time", "How long does it take to clean my dryer vent?",
-    "Essential takes about 60–90 minutes, Performance about 90–105 minutes, and Total System about 120–135 minutes, depending on your home. Express vent-only visits take about 45–60 minutes. Gas dryers add about 15 minutes for the safety procedure.",
+    "Premium 1-2-3 takes about 60–90 minutes and Ultimate Protection about 120–135 minutes, depending on your home. Express vent-only visits take about 45–60 minutes. Gas, pedestal, and stacked setups add a little time, and a heavily restricted vent can take longer.",
     ["how long", "duration", "minutes", "hours long", "take to clean"]),
   f("faq-5", "Installation", "Location", "Where does my dryer vent exit the house?",
     "Dryer vents usually exit through an outside wall with a louvered or flapper cap, or up through the attic to a vent on the roof. Your technician locates the exact exit point during the visit and checks that air is flowing out.",
@@ -35,10 +35,10 @@ export const INITIAL_FAQS = [
     ["where do you clean from", "inside or outside", "entry point"], "draft",
     "Describes a method and roof access for every visit; confirm it matches how your techs work."),
   f("faq-8", "Service", "Scope", "Do you clean the inside of the dryer too?",
-    "Yes. Essential, Performance, and Total System include cleaning the lint screen, the lint cavity, the dryer drum, and the area around the dryer, along with the full vent. Express (no dryer installed) and Post-Service visits don't include the lint screen, cavity, or drum.",
+    "Yes. Premium 1-2-3 and Ultimate Protection include cleaning the lint screen and the dryer cavity, along with the full vent from the appliance to the termination. Express (no dryer installed) and Post-Service visits don't include the lint screen or cavity.",
     ["inside dryer", "lint trap cavity", "drum", "lint screen", "chute", "lint trap"]),
   f("faq-9", "Service", "Scope", "Do you clean the transition hose?",
-    "We inspect the transition hose behind the dryer during every visit. Performance and Total System include an upgrade to a DryerFlex transition hose. Thin foil and vinyl hoses crush easily and aren't recommended.",
+    "We inspect the transition hose behind the dryer during every visit. Ultimate Protection includes a DryerFlex transition upgrade with professional installation. Thin foil and vinyl hoses crush easily and aren't recommended.",
     ["transition hose", "flexible hose", "pipe behind dryer", "silver hose", "foil hose"]),
   f("faq-10", "Service", "Access", "Do you move the dryer?",
     "Yes. Your technician pulls the dryer out to reach the vent, including stacked and pedestal setups. Please don't move or disconnect the dryer yourself. Gas dryers include the $49 Gas Appliance Safety Procedure for the safe disconnect and reconnect.",
@@ -81,15 +81,15 @@ export const INITIAL_FAQS = [
     "Yes. Nest Removal Plus Cleaning ($389) removes the nest and cleans the full vent, with before-and-after photos and airflow verification. Full System Restoration ($599) adds sanitation fogging, a DryerFlex hose upgrade, and a full system reset.",
     ["birds", "chirping", "scratching", "nest", "bird nest", "pest", "animal in vent"]),
   f("faq-23", "Service", "Camera Inspection", "Do you show me a camera inspection or photos?",
-    "Yes. Every See-It-Clean visit includes a live camera inspection during service, so you can see inside the vent. Performance and Total System also include before-and-after photos for your records.",
+    "Yes. Every See-It-Clean visit includes a live camera inspection before cleaning and a camera check after, so you can see inside the vent. Ultimate Protection also includes before-and-after photo documentation for your records, and the Dryer Vent Safety Inspection comes with a marked-up photo report.",
     ["camera inspection", "video inspection", "before and after", "photos", "proof", "see inside"]),
   f("faq-24", "Maintenance", "Frequency", "How often should I have my dryer vent cleaned?",
     "Most manufacturers and fire-safety groups recommend having the dryer vent cleaned at least once a year. Busy households, pets, and long or roof-vented runs may need it more often.",
     ["how often", "frequency", "annual", "every year", "when to clean"]),
-  f("faq-25", "Discounts", "Group Discount", "Do you offer discounts for seniors, military, or neighbors booking together?",
-    "Yes! We offer $20 off for active military, veterans, first responders, and seniors (65+). We also provide neighbor/HOA bundle discounts when two or more homes on the same street schedule service on the same day.",
-    ["discount", "senior discount", "military discount", "neighbor discount", "group rate"], "draft",
-    "Discounts aren't in the approved price list; approve the amounts and who qualifies first."),
+  // Rules manual: $20 off for seniors (65+) and military/first responders, mentioned only when the customer asks.
+  f("faq-25", "Discounts", "Senior & Military Discount", "Do you offer any discounts?",
+    "Yes. Seniors (65+) and military or first responders get $20 off. Let the team know when you book and they'll apply it.",
+    ["discount", "discounts", "senior discount", "military discount", "first responder", "special offer", "coupon", "deal"]),
   f("faq-26", "Documentation", "Inspection Proof", "Do you provide proof of cleaning for home inspections or insurance?",
     "Yes! We provide official digital certificates of inspection and cleaning complete with airflow CFM measurements before/after and camera photos. This documentation satisfies buyer home inspection repair requests, landlords, and insurance requirements.",
     ["home inspection", "realtor", "insurance proof", "receipt", "certificate", "documentation"], "draft",
@@ -105,10 +105,57 @@ export const INITIAL_FAQS = [
   f("faq-repair", "Service", "Repairs", "Do you repair dryer vents?",
     "Yes. For a repair concern, we start with an assessment to evaluate the issue and recommend options. Repair work is quoted separately.",
     ["do you repair", "do repairs", "rerouting", "repair vents"]),
-  f("faq-bundle", "Pricing", "Cleaning + assessment", "Does the $248 include repairs?",
-    "The $248 covers cleaning and assessment; the assessment is 50% off with cleaning. Repairs, parts, and replacement work are quoted separately for your approval.",
-    ["includes repairs", "include repairs", "248", "discount assessment"]),
+  f("faq-bundle", "Pricing", "Cleaning + assessment", "Is the assessment cheaper with a cleaning?",
+    "Yes. Added to a cleaning, the assessment is 50% off. It covers evaluating the issue and recommending repair options; repairs, parts, and replacement work are quoted separately for your approval.",
+    ["includes repairs", "include repairs", "248", "discount assessment", "half off", "50% off", "assessment with cleaning"]),
   f("faq-prepare", "Booking", "Preparation", "How should I prepare for the visit?",
     "Please make the laundry area accessible and secure pets before the visit. Don't move or disconnect the dryer yourself, and let the team know about any access restrictions.",
     ["prepare", "preparation", "before you arrive", "get ready"]),
 ];
+
+// Answers revised on Oct 30 2026 (website packages and prices). A saved answer that still has the
+// earlier default wording gets the new wording; an answer the office edited is left alone.
+const REVISED = {
+ "faq-1": {
+  "question": "How much does it cost to get my dryer vent cleaned?",
+  "answer": "Our See-It-Clean packages start at $189 for Essential, $249 for Performance (adds before-and-after photos and a DryerFlex transition hose upgrade), and $349 for Total System. Vent-only Express cleaning, for when no dryer is installed, starts at $149. Your exact price depends on whether your home is 1-story or 2-story and which floor the laundry is on. Gas dryers add the $49 Gas Appliance Safety Procedure."
+ },
+ "faq-2": {
+  "question": "What is the cleaning process?",
+  "answer": "Every See-It-Clean visit is a full vent cleaning with a live camera inspection during service, and airflow is checked before and after so you can see the difference. Essential also cleans the lint screen, lint cavity, dryer drum, and the area around the dryer. Performance adds before-and-after photos and a DryerFlex transition hose upgrade. Total System adds termination cleanout and correction of significant airflow restriction."
+ },
+ "faq-3": {
+  "question": "Do you need to get on the roof?",
+  "answer": "If your vent exits through the roof, let us know when you book, or choose “Not sure.” Total System includes termination cleanout and roof access when needed, and your technician confirms what your vent needs on site. Please don't climb onto the roof to check."
+ },
+ "faq-4": {
+  "question": "How long does it take to clean my dryer vent?",
+  "answer": "Essential takes about 60–90 minutes, Performance about 90–105 minutes, and Total System about 120–135 minutes, depending on your home. Express vent-only visits take about 45–60 minutes. Gas dryers add about 15 minutes for the safety procedure."
+ },
+ "faq-8": {
+  "question": "Do you clean the inside of the dryer too?",
+  "answer": "Yes. Essential, Performance, and Total System include cleaning the lint screen, the lint cavity, the dryer drum, and the area around the dryer, along with the full vent. Express (no dryer installed) and Post-Service visits don't include the lint screen, cavity, or drum."
+ },
+ "faq-9": {
+  "question": "Do you clean the transition hose?",
+  "answer": "We inspect the transition hose behind the dryer during every visit. Performance and Total System include an upgrade to a DryerFlex transition hose. Thin foil and vinyl hoses crush easily and aren't recommended."
+ },
+ "faq-23": {
+  "question": "Do you show me a camera inspection or photos?",
+  "answer": "Yes. Every See-It-Clean visit includes a live camera inspection during service, so you can see inside the vent. Performance and Total System also include before-and-after photos for your records."
+ },
+ "faq-bundle": {
+  "question": "Does the $248 include repairs?",
+  "answer": "The $248 covers cleaning and assessment; the assessment is 50% off with cleaning. Repairs, parts, and replacement work are quoted separately for your approval."
+ }
+};
+export function refreshFaqs(saved) {
+  if (!Array.isArray(saved)) return saved;
+  const latest = new Map(INITIAL_FAQS.map((x) => [x.id, x]));
+  return saved.map((x) => {
+    const old = REVISED[x?.id];
+    if (!old || x.answer !== old.answer) return x;
+    const now = latest.get(x.id);
+    return { ...x, question: x.question === old.question ? now.question : x.question, answer: now.answer, keywords: now.keywords };
+  });
+}

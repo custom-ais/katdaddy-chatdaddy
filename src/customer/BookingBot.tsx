@@ -8,7 +8,7 @@ import { api, ApiError, saveText } from '../lib/api';
 import { money, phoenixDate } from '../../shared/domain.mjs';
 
 const TZ = 'America/Phoenix';
-type Msg = { role: 'user' | 'model'; text: string; info?: string[]; local?: boolean };
+type Msg = { role: 'user' | 'model'; text: string; info?: string[]; card?: any; local?: boolean };
 
 /** "Thursday, Sep 24" and "8:30–9:30 AM arrival". */
 export function windowParts(iso: string) {
@@ -64,7 +64,11 @@ const INFO: Record<string, () => React.ReactElement> = {
   ),
   why_we_ask: () => (
     <Expandable title="Why are we asking this?">
-      <p className="mb-2">Gas connections, stacked units, and pedestals need specific safety steps, tools, and a little more time.</p>
+      <ul className="mb-2 space-y-1.5 list-disc pl-5 marker:text-orange-300">
+        <li><strong className="text-slate-700">Gas dryers:</strong> we shut off the gas, safely disconnect the dryer, reconnect it after cleaning, and perform a gas leak test before we leave.</li>
+        <li><strong className="text-slate-700">Stacked units:</strong> we move them with air sleds so the washer and dryer slide out safely and go back into place.</li>
+        <li><strong className="text-slate-700">Fixed pedestals:</strong> the raised dryer is heavier to handle, so moving the dryer and pedestal out together without tipping, reaching the vent, and setting it back securely takes extra time and care.</li>
+      </ul>
       <p>Knowing your setup up front gives you an accurate price and lets your technician arrive ready.</p>
     </Expandable>
   ),
@@ -93,6 +97,72 @@ function Rich({ text }: { text: string }) {
   );
 }
 
+/** Estimated airflow from the customer's answers: Clear / Restricted / Severe. */
+function AirflowGauge({ a }: { a: { score: number; level: string; headline: string; efficiency?: string; factors?: string[] } }) {
+  const pct = Math.max(3, Math.min(97, a.score));
+  return (
+    <div className="rounded-2xl bg-[#0b2742] text-white p-4 sm:p-5" role="img" aria-label={`${a.headline}. ${a.efficiency || ''} Estimated from your answers.`}>
+      <div className="relative pt-1">
+        <div className="h-3 rounded-full overflow-hidden flex" aria-hidden="true">
+          <span className="flex-1 bg-sky-300" />
+          <span className="flex-1 bg-orange-300" />
+          <span className="flex-1 bg-orange-500" />
+        </div>
+        <span className="absolute top-0 w-2 h-5 -ml-1 rounded-full bg-white shadow ring-2 ring-[#0b2742]" style={{ left: `${pct}%` }} aria-hidden="true" />
+      </div>
+      <div className="flex justify-between mt-2 text-[11px] font-bold text-sky-100/80" aria-hidden="true"><span>Clear</span><span>Restricted</span><span>Severe</span></div>
+      <p className="font-display text-xl sm:text-2xl font-extrabold leading-tight mt-3">{a.headline}</p>
+      {a.efficiency && <p className="text-sm font-bold text-orange-200 mt-1">{a.efficiency}</p>}
+      {a.factors?.length ? (
+        <ul className="mt-3 flex flex-wrap gap-1.5" aria-label="Based on">
+          {a.factors.map((f) => <li key={f} className="text-[11px] font-bold bg-white/10 text-sky-50 rounded-full px-2.5 py-1">{f}</li>)}
+        </ul>
+      ) : null}
+      <p className="text-xs text-sky-100/80 mt-3 leading-relaxed">Estimated from your answers. Your technician measures real airflow before and after.</p>
+    </div>
+  );
+}
+
+function PackageCard({ p, onChoose, disabled }: { p: any; onChoose: (option: string) => void; disabled: boolean }) {
+  const short = String(p.name).replace(/ See-It-Clean$/, '').replace(/^Dryer Vent /, '');
+  return (
+    <div className={`rounded-2xl border-2 bg-white p-4 sm:p-5 ${p.recommended ? 'border-orange-500 shadow-md shadow-orange-500/10' : 'border-slate-200'}`}>
+      <div className="flex flex-wrap items-center gap-2 mb-1">
+        {p.recommended && <p className="text-xs font-extrabold text-orange-700">BOB's pick for you</p>}
+        {p.badge && <span className="text-[11px] font-extrabold uppercase tracking-wide bg-slate-100 text-slate-700 rounded-full px-2.5 py-0.5">{p.badge}</span>}
+      </div>
+      <div className="flex items-start justify-between gap-3">
+        <h4 className="font-extrabold text-slate-900 text-base leading-snug">{p.name}</h4>
+        {p.price && <span className="font-display text-2xl sm:text-[28px] font-extrabold text-slate-900 leading-none shrink-0">{p.price}</span>}
+      </div>
+      {p.minutes ? <p className="text-xs text-slate-500 mt-1">About {p.minutes} minutes</p> : null}
+      <ul className="mt-3 space-y-1 text-sm text-slate-700 list-disc pl-5 marker:text-slate-400">
+        {(p.bullets || []).map((b: string) => <li key={b}>{b}</li>)}
+      </ul>
+      {p.includes?.length ? <p className="text-xs text-slate-500 mt-2">Price includes {p.includes.join(' and ')}.</p> : null}
+      <button type="button" onClick={() => onChoose(p.option)} disabled={disabled} className={`mt-4 w-full py-3 rounded-xl font-extrabold text-sm transition-colors disabled:opacity-60 ${p.recommended ? 'bg-orange-500 hover:bg-orange-600 text-white' : 'border-2 border-slate-800 text-slate-800 hover:bg-slate-50'}`}>
+        Choose {short}
+      </button>
+    </div>
+  );
+}
+
+function RecommendationCard({ card, onChoose, active }: { card: any; onChoose: (option: string) => void; active: boolean }) {
+  return (
+    <div className="space-y-3 w-full">
+      {card.airflow && <AirflowGauge a={card.airflow} />}
+      {card.summary ? (
+        <div className="p-4 rounded-2xl bg-white text-slate-800 border border-slate-200/90 text-sm sm:text-[15px] leading-relaxed shadow-xs"><Rich text={card.summary} /></div>
+      ) : card.lead ? (
+        <div className="p-4 rounded-2xl bg-white text-slate-800 border border-slate-200/90 text-sm sm:text-[15px] leading-relaxed whitespace-pre-wrap shadow-xs"><Rich text={card.lead} /></div>
+      ) : null}
+      {card.question && <p className="font-extrabold text-slate-900 text-sm px-1 pt-1">{card.question}</p>}
+      {(card.picks || []).map((p: any) => <PackageCard key={p.family} p={p} onChoose={onChoose} disabled={!active} />)}
+      {card.note && <p className="text-xs text-slate-500 px-1">{card.note}</p>}
+    </div>
+  );
+}
+
 function iconFor(label: string) {
   const l = label.toLowerCase();
   const c = 'shrink-0';
@@ -109,13 +179,13 @@ function iconFor(label: string) {
   if (l.includes('2nd floor')) return <ArrowUp size={18} className={`${c} text-orange-500`} />;
   if (l.includes('roof')) return <ArrowUp size={18} className={`${c} text-amber-500`} />;
   if (l.includes('side wall')) return <ArrowRight size={18} className={`${c} text-emerald-500`} />;
-  if (/one normal cycle|no signs|have dryer|^yes$|no gate code|cleaning only/.test(l)) return <Check size={18} className={`${c} text-emerald-500`} />;
-  if (/^no$|no dryer|^no thanks/.test(l)) return <X size={18} className={`${c} text-rose-500`} />;
+  if (/one normal cycle|1 normal cycle|no signs|have dryer|^yes|no gate code|no special notes|cleaning only|dryer is off|turned off/.test(l)) return <Check size={18} className={`${c} text-emerald-500`} />;
+  if (/^no$|no dryer|^no thanks|^no,/.test(l)) return <X size={18} className={`${c} text-rose-500`} />;
   if (l.includes('express')) return <Timer size={18} className={`${c} text-teal-500`} />;
-  if (l.includes('essential')) return <Wind size={18} className={`${c} text-blue-500`} />;
-  if (l.includes('performance')) return <Star size={18} className={`${c} text-orange-500`} />;
-  if (l.includes('total')) return <Shield size={18} className={`${c} text-indigo-500`} />;
-  if (/emergency|same-day/.test(l)) return <AlertTriangle size={18} className={`${c} text-red-500`} />;
+  if (l.includes('premium')) return <Star size={18} className={`${c} text-orange-500`} />;
+  if (l.includes('ultimate')) return <Shield size={18} className={`${c} text-indigo-500`} />;
+  if (l.includes('inspection')) return <Search size={18} className={`${c} text-blue-500`} />;
+  if (/emergency|same-day|running \/ hot|burning/.test(l)) return <AlertTriangle size={18} className={`${c} text-red-500`} />;
   if (/nest|restoration|animals/.test(l)) return <Bird size={18} className={`${c} text-amber-600`} />;
   if (l.includes('gas')) return <Flame size={18} className={`${c} text-orange-500`} />;
   if (l.includes('electric')) return <Zap size={18} className={`${c} text-blue-500`} />;
@@ -129,26 +199,31 @@ function iconFor(label: string) {
 }
 
 const WELCOME_CARDS: [string, React.ReactElement][] = [
-  ['Dryer Vent Cleaning', <Wind strokeWidth={2} size={26} />],
-  ['Repair / Reroute / Upgrade', <Wrench strokeWidth={2} size={26} />],
-  ['Emergency Clog / Overheating', <AlertTriangle strokeWidth={2} size={26} />],
-  ['Pest / Nest Removal', <Shield strokeWidth={2} size={26} />],
-  ['Ask a Question (FAQs)', <HelpCircle strokeWidth={2} size={26} />],
-  ['Help Me Choose', <Search strokeWidth={2} size={26} />],
+  ['Emergency Clog / Overheating', <Flame strokeWidth={2} size={26} />],
+  ['Standard Vent Cleaning', <Wind strokeWidth={2} size={26} />],
+  ['Help Me Choose Package', <Search strokeWidth={2} size={26} />],
+  ['Repair / Reroute / Assessment', <Wrench strokeWidth={2} size={26} />],
 ];
 
 // ---- contact details, collected one question at a time ---------------------------------------
 
-type ContactStep = 'name' | 'phone' | 'email' | 'address' | 'city' | 'notes' | 'addons' | 'sms';
-const CONTACT_PROMPTS: Record<ContactStep, string> = {
-  name: "What's your first and last name?",
-  phone: "What's the best mobile number? We'll text a code to confirm it.",
-  email: "What's your email for the confirmation? It's optional.",
-  address: "What's the service street address? Include a unit number if there is one.",
-  city: 'And the city?',
-  notes: 'Any gate code, parking, or pet notes for the technician?',
-  addons: 'Want to add anything to your visit?',
-  sms: 'Can we text you about this appointment — the confirmation and an on-the-way heads-up? Not marketing. Message and data rates may apply; reply STOP anytime.',
+// Rules manual §6 / playbook §8: name → email → phone → SMS consent → street address → gate/property notes,
+// one question per message, each opening with a short acknowledgment of the last answer.
+type ContactStep = 'name' | 'phone' | 'email' | 'address' | 'city' | 'notes' | 'gate' | 'addons' | 'sms';
+const CONTACT_ORDER: ContactStep[] = ['name', 'email', 'phone', 'sms', 'address', 'city', 'notes'];
+const contactPrompt = (step: ContactStep, d: any): string => {
+  const first = String(d?.name || '').trim().split(/\s+/)[0];
+  switch (step) {
+    case 'name': return 'To reserve your appointment slot, what is your first and last name?';
+    case 'email': return `${first ? `Thanks, ${first}. ` : ''}What is the best email address for your booking confirmation and receipt?`;
+    case 'phone': return `${d?.email ? 'Got it. ' : ''}What is your mobile phone number? We'll text a code to confirm it.`;
+    case 'sms': return `Understood. Is it okay to send automated text updates and technician arrival notifications to ${d?.phone || 'this number'}? Not marketing. Message and data rates may apply; reply STOP anytime.`;
+    case 'address': return 'Thank you. What is the street address for the service location? Include a unit number if there is one.';
+    case 'city': return 'And the city?';
+    case 'notes': return 'Thanks for providing that address. Are there any gate codes, parking instructions, or pets we should be aware of?';
+    case 'gate': return "What's the gate code, and anything else the technician should know?";
+    case 'addons': return 'Want to add anything to your visit?';
+  }
 };
 const INPUT_FOR: Partial<Record<ContactStep, { type: string; autoComplete: string; placeholder: string; inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'] }>> = {
   name: { type: 'text', autoComplete: 'name', placeholder: 'First and last name' },
@@ -157,6 +232,7 @@ const INPUT_FOR: Partial<Record<ContactStep, { type: string; autoComplete: strin
   address: { type: 'text', autoComplete: 'street-address', placeholder: 'Street address' },
   city: { type: 'text', autoComplete: 'address-level2', placeholder: 'City' },
   notes: { type: 'text', autoComplete: 'off', placeholder: 'Gate code, parking, pets…' },
+  gate: { type: 'text', autoComplete: 'off', placeholder: 'Gate code and notes' },
 };
 
 // ---- pieces ---------------------------------------------------------------------------------
@@ -501,7 +577,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       try { sessionStorage.setItem(storageKey, r.token); } catch {}
       const s = r.session;
       setSession(s); setConfig(r.config);
-      setMessages((s.history || []).map((m: any) => ({ role: m.role === 'user' ? 'user' : 'model', text: m.text })));
+      setMessages((s.history || []).map((m: any) => ({ role: m.role === 'user' ? 'user' : 'model', text: m.text, ...(m.card ? { card: m.card } : {}) })));
       setOptions(s.options || []); setMulti(false); setSuggested('');
       if (r.receipt) { setReceipt(r.receipt); setPending(r.receipt.status === 'action_needed'); }
       else if (s.stage === 'approval' && s.approvalId) {
@@ -568,9 +644,13 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     busyRef.current = true; setBusy(true); setError(''); setText(''); setPicked([]);
     setMessages((m) => [...m, { role: 'user', text: message }]);
     try {
+      // Playbook: a short, natural pause with the typing dots before every reply (800–1500 ms).
+      const pause = 800 + Math.random() * 700, began = Date.now();
       const r = await api('/api/chat', { method: 'POST', token, body: { message } });
+      const wait = pause - (Date.now() - began);
+      if (wait > 0) await new Promise((done) => setTimeout(done, wait));
       setSession(r.session);
-      setMessages((m) => [...m, { role: 'model', text: r.reply, info: r.info }]);
+      setMessages((m) => [...m, { role: 'model', text: r.reply, info: r.info, ...(r.card ? { card: r.card } : {}) }]);
       setOptions(r.options || []); setMulti(Boolean(r.multi)); setSuggested(r.suggested || '');
       if (r.action === 'contact') { setAction('contact'); startContact(r.session); }
       else if (r.action === 'request') setAction('request');
@@ -583,22 +663,22 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   };
 
   // -- contact capture --------------------------------------------------------------------------
-  const stepsFor = (s: any): ContactStep[] => ['name', 'phone', 'email', 'address', 'city', 'notes', ...(s?.route === 'cleaning' && addOnLabels(s).length ? (['addons'] as ContactStep[]) : []), 'sms'];
-  const askContact = (step: ContactStep) => {
+  const stepsFor = (s: any): ContactStep[] => [...CONTACT_ORDER, ...(s?.route === 'cleaning' && addOnLabels(s).length ? (['addons'] as ContactStep[]) : [])];
+  const askContact = (step: ContactStep, d: any = draft) => {
     setContactStep(step);
-    say('model', CONTACT_PROMPTS[step]);
-    setOptions(step === 'email' ? ['Skip'] : step === 'notes' ? ['No gate code or notes'] : step === 'sms' ? ['Yes, text me', 'No texts'] : step === 'addons' ? [...addOnLabels(session), 'No add-ons'] : []);
+    say('model', contactPrompt(step, d));
+    setOptions(step === 'email' ? ['Skip'] : step === 'notes' ? ['No special notes', 'Gate code required'] : step === 'sms' ? ['Yes, SMS updates are fine', 'No, call or email only'] : step === 'addons' ? [...addOnLabels(session), 'No add-ons'] : []);
     setMulti(step === 'addons');
     setSuggested('');
   };
   function startContact(s: any) {
     setDraft({ name: s?.contact?.name || '', phone: s?.contact?.phone || '', email: s?.contact?.email || '', address: s?.contact?.address || '', city: s?.contact?.city || '', zip: s?.zip || s?.contact?.zip || '', notes: '', addOns: {}, smsConsent: false });
-    setTimeout(() => askContact('name'), 50);
+    setTimeout(() => askContact('name', {}), 50);
   }
   const nextContact = (step: ContactStep, d: any) => {
     const order = stepsFor(session);
     const i = order.indexOf(step);
-    if (i < order.length - 1) return askContact(order[i + 1]);
+    if (i < order.length - 1) return askContact(order[i + 1], d);
     void submitContact(d);
   };
   const answerContact = (raw: string) => {
@@ -612,13 +692,24 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       say('user', value);
     } else if (step === 'sms') {
       d.smsConsent = /^yes/i.test(value);
-      say('user', d.smsConsent ? 'Yes, text me' : 'No texts');
+      say('user', value);
     } else if (step === 'email' && /^skip$/i.test(value)) {
       d.email = '';
       say('user', 'Skip');
-    } else if (step === 'notes' && /^no gate code/i.test(value)) {
+    } else if (step === 'notes' && /^(?:no special notes|no gate code|no\b)/i.test(value)) {
       d.notes = '';
       say('user', value);
+    } else if (step === 'notes' && /^gate code required$/i.test(value)) {
+      say('user', value);
+      setDraft(d);
+      return askContact('gate', d);
+    } else if (step === 'gate') {
+      if (value.length < 1) return;
+      d.notes = value;
+      say('user', value);
+      setDraft(d);
+      setPicked([]);
+      return nextContact('notes', d);
     } else {
       if (step === 'phone' && value.replace(/\D/g, '').length < 10) { say('user', value); say('model', 'That number looks short. Please enter a 10-digit mobile number.'); return; }
       if (step === 'email' && value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) { say('user', value); say('model', "That email doesn't look right. Enter it again, or choose Skip."); return; }
@@ -674,10 +765,10 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
           <BobFace size={40} />
           <div>
             <h1 className="font-extrabold text-base text-white tracking-tight leading-none">Dryer Vent Squad West Valley</h1>
-            <p className="text-[11px] font-semibold text-orange-400 mt-1 flex items-center gap-1.5">
+            <p className="text-[11px] font-semibold text-orange-400 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
               <span className={`w-1.5 h-1.5 rounded-full ${ready ? 'bg-emerald-400' : 'bg-slate-500'}`} />
-              {ready ? (config?.smartChat ? 'BOB · AI booking assistant' : 'BOB · Booking assistant') : error ? 'Not connected yet' : 'Connecting…'}
-              {ready && <span className="text-slate-300 font-medium">· {config?.bookingEnabled ? 'Live schedule' : 'Requests'}</span>}
+              <span className="whitespace-nowrap">{ready ? (config?.smartChat ? 'BOB · AI booking assistant' : 'BOB · Booking assistant') : error ? 'Not connected yet' : 'Connecting…'}</span>
+              {ready && <span className="whitespace-nowrap text-slate-300 font-medium">· {config?.bookingEnabled ? 'Live schedule' : 'Requests'}</span>}
             </p>
           </div>
         </div>
@@ -709,8 +800,8 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
         {!started ? (
           <div className="flex flex-col items-center max-w-xl mx-auto py-4 animate-in">
             <div className="mb-5"><BobFace size={112} /></div>
-            <h2 className="text-2xl sm:text-3xl font-black text-white mb-2 text-center tracking-tight">Hi, we're glad you're here.</h2>
-            <p className="text-slate-300 text-center mb-6 text-sm max-w-sm leading-relaxed">I'm BOB. Pick an option or just type what's going on — I'll get you an exact price and a real opening on our schedule.</p>
+            <h2 className="text-2xl sm:text-3xl font-black text-white mb-2 text-center tracking-tight">👋 Hi! Welcome to Dryer Vent Squad West Valley!</h2>
+            <p className="text-slate-300 text-center mb-6 text-sm max-w-sm leading-relaxed">I'm your AI Booking &amp; Diagnostic Assistant. How can I help restore your dryer exhaust system today?</p>
             {error && <div role="alert" className="mb-4 w-full text-sm font-semibold text-rose-200 bg-rose-950/60 border border-rose-400/40 rounded-xl p-3">{error} <button className="ml-2 underline font-bold" onClick={() => initialize()}>Reconnect</button></div>}
             <div className="w-full flex flex-col gap-3">
               {WELCOME_CARDS.map(([label, icon]) => (
@@ -729,14 +820,22 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
               const model = msg.role === 'model';
               return (
                 <div key={i} data-msg={i} className={`flex w-full ${model ? 'justify-start' : 'justify-end'} animate-in`}>
-                  <div className={`flex max-w-[90%] sm:max-w-[80%] gap-2.5 ${model ? 'flex-row' : 'flex-row-reverse'}`}>
+                  <div className={`flex ${model && msg.card ? 'w-full sm:max-w-[88%]' : 'max-w-[90%] sm:max-w-[80%]'} gap-2.5 ${model ? 'flex-row' : 'flex-row-reverse'}`}>
                     <div className="shrink-0 mt-auto mb-1">
                       {model ? <BobFace size={32} /> : <div className="bg-slate-700 text-slate-300 p-2 rounded-full border border-slate-600"><User size={16} /></div>}
                     </div>
-                    <div className="min-w-0">
-                      <div className={`p-4 rounded-2xl text-sm sm:text-[15px] leading-relaxed whitespace-pre-wrap shadow-xs ${model ? 'bg-white text-slate-800 border border-slate-200/90 rounded-bl-xs' : 'bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-br-xs font-medium'}`}>
-                        <Rich text={msg.text} />
-                      </div>
+                    <div className={`min-w-0 ${model && msg.card ? 'w-full' : ''}`}>
+                      {model && msg.card ? (
+                        <RecommendationCard card={msg.card} onChoose={(o) => void send(o)} active={i === messages.length - 1 && ready && !busy} />
+                      ) : (
+                        <div className="space-y-2">
+                          {(model ? msg.text.split(/\n?\|\|\|\n?/) : [msg.text]).filter((part) => part.trim()).map((part, k) => (
+                            <div key={k} className={`p-4 rounded-2xl text-sm sm:text-[15px] leading-relaxed whitespace-pre-wrap shadow-xs ${model ? 'bg-white text-slate-800 border border-slate-200/90 rounded-bl-xs' : 'bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-br-xs font-medium'}`}>
+                              <Rich text={part.trim()} />
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       {model && i === messages.length - 1 && msg.info?.map((key) => <React.Fragment key={key}>{INFO[key]?.()}</React.Fragment>)}
                     </div>
                   </div>
@@ -770,9 +869,9 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
                   </div>
                 ) : (
                   <div className="flex flex-wrap gap-2">
-                    {options.map((o) => {
+                    {options.filter((o) => !(last?.card?.picks || []).some((p: any) => p.option === o)).map((o) => {
                       const star = suggested && o === suggested;
-                      const primary = /^(accept & continue|book assessment|include assessment)$/i.test(o);
+                      const primary = /^(accept|accept & continue|book assessment|include assessment|yes, let's schedule)$/i.test(o);
                       return (
                         <button key={o} onClick={() => send(o)} disabled={!ready} className={`flex items-center gap-2 px-4 py-3 rounded-2xl font-extrabold text-xs sm:text-sm transition-all border-2 active:scale-95 ${primary ? 'bg-gradient-to-r from-orange-500 to-orange-600 border-orange-500 text-white shadow-md shadow-orange-500/20' : star ? 'bg-orange-50 border-orange-500 text-orange-900 shadow-sm' : 'bg-white border-slate-200 text-slate-700 hover:border-orange-400 hover:bg-orange-50/20'}`}>
                           {primary ? <CheckCircle size={18} className="text-white" /> : iconFor(o)}
