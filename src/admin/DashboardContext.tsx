@@ -13,7 +13,7 @@ export interface Appointment {
   lineItems?: { id?: string; name: string; cents: number }[]; route?: string; concerns?: string[]; property?: Record<string, any>;
   jobber?: { jobNumber?: number; webUri?: string; visitId?: string | null } | null; jobberState?: string; jobberError?: string;
   approval?: { id: string; by: string; at: number } | null; overflow?: boolean; sameDay?: boolean; phoneVerified?: boolean;
-  notifications?: { sms?: string; email?: string }; territory?: { city: string; zone: number; micro: string; corridor: string } | null; smsConsent?: boolean;
+  notifications?: { sms?: string; email?: string; smsProvider?: string; emailProvider?: string }; reminder?: { at: number; sms: string; email: string } | null; territory?: { city: string; zone: number; micro: string; corridor: string } | null; smsConsent?: boolean;
 }
 
 export interface Technician {
@@ -24,6 +24,13 @@ export interface Technician {
 export interface Snapshot {
   config: any; faqs: any[]; technicians: Technician[]; appointments: Appointment[]; requests: any[]; approvals: any[];
   heldLocksCount: number; conversations: number; notifications: any[]; integrations: any; westValleyZips: string[]; now: number;
+  messages?: MessageLog[]; reminderRun?: any;
+}
+
+/** One text or email in the log (Twilio or LeadConnector). Inbound texts carry `from` and `preview`. */
+export interface MessageLog {
+  id: string; at: number; updated?: number; channel: 'sms' | 'email'; direction: 'out' | 'in'; provider: string; kind: string;
+  ref?: string; to?: string; from?: string; status: string; error?: string; errorCode?: number | string | null; subject?: string; preview?: string;
 }
 
 interface Ctx {

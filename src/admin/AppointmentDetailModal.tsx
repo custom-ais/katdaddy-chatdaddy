@@ -39,6 +39,9 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
   const resolve = (outcome: 'in_jobber' | 'not_in_jobber') => run(() => mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}/resolve`, { outcome, jobNumber }, 'POST', outcome === 'in_jobber' ? 'Confirmed and customer notified' : 'Released — the time is open again'));
   const resend = () => run(() => mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}/confirmation`, {}, 'POST', 'Confirmation sent'));
   const sms = a.notifications?.sms, email = a.notifications?.email;
+  // Twilio reports delivery after the fact; the latest word on this visit's confirmation text.
+  const delivered = (data.messages || []).find((m) => m.ref === a.id && m.channel === 'sms' && m.kind === 'confirmation' && m.direction === 'out');
+  const smsLabel = sms === 'sent' && delivered && ['delivered', 'undelivered', 'failed'].includes(delivered.status) ? delivered.status : sms;
 
   return (
     <Modal
@@ -50,7 +53,7 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
         <>
           <div className="flex items-center gap-2">
             {a.jobber?.webUri && <a className={secondaryButton} href={a.jobber.webUri} target="_blank" rel="noreferrer">Open in Jobber<ExternalLink size={14} /></a>}
-            {a.status === 'confirmed' && data.integrations?.leadConnector?.configured && <button className={subtleButton} onClick={resend} disabled={busy}><Send size={15} />Resend confirmation</button>}
+            {a.status === 'confirmed' && (data.integrations?.messaging?.sms || data.integrations?.messaging?.email) && <button className={subtleButton} onClick={resend} disabled={busy}><Send size={15} />Resend confirmation</button>}
           </div>
           <div className="flex items-center gap-2.5">
             <button className={secondaryButton} onClick={onClose}>Close</button>
@@ -146,7 +149,7 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
       <Field label="Notes and property access">
         <textarea rows={3} className={inputClass} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Gate codes, pets, dryer details…" />
       </Field>
-      <p className="text-xs text-slate-500 flex items-center gap-2"><FileText size={14} />Confirmation: text {sms || 'not sent'} · email {email || 'not sent'}</p>
+      <p className="text-xs text-slate-500 flex items-center gap-2"><FileText size={14} />Confirmation: text {smsLabel || 'not sent'} · email {email || 'not sent'}{a.reminder ? ` · reminder ${a.reminder.sms === 'sent' || a.reminder.email === 'sent' ? 'sent' : 'not sent'}` : ''}</p>
       {error && <ErrorNote>{error}</ErrorNote>}
     </Modal>
   );

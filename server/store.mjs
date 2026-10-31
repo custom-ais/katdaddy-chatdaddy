@@ -235,6 +235,31 @@ export function createStore(db, { clock = Date.now } = {}) {
       await q("insert into bob.audit(id,created,action,target) values($1,$2,$3,$4)", [randomUUID(), clock(), action, String(target)]);
     },
 
+    // ---- message log (texts and emails; kept in kv so no new table is needed) --------------
+    async logMessage(entry, ttlSeconds) {
+      await store.kvSet(`msg:${entry.id}`, entry, ttlSeconds);
+    },
+    async message(id) {
+      return id ? store.kvGet(`msg:${id}`) : null;
+    },
+    /** Twilio status callbacks can arrive out of order; a status only ever moves forward. */
+    async updateMessageStatus(id, status, errorCode, ttlSeconds) {
+      const m = await store.message(id);
+      if (!m) return null;
+      const rank = (s) => ({ accepted: 1, scheduled: 1, queued: 1, pending: 1, sending: 2, sent: 3, delivered: 4, undelivered: 4, failed: 4, read: 5, canceled: 4 })[s] ?? 0;
+      if (rank(status) < rank(m.status)) return m;
+      const next = { ...m, status, ...(errorCode ? { errorCode: Number(errorCode) || errorCode } : {}), updated: clock() };
+      await store.kvSet(`msg:${id}`, next, ttlSeconds);
+      return next;
+    },
+    async recentMessages(limit = 60) {
+      const rows = await q(
+        "select value from bob.kv where key like 'msg:%' and (expires is null or expires>$1) order by (value->>'at')::bigint desc limit $2",
+        [clock(), limit],
+      );
+      return rows.map((r) => r.value);
+    },
+
     // ---- key/value: cache, locks, rate limits ---------------------------------------
     async kvGet(key) {
       const rows = await q("select value from bob.kv where key=$1 and (expires is null or expires>$2)", [key, clock()]);

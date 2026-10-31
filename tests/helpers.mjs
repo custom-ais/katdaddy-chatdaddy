@@ -8,6 +8,7 @@ import { RPC_SQL } from "../server/schema.mjs";
 import { createStore } from "../server/store.mjs";
 import { createScheduler } from "../server/schedule.mjs";
 import { createBobHandler } from "../server/app.mjs";
+import { createTwilio } from "../server/twilio.mjs";
 import { estimateDriveMinutes } from "../server/geo.mjs";
 import { JobberNotConnected } from "../server/jobber.mjs";
 import { DEFAULT_CONFIG } from "../shared/domain.mjs";
@@ -142,6 +143,43 @@ export function fakeLc({ configured = true, failSms = false } = {}) {
   return lc;
 }
 
+/** A made-up Twilio SID (prefix + 32 hex), built at run time so it never reads as a real credential. */
+export const fakeSid = (prefix) => prefix + "0123456789abcdef".repeat(2);
+export const TWILIO_ENV = {
+  TWILIO_ACCOUNT_SID: fakeSid("AC"),
+  TWILIO_AUTH_TOKEN: "test-auth-token",
+  TWILIO_MESSAGING_SERVICE_SID: fakeSid("MG"),
+  SENDGRID_API_KEY: "SG.test-key",
+  SENDGRID_FROM_EMAIL: "bookings@example.com",
+};
+
+/**
+ * The real Twilio module over a fake network: texts, Verify (the right code is 123456) and
+ * SendGrid. Every request is kept in `calls` as { url, fields | json }.
+ */
+export function fakeTwilioNet() {
+  const net = { calls: [], fail: null, n: 0 };
+  net.fetchImpl = async (url, init) => {
+    url = String(url);
+    const fields = init.body instanceof URLSearchParams ? Object.fromEntries(init.body) : null;
+    const json = fields ? null : JSON.parse(init.body || "{}");
+    net.calls.push({ url, fields, json, headers: init.headers });
+    const kind = url.includes("sendgrid") ? "email" : url.includes("VerificationCheck") ? "check" : url.includes("Verifications") ? "verify" : "sms";
+    if (net.fail && (net.fail.kind === kind || net.fail.kind === "all")) {
+      const { status = 400, code = 30034, message = "blocked" } = net.fail;
+      return new Response(JSON.stringify(kind === "email" ? { errors: [{ message }] } : { code, message, status }), { status });
+    }
+    net.n++;
+    if (kind === "email") return new Response(null, { status: 202, headers: { "X-Message-Id": `msg${net.n}` } });
+    if (kind === "check") return new Response(JSON.stringify({ status: fields.Code === "123456" ? "approved" : "pending" }), { status: 200 });
+    if (kind === "verify") return new Response(JSON.stringify({ sid: `VE${net.n}`, status: "pending" }), { status: 201 });
+    return new Response(JSON.stringify({ sid: `SM${String(net.n).padStart(32, "0")}`, status: "queued" }), { status: 201 });
+  };
+  net.texts = () => net.calls.filter((c) => c.fields?.Body).map((c) => ({ to: c.fields.To, body: c.fields.Body, callback: c.fields.StatusCallback }));
+  net.emails = () => net.calls.filter((c) => c.json?.personalizations).map((c) => ({ to: c.json.personalizations[0].to[0].email, subject: c.json.subject, text: c.json.content[0].value, replyTo: c.json.reply_to?.email }));
+  return net;
+}
+
 /** Chat steps that reach the contact step for each kind of visit. */
 export const FLOWS = {
   cleaning: (zip) => ["Dryer Vent Cleaning", zip, "Have Dryer", "No", "1-Story", "Electric", "Standard", "Dries in one normal cycle", "No signs", "Premium 1-2-3 · $179", "Accept & Continue"],
@@ -168,7 +206,7 @@ export async function restDb(pglite) {
   return { ...db, close: () => pglite.close() };
 }
 
-export async function harness(t, { ready = true, config = {}, jobber: jobberOpts = {}, lc: lcOpts = {}, dataDir, assistant = null, rest = false, env: envOpts = {} } = {}) {
+export async function harness(t, { ready = true, config = {}, jobber: jobberOpts = {}, lc: lcOpts = {}, twilio: twilioEnv = null, dataDir, assistant = null, rest = false, env: envOpts = {} } = {}) {
   let now = baseTime;
   const clock = () => now;
   const pg = await createPgliteDb(dataDir);
@@ -181,7 +219,9 @@ export async function harness(t, { ready = true, config = {}, jobber: jobberOpts
   const geo = fakeGeo();
   const scheduler = createScheduler({ store, jobber, geo });
   const env = { BOB_SETUP_TOKEN: "test-only-setup-token", ...envOpts };
-  const handle = createBobHandler({ store, jobber, lc, geo, scheduler, assistant, env, clock });
+  const net = fakeTwilioNet();
+  const twilio = twilioEnv ? createTwilio({ env: { ...TWILIO_ENV, ...twilioEnv }, fetchImpl: net.fetchImpl }) : undefined;
+  const handle = createBobHandler({ store, jobber, lc, twilio, geo, scheduler, assistant, env, clock });
   const server = http.createServer((req, res) => handle(req, res));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -229,8 +269,10 @@ export async function harness(t, { ready = true, config = {}, jobber: jobberOpts
     return token;
   };
   const lastCode = () => {
-    const sms = lc.calls.filter((c) => c[0] === "sms" && /verification code is (\d{6})/.test(c[2])).at(-1);
-    return sms ? sms[2].match(/verification code is (\d{6})/)[1] : null;
+    if (net.calls.some((c) => c.url.includes("/Verifications"))) return "123456"; // Twilio Verify's code in the fake
+    const texts = [...lc.calls.filter((c) => c[0] === "sms").map((c) => c[2]), ...net.texts().map((x) => x.body)];
+    const sms = texts.filter((b) => /verification code is (\d{6})/.test(b)).at(-1);
+    return sms ? sms.match(/verification code is (\d{6})/)[1] : null;
   };
   /** Contact details, then the text code, as the page does. */
   const contactAndVerify = async (token, who = contact) => {
@@ -241,6 +283,7 @@ export async function harness(t, { ready = true, config = {}, jobber: jobberOpts
       assert.equal(v.status, 200, JSON.stringify(v.data));
     }
     lc.calls.length = 0; // tests below look only at what happens after verification
+    net.calls.length = 0;
     return r;
   };
   const prepare = async (route = "cleaning", who = contact) => {
@@ -266,5 +309,16 @@ export async function harness(t, { ready = true, config = {}, jobber: jobberOpts
     return r.cookie;
   };
   const count = async (table) => Number((await db.query(`select count(*)::int as n from bob.${table}`))[0].n);
-  return { db, store, jobber, lc, geo, origin, call, fresh, chat, accept, contactAndVerify, lastCode, prepare, slots, hold, confirm, book, login, count, advance: (ms) => (now += ms) };
+  /** A Twilio webhook, signed the way Twilio signs it (or with `signature` to test a forgery). */
+  const webhook = async (path, params, { signature } = {}) => {
+    const { twilioSignature } = await import("../server/twilio.mjs");
+    const body = new URLSearchParams(params);
+    const r = await fetch(origin + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Twilio-Signature": signature ?? twilioSignature(TWILIO_ENV.TWILIO_AUTH_TOKEN, origin + path, params) },
+      body,
+    });
+    return { status: r.status, text: await r.text(), type: r.headers.get("content-type") };
+  };
+  return { db, store, jobber, lc, net, twilio, geo, origin, call, webhook, fresh, chat, accept, contactAndVerify, lastCode, prepare, slots, hold, confirm, book, login, count, now: () => now, advance: (ms) => (now += ms) };
 }
