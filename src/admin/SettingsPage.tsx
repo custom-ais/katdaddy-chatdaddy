@@ -7,6 +7,7 @@ import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Modal, Section, Toggle, inputClass, primaryButton, secondaryButton, subtleButton } from './ui';
 import { money } from '../../shared/domain.mjs';
 import { PACKAGES } from '../../shared/catalog.mjs';
+import { IntegrationSettings } from './IntegrationSettings';
 
 const int = (v: string) => (v === '' ? 0 : Math.round(Number(v)));
 const cents = (v: string) => Math.round(Number(v || 0) * 100);
@@ -44,10 +45,11 @@ function Connections() {
   };
   const rows: [string, boolean, React.ReactNode, React.ReactNode?][] = [
     ['Jobber', !!i.jobber?.connected,
-      i.jobber?.connected ? 'Reading the live calendar and creating scheduled jobs with visits.' : i.jobber?.appConfigured ? 'Not connected yet. Online booking stays off until it is.' : 'Add JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET and JOBBER_REDIRECT_URI in Vercel first.',
+      i.jobber?.connected ? 'Reading the live calendar and creating scheduled jobs with visits.' : i.jobber?.appConfigured ? 'Not connected yet. Online booking stays off until it is.' : 'Add the Jobber client ID, secret and redirect URL in Connections and API keys below, or in Vercel.',
       i.jobber?.appConfigured && (i.jobber?.connected ? <button className={subtleButton} onClick={disconnect} disabled={busy}>Disconnect</button> : <a className={primaryButton} href="/api/admin/jobber/connect">Connect Jobber</a>)],
+    ['Email', !!i.email?.configured && !i.email?.issue, <>{i.email?.configured ? `${i.email.provider} sender: ${i.email.from}. Appointment confirmations, support tickets and daily reports use this connection.` : 'Add the email account and app password in Connections and API keys below.'}{i.email?.issue && <span className="block mt-1 text-amber-800">{i.email.issue.message}</span>}</>],
     ['LeadConnector', !!i.leadConnector?.configured && !i.leadConnector?.issue,
-      <>{i.leadConnector?.configured ? 'Sends verification codes, confirmations and approval texts, and saves contacts and requests.' : 'Add LC_PRIVATE_TOKEN and LC_LOCATION_ID in Vercel. Phone verification needs it, so online booking waits for it.'}
+      <>{i.leadConnector?.configured ? 'Supports verification codes, customer notifications and on-call texts. Customer texts can stay paused independently.' : 'Add the HighLevel private token and location in Connections and API keys below. Regular bookings can continue with phone verification off.'}
         {i.leadConnector?.configured && ['jwt', 'other'].includes(i.leadConnector?.tokenKind) && <span className="block mt-1 font-semibold text-amber-800">LC_PRIVATE_TOKEN doesn't look like a Private Integration token (those start with “pit-”).{i.leadConnector.tokenKind === 'jwt' ? ' It looks like an older API key or app token.' : ''} Copy the token from the sub-account's Settings → Private Integrations.</span>}
         {i.leadConnector?.issue && <span className="block mt-1 font-semibold text-amber-800">{when(i.leadConnector.issue.at)}: {i.leadConnector.issue.message}</span>}</>],
     ['Smart chat', !!i.assistant?.configured, i.assistant?.configured ? `Gemini (${i.assistant.model}) reads typed messages. It can't set prices or book — BOB's rules do that.` : 'Add GEMINI_API_KEY in Vercel. Until then BOB uses buttons and keyword matching.'],
@@ -58,7 +60,7 @@ function Connections() {
     ...(i.lastError ? [['Last server error', false, <span className="text-rose-800">{when(i.lastError.at)} on {i.lastError.path}: {i.lastError.message}</span>] as [string, boolean, React.ReactNode]] : []),
   ];
   return (
-    <Section icon={<Link2 size={18} />} title="Connections" description="Keys live in Vercel environment variables. Nothing secret is shown here.">
+    <Section icon={<Link2 size={18} />} title="Connection status" description="Manage credentials in Connections and API keys below. Nothing secret is shown here.">
       <div className="divide-y divide-slate-100">
         {rows.map(([name, ok, detail, action]) => (
           <div key={name} className="flex items-start justify-between gap-3 py-3">
@@ -106,6 +108,7 @@ function Technicians({ techs, onChange }: { techs: Technician[]; onChange: (next
               </select>
             </Field>
             <Field label="Short bio for the office"><textarea rows={2} className={inputClass} value={t.bio || ''} onChange={(e) => edit(i, { bio: e.target.value })} /></Field>
+            <Toggle checked={Boolean(t.onCall)} onChange={(v) => edit(i, { onCall: v })} label="On call for emergency / same-day requests" detail="Receives a text with accept/decline buttons and a five-minute response window. Needs a valid mobile number and working phone connection." />
             {techs.length > 1 && !data.appointments.some((a) => a.technicianId === t.id) && (
               <button className={`${subtleButton} text-rose-700`} onClick={() => onChange(techs.filter((_, j) => j !== i))}><Trash2 size={14} />Remove</button>
             )}
@@ -253,7 +256,7 @@ export function SettingsPage() {
   }, [data.config, dirty]);
 
   const update = (key: string, value: any) => { setC((s: any) => ({ ...s, [key]: value })); setDirty(true); };
-  const nested = (key: 'sameDay' | 'overflow' | 'approver', patch: any) => { setC((s: any) => ({ ...s, [key]: { ...s[key], ...patch } })); setDirty(true); };
+  const nested = (key: 'sameDay' | 'overflow' | 'approver' | 'aiSettings', patch: any) => { setC((s: any) => ({ ...s, [key]: { ...s[key], ...patch } })); setDirty(true); };
   const updateService = (id: string, patch: any) => update('services', c.services.map((x: any) => (x.id === id ? { ...x, ...patch } : x)));
   const categories = useMemo(() => [...new Set(c.services.map((x: any) => x.category))] as string[], [c.services]);
   const families = useMemo(() => [...new Set(c.services.map((x: any) => x.family))].filter((f) => (PACKAGES as any)[f as string]) as string[], [c.services]);
@@ -309,8 +312,9 @@ export function SettingsPage() {
             <Toggle checked={c.bookingEnabled} onChange={(v) => update('bookingEnabled', v)} label="Let customers book visits online" detail="When off, BOB still answers questions and takes callback requests." />
             <Toggle checked={c.requirePhoneVerification && c.smsConfirmations} disabled={!c.smsConfirmations} onChange={(v) => update('requirePhoneVerification', v)} label="Text a code to verify the customer's phone before booking" detail={c.smsConfirmations ? 'Rulebook requirement. Sent through LeadConnector.' : 'Off while text confirmations are off: BOB sends no texts to customers.'} />
             <Toggle checked={c.aiAssistant} onChange={(v) => update('aiAssistant', v)} label="Smart chat (Gemini) reads typed messages" detail="Off = buttons and keyword matching only. Prices and booking never depend on it." />
+            <Toggle checked={c.phoneServiceReady} onChange={(v) => update('phoneServiceReady', v)} label="Office phone connection has been tested" detail="Leave off until a technician can receive and respond to an on-call text. Emergency and same-day appointments remain paused while off." />
             <div className="flex flex-wrap gap-x-6">
-              <Toggle checked={c.smsConfirmations} onChange={(v) => update('smsConfirmations', v)} label="Text confirmations" detail="Only to customers who agree to texts. Off: BOB sends no texts to customers (no phone code, no confirmation text, no texting question)." />
+              <Toggle checked={c.smsConfirmations} onChange={(v) => update('smsConfirmations', v)} label="Text confirmations" detail="Off: customer texts and phone codes are paused. BOB still records texting consent for Jobber." />
               <Toggle checked={c.emailConfirmations} onChange={(v) => update('emailConfirmations', v)} label="Email confirmations" />
             </div>
           </div>
@@ -339,7 +343,7 @@ export function SettingsPage() {
         <Toggle checked={c.nearbyFirst} onChange={(v) => update('nearbyFirst', v)} label="Offer times next to jobs already booked nearby first" />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="rounded-2xl border border-slate-200 p-4 space-y-2">
-            <Toggle checked={c.sameDay.enabled} onChange={(v) => nested('sameDay', { enabled: v })} label="Same-day regular visits" />
+            <Toggle checked={c.sameDay.enabled} disabled={!c.phoneServiceReady} onChange={(v) => nested('sameDay', { enabled: v })} label="Same-day regular visits" detail={!c.phoneServiceReady ? 'Paused until the phone connection is tested.' : undefined} />
             <div className="grid grid-cols-2 gap-3">
               <Num label="Book before" suffix="hour, 24h" value={c.sameDay.cutoffHour} onChange={(n) => nested('sameDay', { cutoffHour: n })} />
               <Num label="Notice" suffix="hours" value={c.sameDay.minNoticeHours} onChange={(n) => nested('sameDay', { minNoticeHours: n })} />
@@ -480,6 +484,15 @@ export function SettingsPage() {
         </div>
       </Section>
 
+      <Section icon={<ShieldCheck size={18} />} title="AI settings" description="Adjust how Gemini handles free-typed messages. Service prices, safety checks, and booking rules remain enforced by BOB.">
+        <div className="grid sm:grid-cols-2 gap-4">
+          <Field label="Gemini model" hint={`Leave blank to use ${data.integrations?.assistant?.model || 'the deployment default'}.`}><input className={inputClass} value={c.aiSettings?.model || ''} onChange={(e) => nested('aiSettings', { model: e.target.value.trim() })} placeholder={data.integrations?.assistant?.model} /></Field>
+          <Field label="Temperature" hint="0–2; lower values are more consistent. Blank keeps the model's default."><input className={inputClass} type="number" step="0.1" min="0" max="2" value={c.aiSettings?.temperature ?? ''} onChange={(e) => nested('aiSettings', { temperature: e.target.value === '' ? null : Number(e.target.value) })} /></Field>
+          <Num label="Maximum response tokens" min={256} step={256} value={c.aiSettings?.maxOutputTokens || 1024} onChange={(n) => nested('aiSettings', { maxOutputTokens: n })} />
+          <Num label="Response timeout" suffix="milliseconds" min={2000} step={1000} value={c.aiSettings?.timeoutMs || 9000} onChange={(n) => nested('aiSettings', { timeoutMs: n })} />
+        </div>
+      </Section>
+      <IntegrationSettings />
       <Password />
 
       <SaveDock changed={changed} busy={busy} error={error} onSave={save} onDiscard={discard} />

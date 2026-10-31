@@ -462,9 +462,9 @@ test("package, 2-story upstairs home, gas dryer and fogging flow through to the 
   assert.equal(h.jobber.jobs[0].end - h.jobber.jobs[0].start, 120 * 60_000, "the Jobber visit includes the difficulty time");
 });
 
-test("emergency clog relief is offered inside normal notice, but books only after a named approval", async (t) => {
-  const h = await harness(t, { config: { emergencyLeadHours: 1, leadHours: 24, approver: { name: "Seth", phone: "6235559999", email: "" } } });
-  const token = await h.prepare("emergency");
+test("a service requiring named office approval cannot book before that approval", async (t) => {
+  const h = await harness(t, { config: { approvalServices: ['premium'], leadHours: 1, approver: { name: "Seth", phone: "6235559999", email: "" } } });
+  const token = await h.prepare("cleaning");
   const [first] = await h.slots(token);
   assert.ok(Date.parse(first.scheduledAt) - Date.parse("2026-09-21T20:00:00Z") < 24 * 3_600_000, "offered inside the normal 24h notice");
   assert.equal(first.approval, true);
@@ -496,9 +496,9 @@ test("emergency clog relief is offered inside normal notice, but books only afte
 });
 
 test("a declined or expired approval books nothing and frees the time", async (t) => {
-  const h = await harness(t, { config: { emergencyLeadHours: 1 } });
+  const h = await harness(t, { config: { approvalServices: ['premium'], leadHours: 1 } });
   const ask = async () => {
-    const token = await h.prepare("emergency");
+    const token = await h.prepare("cleaning");
     const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
     const r = await h.call("/api/approvals", { method: "POST", token, body: { holdId: held.data.hold.id, approved: true } });
     return { token, id: r.data.approval.id };

@@ -258,7 +258,7 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
   const CLIENT_SEARCH = `
     query BobClientSearch($term: String!) {
       clients(searchTerm: $term, first: 10) {
-        nodes { id emails { address } phones { number } properties { id address { street1 postalCode } } }
+        nodes { id emails { address } phones { id number smsAllowed } properties { id address { street1 postalCode } } }
       }
     }`;
 
@@ -280,6 +280,7 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     const addr = { street1: address.street1, city: address.city, province: "AZ", postalCode: address.zip, country: "US" };
     const existing = await findClient(contact);
     if (existing) {
+      await syncSmsPreference(existing, contact);
       const property = existing.properties.find(
         (p) => sameStreet(p.address?.street1, addr.street1) && digits(p.address?.postalCode).slice(0, 5) === addr.postalCode,
       );
@@ -310,6 +311,39 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     );
     userErrors(data.clientCreate, "clientCreate");
     return { clientId: data.clientCreate.client.id, propertyId: data.clientCreate.client.properties[0].id, newClient: true };
+  }
+
+  // Discover the versioned update input instead of replacing a client's entire phone list.
+  // Only the matching phone's SMS preference is changed; other contact methods are preserved.
+  const inputTypes = new Map();
+  async function inputFields(name) {
+    if (!inputTypes.has(name)) {
+      const result = await gql(`query BobInputFields($name: String!) { __type(name: $name) { inputFields { name type { name kind ofType { name kind ofType { name kind } } } } } }`, { name });
+      const fields = result.__type?.inputFields;
+      if (!fields) throw new Error('Jobber SMS preference input is unavailable.');
+      inputTypes.set(name, fields);
+    }
+    return inputTypes.get(name);
+  }
+  async function syncSmsPreference(client, contact) {
+    if (!contact.phone || typeof contact.smsConsent !== 'boolean') return;
+    const phone = client.phones.find((p) => digits(p.number).slice(-10) === digits(contact.phone).slice(-10));
+    if (phone?.smsAllowed === contact.smsConsent) return;
+    const action = phone ? 'edit' : 'add';
+    const entry = phone ? { id: phone.id, smsAllowed: contact.smsConsent } : { number: contact.phone, description: 'MOBILE', primary: !client.phones.length, smsAllowed: contact.smsConsent };
+    if (phone && !phone.id) throw new Error('Jobber did not return the phone identifier needed to save texting consent.');
+    const fields = await inputFields('ClientUpdateInput');
+    const flat = `phonesTo${action === 'edit' ? 'Edit' : 'Add'}`;
+    let input;
+    if (fields.some((f) => f.name === flat)) input = { [flat]: [entry] };
+    else {
+      const phones = fields.find((f) => f.name === 'phones');
+      let type = phones?.type; while (type?.ofType) type = type.ofType;
+      if (!type?.name || !(await inputFields(type.name)).some((f) => f.name === action)) throw new Error('Jobber does not expose a supported phone preference update.');
+      input = { phones: { [action]: [entry] } };
+    }
+    const result = await gql(`mutation BobClientSmsPreference($clientId: EncodedId!, $input: ClientUpdateInput!) { clientUpdate(clientId: $clientId, input: $input) { client { id } userErrors { message path } } }`, { clientId: client.id, input });
+    userErrors(result.clientUpdate, 'clientUpdate');
   }
 
   const local = (ms) => {

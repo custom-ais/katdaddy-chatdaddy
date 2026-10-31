@@ -117,8 +117,8 @@ Gas dryers: the Gas Appliance Safety Procedure is added automatically to cleanin
 ASSESSMENT: ${config.assessmentProcess}${priced ? ` Price ${money(config.assessmentPriceCents)}.` : ""} Repairs, parts and replacement are quoted separately.
 CLEANING + ASSESSMENT: when a customer wants cleaning and also has a vent concern, the assessment is 50% off when added to the cleaning${priced ? ` (${money(halfAssessmentCents(config))})` : ""}. The customer still picks the cleaning package. Repairs are quoted separately.
 No dryer installed → the visit is Express Vent Cleaning (vent only).
-Emergency Same-Day Clog Relief needs approval from the team before it's confirmed.
-Before booking, the customer confirms their phone with a text code, then picks a live time and approves the final summary.
+${config.phoneServiceReady === false ? 'Emergency and same-day appointments are temporarily unavailable. Never promise one. Offer a callback for a future visit; keep all fire/gas safety instructions.' : "Emergency Same-Day Clog Relief needs approval from the team before it's confirmed."}
+Before booking, ${config.requirePhoneVerification && config.smsConfirmations !== false ? 'the customer confirms their phone with a text code, then ' : ''}the customer picks a live time and approves the final summary. Always collect the customer’s texting preference for Jobber, even when outbound texts are paused.
 PREPARATION: ${config.preparation}
 
 APPROVED FAQ ANSWERS:
@@ -196,7 +196,7 @@ export function createAssistant({ env = process.env, fetchImpl = globalThis.fetc
   const model = env.GEMINI_MODEL || "gemini-3.8-flash";
   let useSchema = true, useThinking = true;
 
-  async function callGemini(system, prompt) {
+  async function callGemini(system, prompt, settings = {}) {
     const body = (schemaOn, thinkingOn) => ({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -204,15 +204,16 @@ export function createAssistant({ env = process.env, fetchImpl = globalThis.fetc
         responseMimeType: "application/json",
         ...(schemaOn ? { responseJsonSchema: schema } : {}),
         ...(thinkingOn ? { thinkingConfig: { thinkingLevel: "low" } } : {}),
-        maxOutputTokens: 1024,
+        maxOutputTokens: settings.maxOutputTokens || 1024,
+        ...(settings.temperature != null ? { temperature: settings.temperature } : {}),
       },
     });
     for (let attempt = 0; attempt < 3; attempt++) {
-      const r = await fetchImpl(`${ENDPOINT}/${encodeURIComponent(model)}:generateContent`, {
+      const r = await fetchImpl(`${ENDPOINT}/${encodeURIComponent(settings.model || model)}:generateContent`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify(body(useSchema, useThinking)),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(settings.timeoutMs || timeoutMs),
       });
       const data = await r.json().catch(() => ({}));
       if (r.ok) {
@@ -234,7 +235,7 @@ export function createAssistant({ env = process.env, fetchImpl = globalThis.fetc
     const kb = knowledge(config, faqs);
     const system = `${RULES}\n\nKNOWLEDGE:\n${kb}`;
     const prompt = `${context(session, options)}\n\nCUSTOMER'S LATEST MESSAGE:\n"""${String(text).slice(0, 2000)}"""\n\nReturn the JSON object only.`;
-    const out = generate ? await generate({ system, prompt, schema }) : await callGemini(system, prompt);
+    const out = generate ? await generate({ system, prompt, schema }) : await callGemini(system, prompt, config.aiSettings);
     return normalizeResult(out, { config, faqs, options, kb });
   }
 

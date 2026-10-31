@@ -25,6 +25,7 @@ export function candidateStarts({ config, durationMins, now, date = "", ticketCe
   const ov = config.overflow || {};
   for (let offset = 0; offset <= config.horizonDays; offset++) {
     const d = phoenixDate(new Date(now + offset * 86_400_000));
+    if (config.phoneServiceReady === false && d === today) continue;
     if (date && d !== date) continue;
     if (config.blockedDates.includes(d)) continue;
     const weekday = new Date(`${d}T12:00:00-07:00`).getUTCDay();

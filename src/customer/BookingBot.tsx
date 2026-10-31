@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { api, ApiError, saveText } from '../lib/api';
 import { money, phoenixDate } from '../../shared/domain.mjs';
+import { OnCallRequest } from './OnCallRequest';
 
 const TZ = 'America/Phoenix';
 type Msg = { role: 'user' | 'model'; text: string; info?: string[]; card?: any; local?: boolean };
@@ -566,6 +567,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const [messages, setMessages] = useState<Msg[]>([]), [options, setOptions] = useState<string[]>([]), [multi, setMulti] = useState(false), [suggested, setSuggested] = useState('');
   const [picked, setPicked] = useState<string[]>([]), [text, setText] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [ready, setReady] = useState(false);
   const [action, setAction] = useState(''), [receipt, setReceipt] = useState<any>(null), [pending, setPending] = useState(false), [requestId, setRequestId] = useState(''), [faqOpen, setFaqOpen] = useState(false);
+  const [slotRevision, setSlotRevision] = useState(0);
   const [contactStep, setContactStep] = useState<ContactStep | null>(null), [draft, setDraft] = useState<any>({}), [verification, setVerification] = useState<any>(null), [approval, setApproval] = useState<any>(null);
   const scroll = useRef<HTMLDivElement>(null), busyRef = useRef(false), mounted = useRef(true);
   // Address suggestions (Google, through BOB's server) while the customer types the street address.
@@ -635,7 +637,15 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     return () => clearTimeout(t);
   }, [messages, busy, action, receipt, requestId, contactStep, options.length]);
 
-  const say = (role: Msg['role'], t: string, extra: Partial<Msg> = {}) => setMessages((m) => [...m, { role, text: t, local: true, ...extra }]);
+  const archiveQueue = useRef(Promise.resolve());
+  const say = (role: Msg['role'], t: string, extra: Partial<Msg> = {}) => {
+    setMessages((m) => [...m, { role, text: t, local: true, ...extra }]);
+    const id = crypto.randomUUID();
+    if (token) archiveQueue.current = archiveQueue.current.then(async () => {
+      const save = () => api('/api/conversation/events', { method: 'POST', token, keepalive: true, body: { id, role: role === 'user' ? 'user' : 'assistant', text: t.slice(0, 4000) } });
+      try { await save(); } catch { await save(); }
+    }).catch(() => {});
+  };
   const onApprovalBooked = useCallback((r: any, p: boolean) => { setReceipt(r); setPending(p); setAction(''); }, []);
   const onApprovalEnded = useCallback((status: string) => {
     setApproval(null);
@@ -702,7 +712,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   // -- contact capture --------------------------------------------------------------------------
   // The address from the first question isn't asked again (the summary still shows it, and Edit details can change it).
   const stepsFor = (s: any): ContactStep[] => [
-    ...CONTACT_ORDER.filter((k) => !(k === 'address' && s?.serviceAddress?.street) && !(k === 'city' && s?.serviceAddress?.street && s?.serviceAddress?.city) && !(k === 'sms' && config?.textMessages === false)),
+    ...CONTACT_ORDER.filter((k) => !(k === 'address' && s?.serviceAddress?.street) && !(k === 'city' && s?.serviceAddress?.street && s?.serviceAddress?.city)),
     ...(s?.route === 'cleaning' && addOnLabels(s).length ? (['addons'] as ContactStep[]) : []),
   ];
   const askContact = (step: ContactStep, d: any = draft) => {
@@ -989,7 +999,8 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
 
             <div className="pl-9 sm:pl-10 space-y-4">
               {!receipt && !requestId && action === 'verify' && verification && <VerifyPhone token={token} verification={verification} onVerified={(s) => { setSession(s); setVerification(null); setAction('slots'); say('model', 'Thanks — your phone is confirmed. Here are the soonest openings for the full visit.'); }} onEdit={editDetails} onRequest={() => setAction('request')} />}
-              {!receipt && !requestId && action === 'slots' && <SlotPicker token={token} session={session} config={config} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
+              {!receipt && !requestId && action === 'slots' && <OnCallRequest token={token} texting={Boolean(config?.onCallTexting)} onChanged={() => setSlotRevision((v) => v + 1)} />}
+              {!receipt && !requestId && action === 'slots' && <SlotPicker key={slotRevision} token={token} session={session} config={config} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
               {!receipt && !requestId && action === 'approval' && approval && <ApprovalWait token={token} initial={approval} onBooked={onApprovalBooked} onEnded={onApprovalEnded} />}
               {!receipt && !requestId && action === 'request' && <RequestForm token={token} session={session} onDone={(id) => { setRequestId(id); setAction(''); setOptions([]); }} />}
               {requestId && (

@@ -10,8 +10,9 @@ import { SettingsPage } from './SettingsPage';
 import { NewAppointmentModal } from './NewAppointmentModal';
 import { ErrorNote, Field, ToastContainer, inputClass, primaryButton, secondaryButton } from './ui';
 import { BookingBot } from '../customer/BookingBot';
+import { BobActivity } from './BobActivity';
 
-const TABS: Tab[] = ['appointments', 'inbox', 'analytics', 'bot', 'settings'];
+const TABS: Tab[] = ['appointments', 'inbox', 'analytics', 'bot', 'activity', 'settings'];
 
 function SignIn({ setupRequired, onSignedIn }: { setupRequired: boolean; onSignedIn: () => void }) {
   const [setup, setSetup] = useState(setupRequired);
@@ -103,6 +104,7 @@ function Dashboard({ onSignedOut, focusApproval }: { onSignedOut: () => void; fo
         {tab === 'inbox' && <InboxPage focusApproval={focusApproval} />}
         {tab === 'analytics' && <AnalyticsDashboard onNavigateToAppointments={() => choose('appointments')} />}
         {tab === 'bot' && <BotPreview />}
+        {tab === 'activity' && <BobActivity />}
         {tab === 'settings' && <SettingsPage />}
       </main>
       {creating && <NewAppointmentModal onClose={() => setCreating(false)} />}
