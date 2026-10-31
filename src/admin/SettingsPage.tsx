@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Technician } from './DashboardContext';
-import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, MapPin, Plus, Route, Save, ShieldCheck, Tag, Trash2, Users } from 'lucide-react';
+import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, MapPin, Plus, RotateCcw, Route, Save, ShieldCheck, Tag, Trash2, Users } from 'lucide-react';
 import { api, saveText } from '../lib/api';
 import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Modal, Section, Toggle, inputClass, primaryButton, secondaryButton, subtleButton } from './ui';
 import { money } from '../../shared/domain.mjs';
 import { PACKAGES } from '../../shared/catalog.mjs';
+import { COVERAGE_IN, COVERAGE_TRAVEL } from '../../shared/coverage.mjs';
 
 const int = (v: string) => (v === '' ? 0 : Math.round(Number(v)));
 const cents = (v: string) => Math.round(Number(v || 0) * 100);
@@ -257,8 +258,12 @@ export function SettingsPage() {
   const updateService = (id: string, patch: any) => update('services', c.services.map((x: any) => (x.id === id ? { ...x, ...patch } : x)));
   const categories = useMemo(() => [...new Set(c.services.map((x: any) => x.category))] as string[], [c.services]);
   const families = useMemo(() => [...new Set(c.services.map((x: any) => x.family))].filter((f) => (PACKAGES as any)[f as string]) as string[], [c.services]);
-  const westValley: string[] = data.westValleyZips || [];
-  const missingWestValley = westValley.filter((z) => !c.serviceZips.includes(z));
+  const same = (a: string[], b: string[]) => a.length === b.length && [...a].sort().join() === [...b].sort().join();
+  const offCoverage = !same(c.serviceZips, COVERAGE_IN) || !same(c.travelZips || [], COVERAGE_TRAVEL);
+  const restoreCoverage = () => {
+    update('serviceZips', [...COVERAGE_IN]); update('travelZips', [...COVERAGE_TRAVEL]);
+    setText({ ...text, zips: COVERAGE_IN.join(', '), travel: COVERAGE_TRAVEL.join(', ') });
+  };
 
   const changed = [dirty && 'settings', techDirty && 'technicians'].filter(Boolean) as string[];
   // Technicians first, so a newly added tech exists before the settings that may name them.
@@ -395,9 +400,9 @@ export function SettingsPage() {
         <Field label="Approved ZIP codes" hint={`${c.serviceZips.length} ZIP code${c.serviceZips.length === 1 ? '' : 's'}`}>
           <textarea rows={3} className={inputClass} value={text.zips} placeholder="85326, 85338, 85374…" onChange={(e) => { setText({ ...text, zips: e.target.value }); update('serviceZips', list(e.target.value)); }} />
         </Field>
-        {missingWestValley.length > 0 && (
-          <button className={secondaryButton} onClick={() => { const next = [...new Set([...c.serviceZips, ...westValley])]; update('serviceZips', next); setText({ ...text, zips: next.join(', ') }); }}>
-            <Plus size={15} />Add the {missingWestValley.length} West Valley ZIP{missingWestValley.length === 1 ? '' : 's'} from the territory map
+        {offCoverage && (
+          <button className={secondaryButton} onClick={restoreCoverage}>
+            <RotateCcw size={15} />Restore the coverage list ({COVERAGE_IN.length} in the area, {COVERAGE_TRAVEL.length} with a travel charge)
           </button>
         )}
         <div className="grid grid-cols-1 sm:grid-cols-[1fr_200px] gap-3">
