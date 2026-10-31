@@ -118,4 +118,8 @@ test("settings validation covers the new geo rules", () => {
   assert.ok(validateConfig({ ...config, maxDriveBetweenJobsMin: 0 }).length);
   assert.ok(validateConfig({ ...config, travelFeeTiers: [{ upToMin: 30 }] }).length);
   assert.ok(validateConfig({ ...config, scheduleSource: "Google" }).length);
+  // Same-day: an impossible hour or too much notice gets a message naming the field.
+  assert.match(validateConfig({ ...config, sameDay: { ...config.sameDay, cutoffHour: 36 } }).join(" "), /Book before/);
+  assert.match(validateConfig({ ...config, sameDay: { ...config.sameDay, minNoticeHours: 13 } }).join(" "), /notice must be 0 to 12/);
+  assert.deepEqual(validateConfig({ ...config, sameDay: { ...config.sameDay, cutoffHour: 12, minNoticeHours: 3 } }), []);
 });

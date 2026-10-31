@@ -14,12 +14,33 @@ const int = (v: string) => (v === '' ? 0 : Math.round(Number(v)));
 const cents = (v: string) => Math.round(Number(v || 0) * 100);
 const list = (v: string) => v.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
 
-function Num({ label, value, onChange, hint, step = 1, min = 0, suffix }: { label: string; value: number; onChange: (n: number) => void; hint?: React.ReactNode; step?: number; min?: number; suffix?: string }) {
+function Num({ label, value, onChange, hint, step = 1, min = 0, max, suffix, disabled }: { label: string; value: number; onChange: (n: number) => void; hint?: React.ReactNode; step?: number; min?: number; max?: number; suffix?: string; disabled?: boolean }) {
+  // Typing is free; leaving the field snaps an out-of-range number back inside the allowed range.
+  const clamp = (n: number) => Math.min(max ?? Infinity, Math.max(min, Number.isFinite(n) ? n : min));
   return (
     <Field label={suffix ? `${label} (${suffix})` : label} hint={hint}>
-      <input className={inputClass} type="number" inputMode="numeric" step={step} min={min} value={Number.isFinite(value) ? value : 0} onChange={(e) => onChange(int(e.target.value))} />
+      <input className={inputClass} type="number" inputMode="numeric" step={step} min={min} max={max} disabled={disabled} value={Number.isFinite(value) ? value : 0} onChange={(e) => onChange(int(e.target.value))} onBlur={() => { const n = clamp(value); if (n !== value) onChange(n); }} />
     </Field>
   );
+}
+
+// "13:00" or 13 → "1 PM", "13:30" → "1:30 PM", 12 → "noon".
+function clock(t: string | number) {
+  const [h, m = 0] = typeof t === 'number' ? [t, 0] : t.split(':').map(Number);
+  if (h === 12 && !m) return 'noon';
+  const hour = h % 12 || 12;
+  return `${hour}${m ? `:${String(m).padStart(2, '0')}` : ''} ${h < 12 ? 'AM' : 'PM'}`;
+}
+
+// One plain-words example of what the two same-day numbers do together, using the real start times.
+function sameDayExample(c: any) {
+  const { cutoffHour, minNoticeHours } = c.sameDay;
+  if (minNoticeHours >= c.leadHours) return `Notice is as long as your regular booking notice (${c.leadHours} hours), so same-day adds nothing. Use fewer hours.`;
+  const bookedAt = Math.min(8, cutoffHour - 1);
+  const earliest = bookedAt + minNoticeHours;
+  const first = (c.weekdayStarts as string[]).find((t) => Number(t.split(':')[0]) + Number(t.split(':')[1] || 0) / 60 >= earliest);
+  const offer = first ? `the first same-day time they can get is ${clock(first)}` : 'no start times are left today';
+  return `Example: a customer booking at ${clock(bookedAt)} on a weekday — ${offer}. From ${clock(cutoffHour)} on, same-day times stop showing.`;
 }
 function Dollars({ label, value, onChange, hint, disabled }: { label: string; value: number; onChange: (c: number) => void; hint?: React.ReactNode; disabled?: boolean }) {
   return (
@@ -341,12 +362,22 @@ export function SettingsPage() {
         <Toggle checked={c.nearbyFirst} onChange={(v) => update('nearbyFirst', v)} label="Offer times next to jobs already booked nearby first" />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="rounded-2xl border border-slate-200 p-4 space-y-2">
-            <Toggle checked={c.sameDay.enabled} onChange={(v) => nested('sameDay', { enabled: v })} label="Same-day regular visits" />
-            <div className="grid grid-cols-2 gap-3">
-              <Num label="Book before" suffix="hour, 24h" value={c.sameDay.cutoffHour} onChange={(n) => nested('sameDay', { cutoffHour: n })} />
-              <Num label="Notice" suffix="hours" value={c.sameDay.minNoticeHours} onChange={(n) => nested('sameDay', { minNoticeHours: n })} />
+            <Toggle
+              checked={c.sameDay.enabled}
+              onChange={(v) => nested('sameDay', { enabled: v })}
+              label="Same-day regular visits"
+              detail={c.sameDay.enabled ? 'Customers can book a visit for later today, using the rules below.' : `Off: customers only see times at least ${c.leadHours} hours away. Turn on to use the settings below.`}
+            />
+            <div className={`grid grid-cols-2 gap-3 ${c.sameDay.enabled ? '' : 'opacity-60'}`}>
+              <Num label="Book before" suffix="hour, 24h" min={6} max={20} disabled={!c.sameDay.enabled} value={c.sameDay.cutoffHour} onChange={(n) => nested('sameDay', { cutoffHour: n })} hint="Same-day stops showing at this hour. 6–20; 12 = noon, 14 = 2 PM." />
+              <Num label="Notice" suffix="hours" min={0} max={12} disabled={!c.sameDay.enabled} value={c.sameDay.minNoticeHours} onChange={(n) => nested('sameDay', { minNoticeHours: n })} hint="Gap between booking and the visit starting. 0–12; 2–4 is typical." />
             </div>
-            <Toggle checked={c.sameDay.requireNearby} onChange={(v) => nested('sameDay', { requireNearby: v })} label="Only next to a job already booked" />
+            {c.sameDay.enabled && (
+              <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 leading-snug">
+                {sameDayExample(c)}{c.sameDay.requireNearby ? ' Only offered when a job is already booked nearby.' : ''}
+              </p>
+            )}
+            <Toggle checked={c.sameDay.requireNearby} disabled={!c.sameDay.enabled} onChange={(v) => nested('sameDay', { requireNearby: v })} label="Only next to a job already booked" />
           </div>
           <div className="rounded-2xl border border-slate-200 p-4 space-y-2">
             <Toggle checked={c.overflow.enabled} onChange={(v) => nested('overflow', { enabled: v })} label="5 PM overflow visits" detail="One per day, never a normal slot, always approved." />

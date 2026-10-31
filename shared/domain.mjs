@@ -207,7 +207,9 @@ export function validateConfig(c) {
  const a=c.approver||{};
  if(typeof a.name!=='string'||a.name.length>100||typeof a.phone!=='string'||(a.phone&&!normalizePhone(a.phone))||typeof a.email!=='string'||(a.email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.email)))errors.push('Enter the approver\'s name, a valid phone, and a valid email (or leave blank).');
  const sd=c.sameDay||{};
- if(typeof sd.enabled!=='boolean'||!Number.isInteger(sd.cutoffHour)||sd.cutoffHour<6||sd.cutoffHour>20||!Number.isInteger(sd.minNoticeHours)||sd.minNoticeHours<0||sd.minNoticeHours>12||typeof sd.requireNearby!=='boolean')errors.push('Check the same-day settings.');
+ if(typeof sd.enabled!=='boolean'||typeof sd.requireNearby!=='boolean')errors.push('Check the same-day settings.');
+ if(!Number.isInteger(sd.cutoffHour)||sd.cutoffHour<6||sd.cutoffHour>20)errors.push('Same-day "Book before" must be an hour from 6 to 20 on a 24-hour clock (12 = noon, 14 = 2 PM).');
+ if(!Number.isInteger(sd.minNoticeHours)||sd.minNoticeHours<0||sd.minNoticeHours>12)errors.push('Same-day notice must be 0 to 12 hours.');
  const ov=c.overflow||{};
  if(typeof ov.enabled!=='boolean'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(ov.start||'')||!Number.isInteger(ov.maxDurationMins)||ov.maxDurationMins<15||ov.maxDurationMins>240||!Number.isInteger(ov.minTicketCents)||ov.minTicketCents<0||ov.minTicketCents>1000000||typeof ov.requireNearby!=='boolean')errors.push('Check the 5 PM overflow settings.');
  if(!Number.isInteger(c.dailyRevenueTargetCents)||c.dailyRevenueTargetCents<0||c.dailyRevenueTargetCents>10000000)errors.push('Invalid daily revenue target.');
