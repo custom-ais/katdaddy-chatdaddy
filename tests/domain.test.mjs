@@ -174,3 +174,15 @@ test('the no-dryer Premium details leave out the dryer parts and offer no tier c
   assert.match(r.reply, /time for the lint screen and dryer cavity goes into the vent line/);
   assert.ok(!r.options.includes('Compare Packages'));
 });
+
+// ---- the office's coverage list ---------------------------------------------------------------
+test('coverage list: 850 and 853 are in the area, 852 gets the travel charge, 851 and anything unlisted are not served', async () => {
+  const { COVERAGE_IN, COVERAGE_TRAVEL, COVERAGE_NO_GO } = await import('../shared/coverage.mjs');
+  const { withConfigDefaults, areaFor } = await import('../shared/domain.mjs');
+  assert.deepEqual([COVERAGE_IN.length, COVERAGE_TRAVEL.length, COVERAGE_NO_GO.length], [76, 42, 9]);
+  assert.ok(COVERAGE_IN.every((z) => /^85[03]/.test(z)) && COVERAGE_TRAVEL.every((z) => z.startsWith('852')) && COVERAGE_NO_GO.every((z) => z.startsWith('851')));
+  const before = { ...DEFAULT_CONFIG, serviceZips: ['85326'], travelZips: ['85033'] }; delete before.coverageVersion;
+  const c = withConfigDefaults(before);
+  assert.deepEqual(['85326', '85033', '85375', '85201', '85298', '85140', '85118', '85701'].map((z) => areaFor(z, c)), ['in', 'in', 'in', 'travel', 'travel', 'out', 'out', 'out']);
+  assert.deepEqual(withConfigDefaults({ ...c, serviceZips: ['85326'] }).serviceZips, ['85326'], 'edits saved after the switch stand');
+});

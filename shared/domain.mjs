@@ -1,5 +1,6 @@
 import {SERVICE_CATALOG,RETIRED_FAMILIES,effectiveFamily,lineForService,addOnLines} from './catalog.mjs';
 import {difficultyMinutes} from './airflow.mjs';
+import {COVERAGE_VERSION,COVERAGE_IN,COVERAGE_TRAVEL} from './coverage.mjs';
 // Cleaning packages get extra time when the answers point to a restricted or severe vent.
 const DIFFICULTY_FAMILIES=new Set(['premium','ultimate','express','postservice']);
 export const TIME_ZONE = 'America/Phoenix';
@@ -59,10 +60,11 @@ export const DEFAULT_CONFIG = {
   saturdayStarts: ['10:00','12:00'], saturdayClose: '14:00',
   blockedDates: [],
   serviceZips: [],
-  // Just outside the service area: BOB says so, mentions the travel charge, and lets the customer
-  // continue or find someone more local. Default: the Metro Phoenix ZIPs (territory zones 10–12).
-  // Every other ZIP is told politely that DVS doesn't service the area.
-  travelZips: ['85003','85004','85006','85007','85008','85009','85012','85013','85015','85016','85017','85018','85019','85020','85021','85022','85023','85024','85027','85028','85029','85031','85032','85033','85034','85035','85037','85039','85041','85043','85044','85045','85048','85050','85051','85053','85054','85083','85085','85086','85087'],
+  // Just outside the service area (the 852 ZIPs on the office's coverage list): BOB says so,
+  // mentions the travel charge, and lets the customer continue or find someone more local.
+  // Every other ZIP outside serviceZips is told politely that DVS doesn't service the area.
+  travelZips: COVERAGE_TRAVEL,
+  coverageVersion: COVERAGE_VERSION,
   travelZoneFeeCents: 0,
   activeTechnicianIds: ['tech-ryan'],
   preparation: 'Please make the laundry area accessible and secure pets before the visit. Do not move or disconnect the dryer yourself. Let the team know about access restrictions.',
@@ -126,6 +128,8 @@ export function bookingQuote(route,config=DEFAULT_CONFIG,ctx={}) {
 // Saved settings win, but catalog items added in a later release (like new add-ons) are filled in.
 export const withConfigDefaults = saved => {
  const c={...DEFAULT_CONFIG,...(saved||{})};
+ // Settings saved before the office's coverage list switch to it once; later edits in Settings stand.
+ if((saved?.coverageVersion||0)<COVERAGE_VERSION){c.serviceZips=[...COVERAGE_IN];c.travelZips=[...COVERAGE_TRAVEL];c.coverageVersion=COVERAGE_VERSION;}
  if(Array.isArray(saved?.services)){const ids=new Set(saved.services.map(x=>x.id));c.services=[...saved.services.map(x=>RETIRED_FAMILIES.has(x.family)?{...x,active:false}:x),...SERVICE_CATALOG.filter(x=>!ids.has(x.id))];}
  return c;
 };
@@ -167,6 +171,7 @@ export function validateConfig(c) {
  for(const key of ['weekdayClose','saturdayClose'])if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(c[key]||''))errors.push(`Invalid ${key}.`);
  if(!Array.isArray(c.serviceZips)||c.serviceZips.length>1000||c.serviceZips.some(z=>!/^\d{5}$/.test(z)))errors.push('Coverage must contain five-digit ZIP codes.');
  if(!Array.isArray(c.travelZips)||c.travelZips.length>1000||c.travelZips.some(z=>!/^\d{5}$/.test(z)))errors.push('Just-outside ZIPs must be five-digit ZIP codes.');
+ if(c.coverageVersion!=null&&!Number.isInteger(c.coverageVersion))errors.push('Invalid coverageVersion.');
  if(!Number.isInteger(c.travelZoneFeeCents)||c.travelZoneFeeCents<0||c.travelZoneFeeCents>50000)errors.push('The just-outside travel charge must be $0–$500.');
  if(!Array.isArray(c.blockedDates)||c.blockedDates.length>1000||c.blockedDates.some(d=>!/^\d{4}-\d{2}-\d{2}$/.test(d)||Number.isNaN(Date.parse(d))))errors.push('Invalid blocked dates.');
  if(!Array.isArray(c.activeTechnicianIds)||!c.activeTechnicianIds.every(id=>typeof id==='string'&&id.length<80))errors.push('Invalid technician selection.');

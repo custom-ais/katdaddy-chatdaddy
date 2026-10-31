@@ -34,8 +34,9 @@ export const PLACES = {
   "900 far ave": { lat: 33.64, lng: -112.36 }, // Surprise, ~21 miles
   "1 base way": { lat: 33.45, lng: -112.45 }, // the truck's base
   "50 edge blvd": { lat: 33.22, lng: -112.95 }, // far west Buckeye
-  "4515 n 59th ave": { lat: 33.5, lng: -112.19 }, // Phoenix 85033: just outside the service area
-  "123 e main st": { lat: 33.41, lng: -111.83 }, // Mesa 85201: not served
+  "4515 n 59th ave": { lat: 33.5, lng: -112.19 }, // Phoenix 85033 (850: in the coverage list)
+  "123 e main st": { lat: 33.41, lng: -111.83 }, // Mesa 85201 (852: travel charge)
+  "1 desert sky rd": { lat: 33.25, lng: -111.49 }, // San Tan Valley 85140 (851: no-go)
 };
 
 export function fakeGeo() {
