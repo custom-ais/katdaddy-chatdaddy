@@ -54,7 +54,7 @@ function SignIn({ setupRequired, onSignedIn }: { setupRequired: boolean; onSigne
 function BotPreview() {
   const { data } = useDashboard();
   const c = data.config, i = data.integrations || {};
-  const live = c.bookingEnabled && (c.scheduleSource !== 'Jobber' || i.jobber?.connected) && (!(c.requirePhoneVerification && c.smsConfirmations) || i.leadConnector?.configured);
+  const live = c.bookingEnabled && (c.scheduleSource !== 'Jobber' || i.jobber?.connected) && (!(c.requirePhoneVerification && c.smsConfirmations) || !!i.messaging?.code);
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 animate-in">
       <div className="min-w-0"><BookingBot preview /></div>

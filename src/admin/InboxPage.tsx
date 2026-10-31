@@ -67,7 +67,7 @@ function ApprovalModal({ approval: a, onClose }: { approval: any; onClose: () =>
       </div>
       {a.concerns?.length > 0 && <p className="text-xs text-slate-600"><b>Customer said:</b> {a.concerns.join(' · ')}</p>}
       {a.notes && <p className="text-xs text-slate-600"><b>Notes:</b> {a.notes}</p>}
-      {a.notified && <p className="text-[11px] text-slate-400">Approver text {a.notified.sms} · email {a.notified.email}{a.notified.reason === 'not_configured' ? ' (add the approver and LeadConnector in Settings)' : ''}</p>}
+      {a.notified && <p className="text-[11px] text-slate-400">Approver text {a.notified.sms} · email {a.notified.email}{a.notified.reason === 'not_configured' ? ' (add the approver, and Twilio or LeadConnector, in Settings)' : ''}</p>}
       {pending ? (
         <div className="space-y-3 pt-2 border-t border-slate-100">
           <Field label="Your name" hint={data.config.approver?.name ? `The named approver is ${data.config.approver.name}. Your name is saved with the decision.` : 'Saved with the decision.'}>

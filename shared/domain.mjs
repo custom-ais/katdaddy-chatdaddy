@@ -27,17 +27,25 @@ export const DEFAULT_CONFIG = {
   travelFeeTiers: [],
   // Route clustering: offer times next to jobs already booked nearby first.
   nearbyFirst: true,
-  // LeadConnector confirmations.
+  // Customer confirmations (texts only with consent).
   smsConfirmations: true,
   emailConfirmations: true,
+  // How texts and emails go out: 'auto' = Twilio for what Twilio is set up for, LeadConnector
+  // for the rest; 'twilio' or 'leadconnector' = only that one. LeadConnector still keeps contacts.
+  messagingProvider: 'auto',
+  // Day-before reminders, sent once a day by the cron in vercel.json. Off by default because
+  // Jobber can send its own visit reminders; turn one of them on, not both.
+  reminders: { enabled: false },
+  // Office alerts by text and/or email. Nothing is sent until a phone or an email is filled in.
+  officeAlerts: { phone: '', email: '', bookings: true, requests: true, problems: true, replies: true },
   // Service catalog (packages, home versions, add-ons). Edited in admin → Services & prices.
   services: SERVICE_CATALOG,
   // Emergency Same-Day Clog Relief can be booked with less notice than regular visits.
   emergencyLeadHours: 2,
-  // Rulebook (Oct 20): a LeadConnector text code proves the customer controls the phone
+  // Rulebook (Oct 20): a text code (Twilio or LeadConnector) proves the customer controls the phone
   // before an appointment is created.
   requirePhoneVerification: true,
-  // Services that need a named approver's yes (sent through LeadConnector) before booking.
+  // Services that need a named approver's yes (texted and emailed to them) before booking.
   approvalServices: ['emergency'],
   approver: { name: '', phone: '', email: '' },
   // Smart chat: Gemini reads free-typed messages. Off = button-and-keyword chat only.
@@ -126,6 +134,7 @@ export function bookingQuote(route,config=DEFAULT_CONFIG,ctx={}) {
 // Saved settings win, but catalog items added in a later release (like new add-ons) are filled in.
 export const withConfigDefaults = saved => {
  const c={...DEFAULT_CONFIG,...(saved||{})};
+ for(const k of ['reminders','officeAlerts'])c[k]={...DEFAULT_CONFIG[k],...(saved?.[k]||{})};
  if(Array.isArray(saved?.services)){const ids=new Set(saved.services.map(x=>x.id));c.services=[...saved.services.map(x=>RETIRED_FAMILIES.has(x.family)?{...x,active:false}:x),...SERVICE_CATALOG.filter(x=>!ids.has(x.id))];}
  return c;
 };
@@ -189,6 +198,10 @@ export function validateConfig(c) {
  if(typeof sd.enabled!=='boolean'||!Number.isInteger(sd.cutoffHour)||sd.cutoffHour<6||sd.cutoffHour>20||!Number.isInteger(sd.minNoticeHours)||sd.minNoticeHours<0||sd.minNoticeHours>12||typeof sd.requireNearby!=='boolean')errors.push('Check the same-day settings.');
  const ov=c.overflow||{};
  if(typeof ov.enabled!=='boolean'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(ov.start||'')||!Number.isInteger(ov.maxDurationMins)||ov.maxDurationMins<15||ov.maxDurationMins>240||!Number.isInteger(ov.minTicketCents)||ov.minTicketCents<0||ov.minTicketCents>1000000||typeof ov.requireNearby!=='boolean')errors.push('Check the 5 PM overflow settings.');
+ if(!['auto','twilio','leadconnector'].includes(c.messagingProvider))errors.push('Choose how texts and emails are sent.');
+ if(typeof c.reminders?.enabled!=='boolean')errors.push('Check the reminder setting.');
+ const o=c.officeAlerts||{};
+ if(typeof o.phone!=='string'||(o.phone&&!normalizePhone(o.phone))||typeof o.email!=='string'||o.email.length>254||(o.email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(o.email))||['bookings','requests','problems','replies'].some(k=>typeof o[k]!=='boolean'))errors.push('Enter a valid office alert phone and email (or leave them blank).');
  if(!Number.isInteger(c.dailyRevenueTargetCents)||c.dailyRevenueTargetCents<0||c.dailyRevenueTargetCents>10000000)errors.push('Invalid daily revenue target.');
  if(c.bookingEnabled&&(!c.scheduleAcknowledged||!c.pricesAcknowledged||!c.serviceZips?.length||!c.activeTechnicianIds?.length))errors.push('Review prices, acknowledge BOB as the scheduling source, select a technician, and enter approved service ZIP codes before enabling bookings.');
  return errors;

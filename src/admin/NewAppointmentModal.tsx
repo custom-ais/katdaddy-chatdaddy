@@ -97,7 +97,7 @@ export function NewAppointmentModal({ onClose }: { onClose: () => void }) {
           </div>
           <Field label="Gate codes and notes"><textarea rows={2} className={inputClass} value={f.notes} onChange={(e) => set({ notes: e.target.value })} /></Field>
           <Toggle checked={f.smsConsent} onChange={(v) => set({ smsConsent: v })} label="Customer agreed to appointment texts" />
-          <Toggle checked={f.sendConfirmation} onChange={(v) => set({ sendConfirmation: v })} label="Send the LeadConnector confirmation" detail={data.integrations?.leadConnector?.configured ? 'Text only with consent; email when given.' : 'LeadConnector isn’t connected, so nothing will be sent.'} />
+          <Toggle checked={f.sendConfirmation} onChange={(v) => set({ sendConfirmation: v })} label="Send the confirmation text and email" detail={data.integrations?.messaging?.sms || data.integrations?.messaging?.email ? 'Text only with consent; email when given.' : 'Neither Twilio nor LeadConnector is set up, so nothing will be sent.'} />
         </div>
 
         <div className="bg-orange-50 p-4 rounded-2xl flex items-center justify-between border border-orange-200">

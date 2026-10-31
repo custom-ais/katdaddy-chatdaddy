@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { Technician } from './DashboardContext';
-import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, MapPin, Plus, Route, Save, ShieldCheck, Tag, Trash2, Users } from 'lucide-react';
+import type { MessageLog, Technician } from './DashboardContext';
+import { ArrowDownLeft, BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, Mail, MapPin, MessageSquare, Plus, Route, Save, Send, ShieldCheck, Tag, Trash2, Users } from 'lucide-react';
 import { api, saveText } from '../lib/api';
 import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Modal, Section, Toggle, inputClass, primaryButton, secondaryButton, subtleButton } from './ui';
@@ -33,6 +33,22 @@ function Dot({ ok }: { ok: boolean }) {
 
 const when = (ms: number) => new Date(ms).toLocaleString('en-US', { timeZone: 'America/Phoenix', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
+/** Who carries each kind of message, in plain words. */
+const PROVIDER_NAMES: Record<string, string> = { twilio: 'Twilio', 'twilio-verify': 'Twilio Verify', leadconnector: 'LeadConnector' };
+const carrier = (p?: string | null) => (p ? PROVIDER_NAMES[p] || p : 'nothing yet');
+
+function twilioDetail(t: any) {
+  if (!t?.sms && !t?.verify && !t?.email) {
+    return <>Not set up. In Vercel add <b>TWILIO_ACCOUNT_SID</b>, <b>TWILIO_AUTH_TOKEN</b> and <b>TWILIO_MESSAGING_SERVICE_SID</b> for texts, <b>TWILIO_VERIFY_SERVICE_SID</b> for phone codes, and <b>SENDGRID_API_KEY</b> + <b>SENDGRID_FROM_EMAIL</b> for email.</>;
+  }
+  const parts = [
+    t.sms ? `Texts from ${t.sender === 'messaging-service' ? 'the Messaging Service' : `number ${t.from}`}` : 'Texts: not set up',
+    t.verify ? 'phone codes through Verify' : t.sms ? 'phone codes texted by BOB' : 'phone codes: not set up',
+    t.email ? `email from ${t.emailFrom}` : 'email: not set up (SENDGRID_API_KEY, SENDGRID_FROM_EMAIL)',
+  ];
+  return <>{parts.join(' · ')}.{t.sms && !t.webhooks && <span className="block mt-1 font-semibold text-amber-800">Add TWILIO_AUTH_TOKEN to get delivery receipts and customers' replies.</span>}</>;
+}
+
 function Connections() {
   const { data, mutate, showToast } = useDashboard();
   const i = data.integrations || {};
@@ -46,8 +62,13 @@ function Connections() {
     ['Jobber', !!i.jobber?.connected,
       i.jobber?.connected ? 'Reading the live calendar and creating scheduled jobs with visits.' : i.jobber?.appConfigured ? 'Not connected yet. Online booking stays off until it is.' : 'Add JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET and JOBBER_REDIRECT_URI in Vercel first.',
       i.jobber?.appConfigured && (i.jobber?.connected ? <button className={subtleButton} onClick={disconnect} disabled={busy}>Disconnect</button> : <a className={primaryButton} href="/api/admin/jobber/connect">Connect Jobber</a>)],
+    ['Twilio', (!!i.twilio?.sms || !!i.twilio?.email) && !i.twilio?.issue,
+      <>{twilioDetail(i.twilio)}
+        {i.twilio?.issue && <span className="block mt-1 font-semibold text-amber-800">{when(i.twilio.issue.at)}: {i.twilio.issue.message}</span>}</>],
     ['LeadConnector', !!i.leadConnector?.configured && !i.leadConnector?.issue,
-      <>{i.leadConnector?.configured ? 'Sends verification codes, confirmations and approval texts, and saves contacts and requests.' : 'Add LC_PRIVATE_TOKEN and LC_LOCATION_ID in Vercel. Phone verification needs it, so online booking waits for it.'}
+      <>{i.leadConnector?.configured
+        ? `Saves contacts, tags and notes for bookings and requests${['sms', 'email', 'code'].some((k) => i.messaging?.[k] === 'leadconnector') ? `, and sends ${[i.messaging?.sms === 'leadconnector' && 'texts', i.messaging?.email === 'leadconnector' && 'emails', i.messaging?.code === 'leadconnector' && 'phone codes'].filter(Boolean).join(', ')}` : ''}.`
+        : 'Add LC_PRIVATE_TOKEN and LC_LOCATION_ID in Vercel to save contacts in LeadConnector.'}
         {i.leadConnector?.configured && ['jwt', 'other'].includes(i.leadConnector?.tokenKind) && <span className="block mt-1 font-semibold text-amber-800">LC_PRIVATE_TOKEN doesn't look like a Private Integration token (those start with “pit-”).{i.leadConnector.tokenKind === 'jwt' ? ' It looks like an older API key or app token.' : ''} Copy the token from the sub-account's Settings → Private Integrations.</span>}
         {i.leadConnector?.issue && <span className="block mt-1 font-semibold text-amber-800">{when(i.leadConnector.issue.at)}: {i.leadConnector.issue.message}</span>}</>],
     ['Smart chat', !!i.assistant?.configured, i.assistant?.configured ? `Gemini (${i.assistant.model}) reads typed messages. It can't set prices or book — BOB's rules do that.` : 'Add GEMINI_API_KEY in Vercel. Until then BOB uses buttons and keyword matching.'],
@@ -66,6 +87,144 @@ function Connections() {
             {action}
           </div>
         ))}
+      </div>
+    </Section>
+  );
+}
+
+const KIND_LABELS: Record<string, string> = {
+  confirmation: 'Confirmation', reminder: 'Reminder', code: 'Phone code', approval: 'Approval request', office: 'Office alert',
+  test: 'Test', reply: 'Reply', opt_out: 'Opted out', message: 'Message',
+};
+const STATUS_TONE = (s: string) =>
+  ['delivered', 'read', 'received'].includes(s) ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+    : ['failed', 'undelivered'].includes(s) ? 'bg-rose-50 text-rose-800 border-rose-200'
+      : 'bg-slate-50 text-slate-600 border-slate-200';
+const SKIP_REASONS: Record<string, string> = {
+  check_jobber: 'confirmed by hand, so BOB can’t check Jobber', jobber_unreachable: 'Jobber didn’t answer', not_in_jobber: 'no longer in Jobber',
+  moved_in_jobber: 'moved in Jobber', just_booked: 'booked in the last 12 hours', no_consent_or_email: 'no text consent and no email', send_failed: 'sending failed',
+};
+
+const prettyPhone = (v?: string) => {
+  const d = String(v || '').replace(/\D/g, '').slice(-10);
+  return /^\+?1?\d{10}$/.test(String(v || '').replace(/[^\d+]/g, '')) && d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : v || '';
+};
+/** Twilio's words for "on its way", in the office's words. */
+const statusLabel = (m: MessageLog) => (['queued', 'accepted', 'sending', 'scheduled'].includes(m.status) ? 'sending' : m.status === 'pending' ? 'sent' : m.status);
+
+function MessageRow({ m }: { m: MessageLog }) {
+  const who = prettyPhone(m.direction === 'in' ? m.from : m.to);
+  return (
+    <li className="flex items-start gap-3 py-2.5">
+      <span className="mt-0.5 text-slate-400">{m.direction === 'in' ? <ArrowDownLeft size={16} /> : m.channel === 'email' ? <Mail size={16} /> : <MessageSquare size={16} />}</span>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-bold text-slate-800 truncate">{KIND_LABELS[m.kind] || m.kind}{m.ref ? <span className="font-mono text-xs text-slate-500"> · {m.ref}</span> : null}</p>
+        <p className="text-xs text-slate-500 truncate">{m.direction === 'in' ? 'From' : 'To'} {who} · {carrier(m.provider)} · {when(m.at)}</p>
+        {m.preview && <p className="text-xs text-slate-700 mt-0.5 line-clamp-2">“{m.preview}”</p>}
+        {m.error && <p className="text-xs text-rose-700 mt-0.5 line-clamp-2">{m.error}</p>}
+      </div>
+      <span className={`text-[11px] font-extrabold px-2 py-0.5 rounded-full border shrink-0 ${STATUS_TONE(m.status)}`}>{statusLabel(m)}</span>
+    </li>
+  );
+}
+
+/** How texts and emails go out, office alerts, reminders, a test send, and the recent log. */
+function Messaging({ c, update, nested }: { c: any; update: (k: string, v: any) => void; nested: (k: any, patch: any) => void }) {
+  const { data, mutate, showToast } = useDashboard();
+  const i = data.integrations || {}, routes = i.messaging || {};
+  const [channel, setChannel] = useState<'sms' | 'email'>('sms');
+  const [to, setTo] = useState(''), [busy, setBusy] = useState(''), [result, setResult] = useState<any>(null);
+  const [showAll, setShowAll] = useState(false);
+  const log = data.messages || [];
+  const last = data.reminderRun;
+  const o = c.officeAlerts || {};
+  const sendTest = async () => {
+    setBusy('test'); setResult(null);
+    try { setResult((await mutate('/api/admin/messaging/test', { channel, to }, 'POST', '')).result); } catch (e) { setResult({ status: 'failed', error: (e as Error).message }); } finally { setBusy(''); }
+  };
+  const runReminders = async () => {
+    if (!confirm('Send reminders now to customers with a confirmed visit tomorrow? Anyone already reminded is skipped.')) return;
+    setBusy('reminders');
+    try {
+      const r = (await mutate('/api/admin/reminders/run', {}, 'POST', '')).result;
+      showToast({ type: r.busy ? 'warning' : 'success', title: r.busy ? 'Reminders are already running' : `${r.sent} reminder${r.sent === 1 ? '' : 's'} sent`, description: r.skipped?.length ? `${r.skipped.length} skipped — see below.` : '' });
+    } catch (e) { showToast({ type: 'error', title: "Couldn't run reminders", description: (e as Error).message }); } finally { setBusy(''); }
+  };
+  return (
+    <Section icon={<MessageSquare size={18} />} title="Texts and emails" description="Confirmations, phone codes, reminders and alerts. LeadConnector keeps saving contacts whichever service sends.">
+      <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-6">
+        <div className="space-y-4">
+          <Field label="Send texts and emails through">
+            <select className={inputClass} value={c.messagingProvider || 'auto'} onChange={(e) => update('messagingProvider', e.target.value)}>
+              <option value="auto">Automatic — Twilio for what it's set up for, LeadConnector for the rest</option>
+              <option value="twilio">Twilio only</option>
+              <option value="leadconnector">LeadConnector only</option>
+            </select>
+          </Field>
+
+          <div className="rounded-2xl border border-slate-200 p-4 space-y-3">
+            <div>
+              <p className="text-sm font-extrabold text-slate-900">Office alerts</p>
+              <p className="text-xs text-slate-500">Texted and/or emailed to the office. Leave both blank for none.</p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="Alert mobile"><input className={inputClass} type="tel" value={o.phone || ''} onChange={(e) => nested('officeAlerts', { phone: e.target.value })} placeholder="(623) 555-0100" /></Field>
+              <Field label="Alert email"><input className={inputClass} type="email" value={o.email || ''} onChange={(e) => nested('officeAlerts', { email: e.target.value })} /></Field>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6">
+              <Toggle checked={o.bookings !== false} onChange={(v) => nested('officeAlerts', { bookings: v })} label="New online bookings" />
+              <Toggle checked={o.requests !== false} onChange={(v) => nested('officeAlerts', { requests: v })} label="Callback and question requests" />
+              <Toggle checked={o.problems !== false} onChange={(v) => nested('officeAlerts', { problems: v })} label="Bookings that need a Jobber check" />
+              <Toggle checked={o.replies !== false} onChange={(v) => nested('officeAlerts', { replies: v })} label="Customer replies to BOB's texts" detail="Twilio only. Point the number's incoming-message webhook at /api/twilio/inbound." />
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 p-4 space-y-2">
+            <Toggle checked={!!c.reminders?.enabled} onChange={(v) => nested('reminders', { enabled: v })} label="Remind customers the day before their visit"
+              detail="A text (with consent) and an email, sent once around 4 PM Arizona time. Visits moved or removed in Jobber are skipped. If Jobber already sends visit reminders, keep only one of the two on." />
+            {!i.twilio?.cron && <p className="text-xs font-semibold text-amber-800">Add CRON_SECRET in Vercel so the daily reminder job can run.</p>}
+            {last && (
+              <div className="text-xs text-slate-600">
+                Last run {when(last.at)} for {last.day}: {last.disabled ? 'off' : `${last.sent} sent`}{last.skipped?.length ? `, ${last.skipped.length} skipped` : ''}.
+                {last.skipped?.length > 0 && <ul className="mt-1 space-y-0.5">{last.skipped.slice(0, 6).map((x: any) => <li key={x.id}><span className="font-mono">{x.id}</span> — {SKIP_REASONS[x.reason] || x.reason}</li>)}</ul>}
+              </div>
+            )}
+            <button className={subtleButton} onClick={runReminders} disabled={!!busy}>{busy === 'reminders' ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}Send tomorrow's reminders now</button>
+          </div>
+        </div>
+
+        <aside className="space-y-4 self-start">
+          <ul className="space-y-2 bg-slate-50 rounded-2xl border border-slate-200 p-4 text-xs text-slate-700">
+            <li className="font-extrabold text-slate-900 text-sm">With the saved settings</li>
+            <li><b>Texts:</b> {carrier(routes.sms)}</li>
+            <li><b>Emails:</b> {routes.email === 'twilio' ? 'Twilio SendGrid' : carrier(routes.email)}</li>
+            <li><b>Phone codes:</b> {carrier(routes.code)}</li>
+          </ul>
+          <div className="rounded-2xl border border-slate-200 p-4 space-y-2">
+            <p className="text-sm font-extrabold text-slate-900">Send a test</p>
+            <div className="flex gap-2">
+              <select className={`${inputClass} w-24 shrink-0`} value={channel} onChange={(e) => { setChannel(e.target.value as any); setResult(null); }} aria-label="Test channel">
+                <option value="sms">Text</option><option value="email">Email</option>
+              </select>
+              <input className={inputClass} type={channel === 'sms' ? 'tel' : 'email'} value={to} onChange={(e) => setTo(e.target.value)} placeholder={channel === 'sms' ? 'Mobile number' : 'Email address'} aria-label="Send the test to" />
+            </div>
+            <button className={`${secondaryButton} w-full`} onClick={sendTest} disabled={!to.trim() || !!busy}>{busy === 'test' ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}Send test</button>
+            {result && (
+              <p className={`text-xs font-semibold ${result.status === 'sent' ? 'text-emerald-700' : 'text-rose-700'}`} role="status">
+                {result.status === 'sent' ? `Sent through ${channel === 'email' && result.provider === 'twilio' ? 'Twilio SendGrid' : carrier(result.provider)}.` : result.error || 'Not sent.'}
+              </p>
+            )}
+            <p className="text-[11px] text-slate-400">Uses the saved settings.</p>
+          </div>
+        </aside>
+      </div>
+
+      <div>
+        <p className="text-xs font-bold text-slate-700">Recent texts and emails</p>
+        {log.length === 0
+          ? <p className="text-xs text-slate-500 mt-1">Nothing sent yet.</p>
+          : <ul className="divide-y divide-slate-100">{(showAll ? log : log.slice(0, 8)).map((m) => <MessageRow key={m.id} m={m} />)}</ul>}
+        {log.length > 8 && <button className={subtleButton} onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer' : `Show all ${log.length}`}</button>}
       </div>
     </Section>
   );
@@ -253,7 +412,7 @@ export function SettingsPage() {
   }, [data.config, dirty]);
 
   const update = (key: string, value: any) => { setC((s: any) => ({ ...s, [key]: value })); setDirty(true); };
-  const nested = (key: 'sameDay' | 'overflow' | 'approver', patch: any) => { setC((s: any) => ({ ...s, [key]: { ...s[key], ...patch } })); setDirty(true); };
+  const nested = (key: 'sameDay' | 'overflow' | 'approver' | 'officeAlerts' | 'reminders', patch: any) => { setC((s: any) => ({ ...s, [key]: { ...s[key], ...patch } })); setDirty(true); };
   const updateService = (id: string, patch: any) => update('services', c.services.map((x: any) => (x.id === id ? { ...x, ...patch } : x)));
   const categories = useMemo(() => [...new Set(c.services.map((x: any) => x.category))] as string[], [c.services]);
   const families = useMemo(() => [...new Set(c.services.map((x: any) => x.family))].filter((f) => (PACKAGES as any)[f as string]) as string[], [c.services]);
@@ -283,7 +442,7 @@ export function SettingsPage() {
     [c.serviceZips.length > 0, 'Service ZIPs entered'],
     [c.activeTechnicianIds.length > 0, 'A technician takes bookings'],
     [c.scheduleSource !== 'Jobber' || data.integrations?.jobber?.connected, 'Jobber connected'],
-    [!(c.requirePhoneVerification && c.smsConfirmations) || data.integrations?.leadConnector?.configured, 'Phone verification can send codes'],
+    [!(c.requirePhoneVerification && c.smsConfirmations) || !!data.integrations?.messaging?.code, 'Phone verification can send codes'],
   ] as [boolean, string][];
 
   return (
@@ -307,7 +466,7 @@ export function SettingsPage() {
             </Field>
             <Toggle checked={c.scheduleAcknowledged} onChange={(v) => update('scheduleAcknowledged', v)} label="The schedule source above is accurate and kept up to date" />
             <Toggle checked={c.bookingEnabled} onChange={(v) => update('bookingEnabled', v)} label="Let customers book visits online" detail="When off, BOB still answers questions and takes callback requests." />
-            <Toggle checked={c.requirePhoneVerification && c.smsConfirmations} disabled={!c.smsConfirmations} onChange={(v) => update('requirePhoneVerification', v)} label="Text a code to verify the customer's phone before booking" detail={c.smsConfirmations ? 'Rulebook requirement. Sent through LeadConnector.' : 'Off while text confirmations are off: BOB sends no texts to customers.'} />
+            <Toggle checked={c.requirePhoneVerification && c.smsConfirmations} disabled={!c.smsConfirmations} onChange={(v) => update('requirePhoneVerification', v)} label="Text a code to verify the customer's phone before booking" detail={c.smsConfirmations ? `Rulebook requirement. Sent through ${carrier(data.integrations?.messaging?.code)}.` : 'Off while text confirmations are off: BOB sends no texts to customers.'} />
             <Toggle checked={c.aiAssistant} onChange={(v) => update('aiAssistant', v)} label="Smart chat (Gemini) reads typed messages" detail="Off = buttons and keyword matching only. Prices and booking never depend on it." />
             <div className="flex flex-wrap gap-x-6">
               <Toggle checked={c.smsConfirmations} onChange={(v) => update('smsConfirmations', v)} label="Text confirmations" detail="Only to customers who agree to texts. Off: BOB sends no texts to customers (no phone code, no confirmation text, no texting question)." />
@@ -319,6 +478,8 @@ export function SettingsPage() {
           </ul>
         </div>
       </Section>
+
+      <Messaging c={c} update={update} nested={nested} />
 
       <Section icon={<ShieldCheck size={18} />} title="Approvals" description="These services wait for a named person's yes before they're booked. The customer's time is held for up to 30 minutes, and 5 PM overflow visits always need approval.">
         <div className="flex flex-wrap gap-x-6">
