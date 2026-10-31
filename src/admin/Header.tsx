@@ -1,8 +1,8 @@
 import React from 'react';
-import { BarChart3, Bot, Calendar, Inbox, LogOut, Plus, RefreshCw, Settings, Wind } from 'lucide-react';
+import { Activity, BarChart3, Bot, Calendar, Inbox, LogOut, Plus, RefreshCw, Settings, Wind } from 'lucide-react';
 import { useDashboard } from './DashboardContext';
 
-export type Tab = 'appointments' | 'inbox' | 'analytics' | 'bot' | 'settings';
+export type Tab = 'appointments' | 'inbox' | 'analytics' | 'activity' | 'bot' | 'settings';
 
 export function Header({ tab, onTab, onNew, onSignOut }: { tab: Tab; onTab: (t: Tab) => void; onNew: () => void; onSignOut: () => void }) {
   const { data, loading, refresh } = useDashboard();
@@ -13,6 +13,7 @@ export function Header({ tab, onTab, onNew, onSignOut }: { tab: Tab; onTab: (t: 
     ['appointments', 'Appointments', <Calendar size={16} />, active],
     ['inbox', 'Inbox', <Inbox size={16} />, inbox],
     ['analytics', 'Analytics', <BarChart3 size={16} />],
+    ['activity', 'BOB activity', <Activity size={16} />],
     ['bot', 'Booking Bot', <Bot size={16} />],
     ['settings', 'Settings', <Settings size={16} />],
   ];

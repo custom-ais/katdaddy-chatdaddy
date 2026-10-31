@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Technician } from './DashboardContext';
 import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, MapPin, Plus, Route, Save, ShieldCheck, Tag, Trash2, Users } from 'lucide-react';
@@ -7,6 +7,8 @@ import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Modal, Section, Toggle, inputClass, primaryButton, secondaryButton, subtleButton } from './ui';
 import { money } from '../../shared/domain.mjs';
 import { PACKAGES } from '../../shared/catalog.mjs';
+
+const ServiceAreaMap = lazy(() => import('./ServiceAreaMap').then((m) => ({ default: m.ServiceAreaMap })));
 
 const int = (v: string) => (v === '' ? 0 : Math.round(Number(v)));
 const cents = (v: string) => Math.round(Number(v || 0) * 100);
@@ -280,7 +282,7 @@ export function SettingsPage() {
   const readiness = [
     [c.scheduleAcknowledged, 'Schedule source confirmed'],
     [c.pricesAcknowledged, 'Prices approved'],
-    [c.serviceZips.length > 0, 'Service ZIPs entered'],
+    [['driving_distance', 'radius'].includes(c.serviceAreaMode) ? Boolean(c.baseAddress.trim() || c.baseLocation) : c.serviceZips.length > 0, 'Service area configured'],
     [c.activeTechnicianIds.length > 0, 'A technician takes bookings'],
     [c.scheduleSource !== 'Jobber' || data.integrations?.jobber?.connected, 'Jobber connected'],
     [!(c.requirePhoneVerification && c.smsConfirmations) || data.integrations?.leadConnector?.configured, 'Phone verification can send codes'],
@@ -391,7 +393,10 @@ export function SettingsPage() {
         </div>
       </Section>
 
-      <Section icon={<MapPin size={18} />} title="Service area and drive time" description="BOB asks for the address first. Approved ZIP codes book normally, just-outside ZIP codes are offered a travel charge, and every other address is told politely that we don't service the area.">
+      <Section icon={<MapPin size={18} />} title="Service area map" description="Move the base point, adjust distance limits, and draw included or excluded areas. Every customer address is checked against your saved map rules.">
+        <Field label="Coverage method" hint="Save settings to activate a changed coverage method."><select className={inputClass} value={c.serviceAreaMode} onChange={(e) => update('serviceAreaMode', e.target.value)}><option value="driving_distance">Driving distance from base</option><option value="radius">Radius from base</option><option value="zip">Existing ZIP-code coverage</option></select></Field>
+        <Suspense fallback={<p className="text-sm text-slate-500">Loading service area map…</p>}><ServiceAreaMap config={c} onChange={update} /></Suspense>
+        {c.serviceAreaMode === 'zip' && <details className="rounded-xl border border-slate-200 p-4"><summary className="font-bold text-sm text-slate-700 cursor-pointer">Existing ZIP-code coverage settings</summary><div className="space-y-4 mt-4">
         <Field label="Approved ZIP codes" hint={`${c.serviceZips.length} ZIP code${c.serviceZips.length === 1 ? '' : 's'}`}>
           <textarea rows={3} className={inputClass} value={text.zips} placeholder="85326, 85338, 85374…" onChange={(e) => { setText({ ...text, zips: e.target.value }); update('serviceZips', list(e.target.value)); }} />
         </Field>
@@ -438,6 +443,9 @@ export function SettingsPage() {
             </div>
           )}
         </div>
+        </div></details>}
+        {['driving_distance', 'radius'].includes(c.serviceAreaMode) && <div className="grid sm:grid-cols-2 gap-3"><Num label="Drive between jobs under" suffix="min" value={c.maxDriveBetweenJobsMin} onChange={(n) => update('maxDriveBetweenJobsMin', n)} /><Num label="Minimum gap between jobs" suffix="min" value={c.bufferMinutes} onChange={(n) => update('bufferMinutes', n)} /></div>}
+        <p className="text-sm font-semibold text-slate-700">Same-day emergency requests must be received before 2 p.m. Arizona time. Technician availability and final booking approval are required.</p>
       </Section>
 
       <Section icon={<CalendarClock size={18} />} title="Hours and capacity" description="Arizona time. Jobber's calendar still decides which of these times are actually open.">

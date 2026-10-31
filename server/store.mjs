@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { DEFAULT_CONFIG, INITIAL_FAQS, INITIAL_TECHNICIANS, withConfigDefaults } from "../shared/domain.mjs";
 import { refreshFaqs } from "../shared/faqs.mjs";
+import { safeDetails } from "./activity.mjs";
 
 const num = (v) => (v == null ? null : Number(v));
 const json = (v) => JSON.stringify(v ?? null);
@@ -227,12 +228,31 @@ export function createStore(db, { clock = Date.now } = {}) {
       else await q("update bob.events set status='failed', attempts=attempts+1, next=$1 where id=$2", [clock() + 60_000 * 2 ** attempts, id]);
     },
     async recentEvents() {
-      return (await q("select id,kind,created,status,attempts from bob.events order by created desc limit 100")).map((e) => ({
+      return (await q("select id,kind,created,status,attempts from bob.events where kind not like 'activity.%' order by created desc limit 100")).map((e) => ({
         ...e, created: num(e.created), attempts: num(e.attempts),
       }));
     },
     async audit(action, target) {
       await q("insert into bob.audit(id,created,action,target) values($1,$2,$3,$4)", [randomUUID(), clock(), action, String(target)]);
+    },
+
+    // Reuse the durable events store; recorded activity is never dispatched as a webhook.
+    async log(kind, details = {}, { sessionId = "", level = "info", requestId = "" } = {}) {
+      const id = randomUUID();
+      await q("insert into bob.events(id,kind,created,data,status) values($1,$2,$3,$4::jsonb,'recorded')", [id, `activity.${kind}`, clock(), json({ sessionId, level, requestId, details: safeDetails(details) })]);
+      return id;
+    },
+    async activity({ sessionId = "", level = "", cursor = "", limit = 100 } = {}) {
+      const [before = "", beforeId = ""] = cursor.split(":");
+      const ms = /^\d+$/.test(before) ? Number(before) : null;
+      const size = Math.max(1, Math.min(100, Number(limit) || 100));
+      const rows = await q(`select id,kind,created,data from bob.events where kind like 'activity.%'
+        and ($1='' or data->>'sessionId'=$1) and ($2='' or data->>'level'=$2)
+        and ($3::bigint is null or created<$3 or (created=$3 and id<$4))
+        order by created desc,id desc limit $5`, [sessionId, level, ms, beforeId, size + 1]);
+      const items = rows.slice(0, size).map((r) => ({ id: r.id, kind: r.kind.slice(9), created: num(r.created), ...r.data }));
+      const last = items.at(-1);
+      return { items, nextCursor: rows.length > size && last ? `${last.created}:${last.id}` : null };
     },
 
     // ---- key/value: cache, locks, rate limits ---------------------------------------

@@ -9,10 +9,12 @@
 //   → Jobber client + job + visit → only then "confirmed" → LeadConnector confirmation.
 
 import { isIP } from "node:net";
+import { distanceMiles, validPoint } from "../shared/coverage.mjs";
+import { captureAvailabilityRequest } from "./availability-request.mjs";
 import { randomBytes, randomInt, createHash, scryptSync, timingSafeEqual, createHmac } from "node:crypto";
 import {
   DEFAULT_CONFIG, INITIAL_FAQS, bookingQuote, travelFeeFor, validateContact,
-  validateConfig, normalizePhone, isBookable, BUNDLE_PRICE_CENTS, phoenixDate, areaFor, textCodeOn,
+  validateConfig, normalizePhone, isBookable, BUNDLE_PRICE_CENTS, phoenixDate, areaFor, drivingAreaFor, textCodeOn,
 } from "../shared/domain.mjs";
 import { initialSession, WELCOME } from "../shared/conversation.mjs";
 import { territoryFor, WEST_VALLEY_ZIPS } from "../shared/territory.mjs";
@@ -116,17 +118,29 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     const token = digest(req.headers["x-bob-session"]);
     const data = await store.loadSession(token);
     if (!data) fail(401, "This conversation expired. Start a new conversation.");
+    if (req.bobActivity) req.bobActivity.sessionId = token.slice(0, 16);
     return { token, data };
   };
 
   const jobberMode = (c) => c.scheduleSource === "Jobber";
   const verificationReady = (c) => !textCodeOn(c) || lc.configured;
-  const bookingOpen = async (c) => isBookable(c) && verificationReady(c) && (!jobberMode(c) || (await jobber.connected()));
+  const bookingOpen = async (c) => isBookable(c) && (c.serviceAreaMode !== "driving_distance" || geo.provider === "google") && verificationReady(c) && (!jobberMode(c) || (await jobber.connected()));
   const aiReady = (c) => Boolean(assistant?.configured) && c.aiAssistant !== false;
   const phoneOk = (data, c) =>
     !textCodeOn(c) ||
     Boolean(data.phoneVerified?.phone && data.phoneVerified.phone === data.contact?.phone && clock() - data.phoneVerified.at < VERIFIED_FOR);
   const needsApproval = (q, slot, c) => (c.approvalServices || []).includes(q.package) || Boolean(slot?.overflow);
+  const coverageFingerprint = (c) => digest(JSON.stringify([c.serviceAreaMode, c.baseAddress, c.baseLocation, c.serviceAreaMiles, c.travelAreaMiles, c.customServiceAreas, c.serviceZips, c.travelZips, c.travelZoneFeeCents, c.maxDriveFromBaseMin, c.travelFeeTiers]));
+  const ensureCoverageCurrent = (data, c) => {
+    if ((data.coverageFingerprint && data.coverageFingerprint !== coverageFingerprint(c)) || (!data.coverageFingerprint && ["driving_distance", "radius"].includes(c.serviceAreaMode))) {
+      fail(409, "Our service area changed. Please review your address details so we can check the updated map.", { code: "COVERAGE_CHANGED" });
+    }
+  };
+
+  const record = async (req, kind, details, level = "info") => {
+    try { await store.log(kind, details, { ...req.bobActivity, level }); return true; }
+    catch (error) { console.error("[activity] persistent write failed", error.message); return false; }
+  };
 
   const publicConfig = async () => {
     const c = await store.config();
@@ -265,6 +279,27 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     }
     if (!g) return { ok: false, reason: "not_found" };
     if (g.state && g.state.toUpperCase() !== "AZ") return { ok: false, reason: "out_of_area" };
+    if (["driving_distance", "radius"].includes(c.serviceAreaMode)) {
+      let route;
+      try {
+        const base = validPoint(c.baseLocation) ? c.baseLocation : c.baseAddress ? await geo.geocode(c.baseAddress) : null;
+        if (!base) return { ok: false, reason: "routing_unavailable" };
+        if (c.serviceAreaMode === "radius") route = { miles: distanceMiles(base, g), minutes: null };
+        else {
+          if (!geo.roadRoutes) return { ok: false, reason: "routing_unavailable" };
+          [route] = await geo.roadRoutes([{ from: base, to: g }]);
+        }
+      } catch { return { ok: false, reason: "routing_unavailable" }; }
+      if (!route) return { ok: false, reason: "routing_unavailable" };
+      const area = drivingAreaFor(route.miles, c, g.state, g);
+      return {
+        ok: area !== "out", area, reason: area === "out" ? "out_of_area" : null,
+        location: { lat: g.lat, lng: g.lng, formatted: g.formatted, precise: g.precise, neighborhood: g.neighborhood || "" },
+        driveFromBaseMiles: route.miles, driveFromBaseMin: route.minutes, distanceMethod: c.serviceAreaMode,
+        travelFeeCents: area === "travel" ? c.travelZoneFeeCents : 0,
+        territory: territoryFor(zip, g.neighborhood || ""),
+      };
+    }
     let driveFromBaseMin = null;
     if (c.baseAddress) {
       // The customer's address is known, so a failed drive-time check doesn't stop the booking;
@@ -333,7 +368,14 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
       });
       result.contactId = contactId;
       if (appt.phone && appt.smsConsent && c.smsConfirmations) {
-        result.sms = await lc.sendSms(contactId, confirmationSms(appt, c)).then(() => "sent", (e) => (console.error("[lc] sms", e.message), "failed"));
+        result.sms = await lc.sendSms(contactId, confirmationSms(appt, c)).then(async (response) => {
+          result.smsMessageId = response?.messageId || response?.id || null;
+          await store.log("notification.accepted", { appointmentId: appt.id, channel: "sms", provider: "LeadConnector", messageId: result.smsMessageId, delivery: "not_confirmed" }).catch((error) => console.error("[activity] notification log", error.message));
+          return "sent";
+        }, async (error) => {
+          await store.log("notification.failed", { appointmentId: appt.id, channel: "sms", error: error.message }, { level: "error" }).catch((error) => console.error("[activity] notification log", error.message));
+          return "failed";
+        });
       }
       if (appt.email && c.emailConfirmations) {
         result.email = await lc.sendEmail(contactId, confirmationEmail(appt, c)).then(() => "sent", (e) => (console.error("[lc] email", e.message), "failed"));
@@ -357,6 +399,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     zip: data.contact?.zip || data.zip || "",
     neighborhood: data.location?.neighborhood || "",
     ticketCents: q.totalCents,
+    emergencyRequestedAt: q.package === "emergency" ? (data.emergencyRequestedAt ?? clock()) : null,
   });
 
   const newId = (prefix) => `${prefix}-${randomBytes(4).toString("hex").toUpperCase()}`;
@@ -364,7 +407,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
 
   // ---- the first question: is this address in the service area? --------------------------
   /** The customer's typed address, looked up. null = not an address (a bare ZIP or a question). */
-  async function lookupPlace(text) {
+  async function lookupPlace(text, c) {
     const raw = String(text || "").trim();
     if (!/\d/.test(raw) || !/[a-z]/i.test(raw) || raw.endsWith("?") || raw.length > 200) return null;
     let g;
@@ -378,7 +421,16 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     if (!g.zip || !g.precise) return { incomplete: true };
     const first = (x) => String(x || "").split(",")[0].trim();
     const street = /^\d/.test(first(g.formatted)) && g.provider === "google" ? first(g.formatted) : first(raw);
-    return { found: true, street, city: g.city || "", zip: g.zip, state: g.state || "", formatted: String(g.formatted || "").replace(/,? USA$/, "") };
+    let drivingMiles = null;
+    if (["driving_distance", "radius"].includes(c.serviceAreaMode)) {
+      try {
+        const base = validPoint(c.baseLocation) ? c.baseLocation : c.baseAddress ? await geo.geocode(c.baseAddress) : null;
+        const [route] = c.serviceAreaMode === "radius" && base ? [{ miles: distanceMiles(base, g) }] : base && geo.roadRoutes ? await geo.roadRoutes([{ from: base, to: g }]) : [];
+        if (!route) return { routingUnavailable: true };
+        drivingMiles = route.miles;
+      } catch { return { routingUnavailable: true }; }
+    }
+    return { found: true, street, city: g.city || "", zip: g.zip, state: g.state || "", lat: g.lat, lng: g.lng, drivingMiles, formatted: String(g.formatted || "").replace(/,? USA$/, "") };
   }
 
   // ---- phone verification (LeadConnector text code) ---------------------------------
@@ -407,12 +459,23 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
   async function notifyApprover(a, c, origin = publicOrigin) {
     const out = { sms: "skipped", email: "skipped" };
     const ap = c.approver || {};
-    if (!lc.configured || (!ap.phone && !ap.email)) return { ...out, reason: "not_configured" };
+    if (!lc.configured || (!ap.phone && !ap.email)) {
+      await store.log("notification.skipped", { approvalId: a.id, reason: "not_configured" }, { sessionId: a.session?.slice(0, 16) || "", level: "warning" }).catch((error) => console.error("[activity] notification log", error.message));
+      return { ...out, reason: "not_configured" };
+    }
     const link = `${origin || ""}/admin?approval=${encodeURIComponent(a.id)}`;
     const text = approvalRequestText(a, link);
     try {
       const contactId = await lc.upsertContact({ name: ap.name, phone: normalizePhone(ap.phone) || undefined, email: ap.email || undefined, tags: ["bob-approver"] });
-      if (ap.phone) out.sms = await lc.sendSms(contactId, text).then(() => "sent", (e) => (console.error("[lc] approval sms", e.message), "failed"));
+      if (ap.phone) out.sms = await lc.sendSms(contactId, text).then(async (response) => {
+        out.smsMessageId = response?.messageId || response?.id || null;
+        await store.log("notification.accepted", { approvalId: a.id, channel: "sms", recipient: ap.name, messageId: out.smsMessageId, delivery: "not_confirmed" }, { sessionId: a.session?.slice(0, 16) || "" }).catch((error) => console.error("[activity] notification log", error.message));
+        return "sent";
+      }, async (error) => {
+        out.error = error.message;
+        await store.log("notification.failed", { approvalId: a.id, channel: "sms", error: error.message }, { sessionId: a.session?.slice(0, 16) || "", level: "error" }).catch((error) => console.error("[activity] notification log", error.message));
+        return "failed";
+      });
       if (ap.email) {
         out.email = await lc
           .sendEmail(contactId, { subject: `BOB approval needed: ${a.service} (${a.id})`, html: `<p>${text.replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[ch])}</p>`, text })
@@ -440,7 +503,8 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     if (data.stage !== "slots" || data.safety || !data.serviceAccepted || !data.location) fail(409, "Complete the service and contact details first.");
     if (data.route === "bundle" && !data.bundleAccepted) fail(409, "Accept the combined assessment offer first.");
     if (!phoneOk(data, c)) fail(409, "Confirm your phone number with the text code first.", { code: "PHONE_NOT_VERIFIED" });
-    const area = areaFor(data.contact.zip, c);
+    ensureCoverageCurrent(data, c);
+    const area = areaFor(data.contact.zip, c, "AZ", data.driveFromBaseMiles, data.location);
     if (!(area === "in" || (area === "travel" && data.travelZone))) fail(409, "Service coverage changed. Please ask the team to review.");
   }
 
@@ -523,7 +587,12 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
   }
 
   return async function handle(req, res) {
-    const send = (status, data) => {
+    req.bobActivity = { requestId: randomBytes(10).toString("hex"), sessionId: "" };
+    const send = async (status, data) => {
+      if (req.url !== "/api/health" && (status >= 400 || req.method !== "GET")) {
+        await record(req, "request.finished", { path: String(req.url || "").split("?")[0], method: req.method, status, ...(status >= 400 ? { error: data?.error } : {}) }, status >= 500 ? "error" : status >= 400 ? "warning" : "info");
+      }
+      res.setHeader("X-BOB-Request-ID", req.bobActivity.requestId);
       res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
       res.end(JSON.stringify(data));
     };
@@ -564,6 +633,8 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         await rate(req, "new-session", 30, 3_600_000);
         const token = secret(), s = initialSession();
         await store.createSession(digest(token), s);
+        req.bobActivity.sessionId = digest(token).slice(0, 16);
+        await record(req, "conversation.started", { stage: s.stage });
         return send(201, { token, session: s, config: await publicConfig() });
       }
       if (method === "GET" && pathname === "/api/session") {
@@ -573,6 +644,16 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         return send(200, { session: s.data, config: await publicConfig(), ...extra });
       }
 
+      if (method === "POST" && pathname === "/api/activity") {
+        await rate(req, "client-activity", 40);
+        await session(req);
+        const body = await readBody(req);
+        if (!["widget.minimized", "widget.expanded", "client.error"].includes(body.kind)) fail(400, "Unknown activity event.");
+        const saved = await record(req, body.kind, { source: "customer_widget", ...(body.kind === "client.error" ? { message: String(body.message || "").slice(0, 500) } : {}) }, body.kind === "client.error" ? "error" : "info");
+        if (!saved) fail(503, "Activity could not be saved. Please try again.");
+        return send(201, { recorded: true });
+      }
+
       if (method === "POST" && pathname === "/api/chat") {
         await rate(req, "chat", 80);
         const { token, data } = await session(req), body = await readBody(req);
@@ -580,9 +661,17 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         if (data.bookingId) fail(409, "This conversation already has a booking. Start a new conversation for another request.");
         if (data.stage === "approval") fail(409, "Your visit is waiting for approval. You'll see the answer here.");
         const c = await store.config();
-        const place = data.pending === "serviceAddress" || data.stage === "out_of_area" ? await lookupPlace(body.message) : null;
+        const place = data.pending === "serviceAddress" || data.stage === "out_of_area" ? await lookupPlace(body.message, c) : null;
+        await record(req, "conversation.message", { role: "user", text: /^\s*\d{4,8}\s*$/.test(body.message) ? "[verification code omitted]" : body.message, stage: data.stage });
         const result = await chatTurn({ message: body.message, session: data, config: c, faqs: await store.get("faqs"), assistant: aiReady(c) ? assistant : null, place });
+        const note = await captureAvailabilityRequest({ store, lc, config: c, data: result.session, message: body.message, session: token, now: clock(), origin: publicOrigin, log: (kind, details, level) => record(req, kind, details, level) });
+        if (note) {
+          result.reply = `${note}\n\n${result.reply}`;
+          const last = result.session.history.at(-1);
+          if (last?.role === "assistant") last.text = result.reply;
+        }
         await store.saveSession(token, result.session);
+        await record(req, "conversation.message", { role: "assistant", text: result.reply, stage: result.session.stage, via: result.via, availabilityRequestId: result.session.availabilityRequestId || "" });
         // Keep the state before this answer so the customer can go back and change it.
         const { history: before = [], ...snapshot } = data;
         const undo = [...((await store.kvGet(`undo:${token}`)) || []).slice(-(UNDO_DEPTH - 1)), { ...snapshot, historyLen: before.length }];
@@ -644,10 +733,12 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         const errors = validateContact(body);
         if (errors.length) fail(400, errors.join(" "));
         const c = await store.config();
-        const area = areaFor(body.zip, c);
+        const initialArea = areaFor(body.zip, c);
+        const where = await locate(c, { address: body.address.trim(), city: body.city.trim(), zip: body.zip }, { travelZone: initialArea === "travel" && data.travelAccepted });
+        const area = ["driving_distance", "radius"].includes(c.serviceAreaMode) ? where.area : initialArea;
         const travelZone = area === "travel" && data.travelAccepted;
-        if (area !== "in" && !travelZone) fail(409, area === "travel" ? "That address is just outside our service area. Go back and choose to continue with the travel charge, or send the team a request." : "We don't currently service that area. Check the ZIP code, or send the team a request.", { code: "OUT_OF_AREA" });
-        const where = await locate(c, { address: body.address.trim(), city: body.city.trim(), zip: body.zip }, { travelZone });
+        if (where.reason === "routing_unavailable") fail(503, "We couldn't verify the driving distance. Please try again or ask the office to review your address.", { code: "ROUTING_UNAVAILABLE" });
+        if (area !== "in" && !travelZone) fail(409, area === "travel" ? "That address is just outside our service area. Go back and choose to continue with the travel charge, or send the team a request." : "We don't currently service that area. Check the address, or send the team a request.", { code: "OUT_OF_AREA" });
         if (!where.ok && where.reason === "lookup_unavailable") fail(503, "We couldn't check that address just now. Please try again in a minute, or send the team a request.", { code: "ADDRESS_LOOKUP_UNAVAILABLE" });
         if (!where.ok && where.reason === "not_found") fail(400, "We couldn't find that street address. Check the street number, street name, and ZIP code.");
         if (!where.ok) fail(409, "That address is outside our online booking area. The team can review it — send a callback request.", { code: "OUT_OF_AREA" });
@@ -660,6 +751,9 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         data.zip = body.zip;
         data.location = where.location;
         data.driveFromBaseMin = where.driveFromBaseMin;
+        data.driveFromBaseMiles = where.driveFromBaseMiles ?? null;
+        data.coverageFingerprint = coverageFingerprint(c);
+        await record(req, "coverage.checked", { area, miles: data.driveFromBaseMiles, minutes: data.driveFromBaseMin, mode: c.serviceAreaMode });
         data.travelFeeCents = travelZone ? Math.max(c.travelZoneFeeCents || 0, where.travelFeeCents || 0) : where.travelFeeCents;
         data.travelZone = travelZone;
         let verification = { required: false };
@@ -712,6 +806,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         const c = await store.config();
         if (data.stage !== "slots" || !data.serviceAccepted || data.safety || !data.location) fail(409, "Complete the service and contact details first.");
         if (!phoneOk(data, c)) fail(409, "Confirm your phone number with the text code first.", { code: "PHONE_NOT_VERIFIED" });
+        ensureCoverageCurrent(data, c);
         if (!(await bookingOpen(c))) return send(200, { slots: [], nextCursor: null, enabled: false });
         const date = url.searchParams.get("date") || "";
         if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) fail(400, "Choose a valid date.");
@@ -942,6 +1037,19 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
           return send(200, { signedOut: true });
         }
         if (method === "GET" && pathname === "/api/admin/data") return send(200, await snapshot());
+        if (method === "GET" && pathname === "/api/admin/activity") return send(200, await store.activity({ sessionId: (url.searchParams.get("session") || "").slice(0, 32), level: url.searchParams.get("level") || "", cursor: url.searchParams.get("cursor") || "", limit: 100 }));
+        if (method === "POST" && pathname === "/api/admin/service-area/map") {
+          await rate(req, "area-map", 5);
+          const b = await readBody(req), c = { ...await store.config(), ...Object.fromEntries(["baseAddress", "baseLocation", "serviceAreaMode", "serviceAreaMiles", "travelAreaMiles", "customServiceAreas"].filter((key) => key in b).map((key) => [key, b[key]])) };
+          if (typeof c.baseAddress !== "string" || (!c.baseAddress.trim() && !validPoint(c.baseLocation)) || c.baseAddress.length > 300 || !Number.isFinite(c.serviceAreaMiles) || c.serviceAreaMiles <= 0 || !Number.isFinite(c.travelAreaMiles) || c.travelAreaMiles < c.serviceAreaMiles || c.travelAreaMiles > 150) fail(400, "Enter a base address and valid driving-mile limits (up to 150 miles).");
+          const base = validPoint(c.baseLocation) ? { ...c.baseLocation, formatted: "Selected base location" } : await geo.geocode(c.baseAddress);
+          if (!base) fail(400, "The base address could not be found.");
+          if (!geo.serviceAreaSamples && c.serviceAreaMode !== "radius") fail(503, "Driving-distance mapping is unavailable.");
+          let points;
+          try { points = c.serviceAreaMode === "radius" ? [] : await geo.serviceAreaSamples(base, c.travelAreaMiles); }
+          catch { fail(503, "Google road-distance lookup is unavailable. Check the Routes API connection and try again."); }
+          return send(200, { base, points: points.map((point) => ({ ...point, area: drivingAreaFor(point.miles, c, "", point) })), generatedAt: clock(), limits: { standard: c.serviceAreaMiles, travel: c.travelAreaMiles } });
+        }
 
         if (method === "GET" && pathname === "/api/admin/jobber/connect") {
           if (!jobber.appConfigured) fail(400, "Add JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET and JOBBER_REDIRECT_URI in Vercel first.");
@@ -963,11 +1071,11 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
           }
         }
         if (method === "POST" && pathname === "/api/admin/geo/check") {
-          const b = await readBody(req), c = await store.config();
+          const b = await readBody(req), c = { ...await store.config(), ...Object.fromEntries(["serviceAreaMode", "baseAddress", "baseLocation", "customServiceAreas", "serviceAreaMiles", "travelAreaMiles", "travelZoneFeeCents"].filter((key) => b.config && key in b.config).map((key) => [key, b.config[key]])) };
           const parts = String(b.address || "").split(",").map((s) => s.trim());
           const zip = (String(b.address || "").match(/\b(\d{5})\b/) || [])[1] || "";
           const where = await locate(c, { address: parts[0] || "", city: parts[1] || "", zip });
-          return send(200, { ...where, zipApproved: c.serviceZips.includes(zip), area: areaFor(zip, c), territory: where.territory || territoryFor(zip) });
+          return send(200, { ...where, zipApproved: c.serviceZips.includes(zip), area: where.area || areaFor(zip, c), territory: where.territory || territoryFor(zip) });
         }
 
         if (method === "PATCH" && pathname === "/api/admin/config") {
@@ -1093,7 +1201,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
           const b = await readBody(req), c = await store.config();
           const errors = validateContact(b);
           if (errors.length) fail(400, errors.join(" "));
-          if (areaFor(b.zip, c) === "out") fail(400, "Add the ZIP code to the service area (or the just-outside list) in settings first.");
+          if (!["driving_distance", "radius"].includes(c.serviceAreaMode) && areaFor(b.zip, c) === "out") fail(400, "Add the ZIP code to the service area (or the just-outside list) in settings first.");
           if (!["cleaning", "assessment", "bundle"].includes(b.route)) fail(400, "Choose a supported service.");
           const where = await locate(c, { address: b.address, city: b.city, zip: b.zip });
           if (!where.ok) fail(400, where.reason === "not_found" ? "Couldn't find that address." : "That address is outside the booking area rules.");

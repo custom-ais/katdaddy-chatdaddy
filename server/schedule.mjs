@@ -69,8 +69,9 @@ export function createScheduler({ store, jobber, geo }) {
    * Open slots for a located customer.
    * date: "YYYY-MM-DD" to search one day; empty = whole horizon (nearby-first when enabled).
    */
-  async function slots({ config, technicians, durationMins, leadHours, location, zip = "", neighborhood = "", ticketCents = 0, now, date = "", excludeSession = "", ignoreAppointmentId = null, fresh = false }) {
+  async function slots({ config, technicians, durationMins, leadHours, emergencyRequestedAt = null, location, zip = "", neighborhood = "", ticketCents = 0, now, date = "", excludeSession = "", ignoreAppointmentId = null, fresh = false }) {
     if (leadHours != null) config = { ...config, leadHours };
+    if (emergencyRequestedAt != null) config = { ...config, emergencyRequestedAt };
     const from = date ? Date.parse(`${date}T00:00:00-07:00`) - 86_400_000 : now - 86_400_000;
     const to = date ? Date.parse(`${date}T00:00:00-07:00`) + 2 * 86_400_000 : now + (config.horizonDays + 2) * 86_400_000;
     const list = await blocks({ config, technicians, from, to, excludeSession, ignoreAppointmentId, fresh });
@@ -81,11 +82,11 @@ export function createScheduler({ store, jobber, geo }) {
   }
 
   /** Re-check one start time. Prefers the given tech when several can take it. */
-  async function check({ config, technicians, durationMins, leadHours, location, zip = "", neighborhood = "", ticketCents = 0, now, iso, preferTech, excludeSession = "", ignoreAppointmentId = null, fresh = true }) {
+  async function check({ config, technicians, durationMins, leadHours, emergencyRequestedAt = null, location, zip = "", neighborhood = "", ticketCents = 0, now, iso, preferTech, excludeSession = "", ignoreAppointmentId = null, fresh = true }) {
     const start = Date.parse(iso);
     if (!Number.isFinite(start)) return null;
     const date = phoenixDate(new Date(start));
-    const found = await slots({ config, technicians, durationMins, leadHours, location, zip, neighborhood, ticketCents, now, date, excludeSession, ignoreAppointmentId, fresh });
+    const found = await slots({ config, technicians, durationMins, leadHours, emergencyRequestedAt, location, zip, neighborhood, ticketCents, now, date, excludeSession, ignoreAppointmentId, fresh });
     const match = found.filter((s) => s.start === start);
     if (!match.length) return null;
     if (preferTech) {
@@ -94,7 +95,7 @@ export function createScheduler({ store, jobber, geo }) {
       if (preferred && match[0].technicianId !== preferTech) {
         const only = await slots({
           config: { ...config, activeTechnicianIds: [preferTech] },
-          technicians, durationMins, leadHours, location, zip, neighborhood, ticketCents, now, date, excludeSession, ignoreAppointmentId, fresh: false,
+          technicians, durationMins, leadHours, emergencyRequestedAt, location, zip, neighborhood, ticketCents, now, date, excludeSession, ignoreAppointmentId, fresh: false,
         });
         const mine = only.find((s) => s.start === start);
         if (mine) return mine;

@@ -11,7 +11,8 @@
  const panel=document.createElement('div');panel.id='bob-chat-panel';panel.className='panel';panel.setAttribute('role','region');panel.setAttribute('aria-label','DVS booking assistant');
  const close=document.createElement('button');close.type='button';close.className='close';close.textContent='×';close.setAttribute('aria-label','Close booking assistant');
  let iframe,open=false;
- const toggle=(value)=>{open=value;panel.classList.toggle('open',open);close.classList.toggle('open',open);launch.setAttribute('aria-expanded',String(open));if(open&&!iframe){iframe=document.createElement('iframe');iframe.src=origin+'/chat?embed=1';iframe.title='BOB — Dryer Vent Squad booking assistant';iframe.referrerPolicy='strict-origin';panel.append(iframe);}if(!open)launch.focus();};
+ const toggle=(value)=>{open=value;panel.classList.toggle('open',open);close.classList.toggle('open',open);launch.setAttribute('aria-expanded',String(open));if(open&&!iframe){iframe=document.createElement('iframe');iframe.src=origin+'/chat?embed=1';iframe.title='BOB — Dryer Vent Squad booking assistant';iframe.referrerPolicy='strict-origin';iframe.addEventListener('load',()=>{if(open)iframe.contentWindow?.postMessage({type:'bob:restore'},origin);});panel.append(iframe);}if(open&&iframe)iframe.contentWindow?.postMessage({type:'bob:restore'},origin);if(!open)launch.focus();};
  launch.addEventListener('click',()=>toggle(!open));close.addEventListener('click',()=>toggle(false));shadow.addEventListener('keydown',e=>{if(e.key==='Escape'&&open)toggle(false);});
+ window.addEventListener('message',event=>{if(event.origin===origin&&event.source===iframe?.contentWindow&&event.data?.type==='bob:minimize')toggle(false);});
  shadow.append(style,panel,launch,close);document.body.append(wrapper);
 })();
