@@ -179,7 +179,7 @@ function iconFor(label: string) {
   if (l.includes('2nd floor')) return <ArrowUp size={18} className={`${c} text-orange-500`} />;
   if (l.includes('roof')) return <ArrowUp size={18} className={`${c} text-amber-500`} />;
   if (l.includes('side wall')) return <ArrowRight size={18} className={`${c} text-emerald-500`} />;
-  if (/one normal cycle|1 normal cycle|no signs|have dryer|^yes|no gate code|no special notes|cleaning only|dryer is off|turned off/.test(l)) return <Check size={18} className={`${c} text-emerald-500`} />;
+  if (/one normal cycle|1 normal cycle|no signs|have dryer|^yes|no gate code|no special notes|cleaning only|dryer is off|turned off|everyone is safe/.test(l)) return <Check size={18} className={`${c} text-emerald-500`} />;
   if (/^no$|no dryer|^no thanks|^no,/.test(l)) return <X size={18} className={`${c} text-rose-500`} />;
   if (l.includes('express')) return <Timer size={18} className={`${c} text-teal-500`} />;
   if (l.includes('premium')) return <Star size={18} className={`${c} text-orange-500`} />;
@@ -855,7 +855,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const last = messages[messages.length - 1];
   const canGoBack = undoCount > 0 && ready && !receipt && !requestId && !['verify', 'slots', 'approval', 'emergency'].includes(action);
   const inputHints = contactStep ? INPUT_FOR[contactStep] : session?.pending === 'serviceAddress' ? ADDRESS_INPUT : session?.pending === 'zip' ? ZIP_INPUT : undefined;
-  const showOptions = !busy && !receipt && !requestId && action !== 'emergency' && options.length > 0 && (last?.role === 'model' || !!contactStep);
+  const showOptions = !busy && !receipt && !requestId && options.length > 0 && (last?.role === 'model' || !!contactStep);
   const started = messages.length > 0;
 
   const shell = embedded ? 'h-dvh rounded-none border-0' : preview ? 'h-[780px] rounded-3xl max-w-4xl mx-auto' : 'h-[min(820px,calc(100dvh-2rem))] rounded-3xl max-w-3xl mx-auto';

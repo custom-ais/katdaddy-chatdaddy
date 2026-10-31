@@ -8,7 +8,9 @@
 //   → phone verification → live Jobber times → final approval → booked in Jobber.
 //
 // Business rules (rulebook / saved September policy) that stay in force:
-//   • gas smell / smoke / fire stops everything. Overheating, shutting off mid-cycle, running hot
+//   • a gas smell stops everything. Smoke or fire gets the safety alert (evacuate, 911, unplug only
+//     if safe, don't use the dryer) and waits until the customer says everyone is safe; then it
+//     carries on down the emergency path. Overheating, shutting off mid-cycle, running hot
 //     or a burning smell is explained as a significant airflow restriction (don't use the dryer
 //     until it's cleaned; Ultimate Protection suggested) and the booking carries on
 //   • a repair-first visit starts with an assessment; repairs are quoted separately
@@ -138,6 +140,17 @@ export const FACT_VALUES = {
 export const SYMPTOMS = ["normal", "two", "three", "overheat", "error"];
 
 const normalize = (t) => String(t || "").toLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, " ").trim();
+
+// Smoke or fire: safety first, then — only once the customer says everyone is safe — the booking.
+export const FIRE_SAFE = "Everyone is safe & fire/smoke is handled";
+const FIRE_ALERT =
+  "⚠️ **SAFETY ALERT:** If there is active smoke or fire, please prioritize your safety immediately!\n\n" +
+  "1. **Evacuate the area** if needed and call **911** or your local fire department right away.\n" +
+  "2. If it is completely safe to do so, unplug the dryer or switch off the circuit breaker.\n" +
+  "3. **Do not** attempt to use the dryer again.\n\n" +
+  "Please let me know once everyone is safe and the emergency is handled.";
+const SAFE_AGAIN = /^(?:yes[,.!]? *)?(?:everyone(?:'s| is) (?:safe|ok(?:ay)?|fine)|we(?:'re| are) (?:all )?(?:safe|ok(?:ay)?|fine)|all safe|(?:the )?fire(?:'s| is) out|(?:the )?(?:fire|smoke)(?:'s| is) (?:gone|handled|out)|it'?s (?:out|handled|under control)|(?:it'?s )?all handled|handled)\b/;
+const FIRE_NOTE = "Customer reported smoke or fire; they confirmed everyone is safe and it's handled. Inspect before the dryer is used again.";
 const ACCEPT = /^(?:accept(?: & continue| and continue)?|book this service|book (?:the )?assessment|book it|yes(?:,? please)?|yep|yeah|sure|sounds good|ok(?:ay)?|let'?s do it|continue with (?:this|it))[.!]?$/;
 const ACCEPT_BUNDLE = /^(?:yes|yeah|yep|sure|please|sounds good|okay|ok|include (?:it|the assessment|assessment)|schedule both|add (?:the )?assessment|book (?:both|it)|yes[, ]+(?:include (?:the )?assessment|both|please))[.!]?$/;
 const NO = /^(no|nope|no thanks|not now|decline|just (?:the )?cleaning|cleaning only|skip assessment)[.!]?$/;
@@ -775,6 +788,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.stage = "evaluating";
     if (key === "symptoms" && s.help) return respond(HELP_SYMPTOMS.text, HELP_SYMPTOMS.options);
     if (key === "symptoms" && s.property.hasDryer === "No") return respond(NO_DRYER_SYMPTOMS, QUESTIONS.symptoms.options, { multi: true });
+    if (key === "triage" && s.fireCleared) return respond("What was happening with the dryer before this occurred? (Select all that apply)", QUESTIONS.triage.options, { multi: true });
     const q = QUESTIONS[key];
     return respond(q.text, optionsFor(key), { ...(q.multi ? { multi: true } : {}), ...(q.info ? { info: q.info } : {}) });
   };
@@ -1028,22 +1042,49 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
 
   // -- safety first ----------------------------------------------------------------------
   const start = START[t];
+  // After the smoke/fire alert, nothing moves until the customer says everyone is safe.
+  if (s.stage === "emergency" && s.safety === "fire") {
+    const stillDanger = detectSafety(t);
+    if (t === normalize(FIRE_SAFE) || (SAFE_AGAIN.test(t) && stillDanger !== "fire" && stillDanger !== "gas")) {
+      s.safety = null;
+      s.fireCleared = true;
+      startIntent("emergency");
+      s.dryerHot = false; // they were told to unplug it or switch off the breaker
+      s.dryerOffConfirmed = true;
+      if (!s.concerns.includes(FIRE_NOTE)) s.concerns.push(FIRE_NOTE);
+      ack = "I am so glad to hear that everyone is safe!\n\nNow that the immediate danger has passed, let's pinpoint what led to this so we can get your system properly inspected and cleared.";
+      return next();
+    }
+    if (stillDanger !== "gas") {
+      return respond("Your safety comes first. If there is any smoke or fire, leave the area and call **911**. When everyone is safe and the fire or smoke is handled, let me know and we'll go from there.", [FIRE_SAFE], { action: "emergency" });
+    }
+  }
   const emergencyAnswer = ["safetyCheck", "powerOff", "triage", "otherDetail"].includes(s.pending) && s.intent === "emergency";
   const detected = start ? null : detectSafety(t);
-  // On the emergency path, "overheating" or "burning smell" is the reason for the visit; gas, smoke and fire still stop everything.
-  const safety = emergencyAnswer && detected === "stop" ? null : detected;
-  if (safety === "gas" || safety === "fire") {
+  // On the emergency path, "overheating" or "burning smell" is the reason for the visit; gas, smoke and fire still come first.
+  let safety = emergencyAnswer && detected === "stop" ? null : detected;
+  // Once they've said everyone is safe, talk of the fire is history (or a new one): remind, don't loop.
+  if (safety === "fire" && s.fireCleared) {
+    warn = "If there's ever smoke or fire again, leave the area and call 911 right away.";
+    safety = null;
+  }
+  if (safety === "gas") {
     s.stage = "emergency";
     s.safety = safety;
     s.pending = null;
     s.serviceAccepted = false;
     return respond(
-      safety === "gas"
-        ? "Leave the building immediately and call 911 and your gas utility from a safe location. Do not operate switches, plugs, appliance controls, flames, or anything that could create a spark. Do not move or disconnect the dryer."
-        : "Leave the building immediately, stay outside, and call 911 from a safe location. Do not go back inside for the dryer or try to continue the booking.",
+      "Leave the building immediately and call 911 and your gas utility from a safe location. Do not operate switches, plugs, appliance controls, flames, or anything that could create a spark. Do not move or disconnect the dryer.",
       [],
       { action: "emergency" },
     );
+  }
+  if (safety === "fire") {
+    s.stage = "emergency";
+    s.safety = safety;
+    s.pending = null;
+    s.serviceAccepted = false;
+    return respond(FIRE_ALERT, [FIRE_SAFE], { action: "emergency" });
   }
   if (s.stage === "emergency") return respond("Do not resume using the dryer. Emergency responders or a qualified professional must confirm the immediate danger is resolved. For non-emergency follow-up, you can send the DVS team a request.", [], { action: "request" });
   // Help Me Choose: "Overheating / Error Code" moves to the emergency path, which starts with the safety check.
