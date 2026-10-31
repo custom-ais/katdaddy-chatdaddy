@@ -19,6 +19,8 @@ export interface Appointment {
 export interface Technician {
   id: string; name: string; phone: string; status: 'available' | 'on_route' | 'on_job' | 'off_duty'; color: string; zone: string;
   jobberUserId: string; vehicle?: string; bio?: string;
+  onCall?: boolean;
+  availability?: { state: 'available' | 'busy' | 'off_duty' | 'unknown'; reason: string; until: number | null; checkedAt: number; source: string };
 }
 
 export interface Snapshot {

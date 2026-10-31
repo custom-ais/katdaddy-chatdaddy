@@ -5,21 +5,25 @@
 import { randomUUID } from "node:crypto";
 import { DEFAULT_CONFIG, INITIAL_FAQS, INITIAL_TECHNICIANS, withConfigDefaults } from "../shared/domain.mjs";
 import { refreshFaqs } from "../shared/faqs.mjs";
+import { createObserver } from "./observability.mjs";
 
 const num = (v) => (v == null ? null : Number(v));
 const json = (v) => JSON.stringify(v ?? null);
 
 export function createStore(db, { clock = Date.now } = {}) {
   const q = (text, params) => db.query(text, params);
+  const observer = createObserver(db, { clock });
   let ready = null;
 
   const store = {
     db,
     clock,
+    observer,
 
     /** Seed default settings once per cold start. */
     async init() {
       ready ??= (async () => {
+        await observer.init();
         for (const [key, value] of [
           ["config", DEFAULT_CONFIG],
           ["faqs", INITIAL_FAQS],
@@ -27,6 +31,13 @@ export function createStore(db, { clock = Date.now } = {}) {
         ]) {
           await q("insert into bob.settings(key,value) values($1,$2::jsonb) on conflict (key) do nothing", [key, json(value)]);
         }
+        await q("insert into bob.kv(key,value) values('report:tracking-started',$1::jsonb) on conflict (key) do nothing", [json(clock())]);
+        // One-time rollout requested by the office: retain consent, pause sending and phone codes.
+        // The marker and settings update are one atomic statement; later admin choices are preserved.
+        await q(`update bob.settings set value=value || jsonb_build_object(
+          'smsConfirmations',false,'requirePhoneVerification',false,'phoneServiceReady',false,
+          'emailConfirmations',true,'emailLaunchVersion',1,'version',coalesce((value->>'version')::int,1)+1)
+          where key='config' and coalesce(value->>'emailLaunchVersion','')<>'1'`);
       })().catch((error) => {
         ready = undefined; // a failed start must not stick for the life of the server
         throw error;
@@ -56,7 +67,10 @@ export function createStore(db, { clock = Date.now } = {}) {
     // ---- sessions ------------------------------------------------------------
     async createSession(token, data) {
       const now = clock();
-      await q("insert into bob.sessions(token,data,created,expires) values($1,$2::jsonb,$3,$4)", [token, json(data), now, now + 86_400_000]);
+      await q('insert into bob.sessions(token,data,created,expires) values($1,$2::jsonb,$3,$4)', [token, json(data), now, now + 86_400_000]);
+      await store.audit('conversation.started', token);
+      await observer.snapshot(token, data);
+      await observer.record(token, "started", { summary: "A customer opened a new BOB conversation.", stage: data.stage });
     },
     async loadSession(token) {
       const rows = await q("select data from bob.sessions where token=$1 and expires>$2", [token, clock()]);
@@ -64,6 +78,7 @@ export function createStore(db, { clock = Date.now } = {}) {
     },
     async saveSession(token, data) {
       await q("update bob.sessions set data=$1::jsonb, expires=$2 where token=$3", [json(data), clock() + 86_400_000, token]);
+      await observer.snapshot(token, data);
     },
     async countSessions() {
       return num((await q("select count(*)::int as n from bob.sessions"))[0].n);
@@ -235,6 +250,57 @@ export function createStore(db, { clock = Date.now } = {}) {
       await q("insert into bob.audit(id,created,action,target) values($1,$2,$3,$4)", [randomUUID(), clock(), action, String(target)]);
     },
 
+    /** BOB activity in [from,to), plus current results. Never returns chat tokens or transcripts. */
+    async activityReport(from, to) {
+      const params = [from, to];
+      const [chatRows, bookingRows, requestCounts, approvalCounts, appointmentRows, requestRows, approvalRows, auditRows, issueRows, trackingStartedAt] = await Promise.all([
+        q(`select
+          count(*) filter(where action='conversation.started')::int as conversations,
+          count(*) filter(where action in ('conversation.ai','conversation.guided','conversation.ai_fallback','conversation.contact_message'))::int as messages,
+          count(*) filter(where action='conversation.ai')::int as "aiReplies",
+          count(*) filter(where action in ('conversation.guided','conversation.ai_fallback'))::int as "ruleReplies",
+          count(*) filter(where action='conversation.ai_fallback')::int as "aiFallbacks"
+          from bob.audit where created >= $1 and created < $2`, params),
+        q(`select
+          count(*) filter(where created >= $1 and created < $2)::int as "bookingsCreated",
+          count(*) filter(where created >= $1 and created < $2 and status in ('confirmed','in_progress','completed'))::int as "bookingsConfirmed",
+          coalesce(sum(round((data->>'price')::numeric*100)) filter(where created >= $1 and created < $2 and status in ('confirmed','in_progress','completed')),0) as "bookedValueCents",
+          count(*) filter(where status in ('action_needed','confirming') or (status='failed' and created >= $1 and created < $2))::int as "bookingProblems",
+          count(*) filter(where data #>> '{notifications,email}'='failed' and status not in ('cancelled','rescheduled','failed'))::int as "emailFailures"
+          from bob.appointments where created < $2`, params),
+        q(`select count(*) filter(where created >= $1)::int as "requestsCreated",
+          count(*) filter(where data->>'status' in ('new','in_progress'))::int as "openRequests"
+          from bob.requests where created < $2`, params),
+        q('select count(*)::int as "pendingApprovals" from bob.approvals where created < $1 and status=\'pending\' and expires > $2', [to, clock()]),
+        q(`select data, status, count(*) over()::int as total from bob.appointments b
+          where (b.created >= $1 and b.created < $2) or exists(select 1 from bob.audit a where a.target=b.id and a.created >= $1 and a.created < $2)
+          order by b.created desc, b.id limit 50`, params),
+        q(`select data - 'transcript' as data, count(*) over()::int as total from bob.requests r
+          where (r.created >= $1 and r.created < $2) or exists(select 1 from bob.audit a where a.target=r.id and a.created >= $1 and a.created < $2)
+          order by r.created desc, r.id limit 50`, params),
+        q(`select data - 'session' - 'snapshot' as data, status, count(*) over()::int as total from bob.approvals r
+          where (r.created >= $1 and r.created < $2) or (r.created < $2 and r.status='pending' and r.expires > $3)
+          or exists(select 1 from bob.audit a where a.target=r.id and a.created >= $1 and a.created < $2)
+          order by r.created desc, r.id limit 50`, [from, to, clock()]),
+        q(`select created, action, target, count(*) over()::int as total from bob.audit
+          where created >= $1 and created < $2 and (action like 'booking.%' or action like 'appointment.%'
+          or action like 'request.%' or action like 'approval.%' or action like 'oncall.%' or action in ('settings.updated','integrations.updated','admin.booking.created','email.confirmation_failed'))
+          order by created desc, id limit 100`, params),
+        q("select value from bob.kv where key in ('diag:email','diag:daily-report','diag:last-error','diag:oncall-email') and (expires is null or expires>$1)", [clock()]),
+        store.kvGet("report:tracking-started"),
+      ]);
+      const counts = { ...chatRows[0], ...bookingRows[0], ...requestCounts[0], ...approvalCounts[0],
+        appointmentsChanged: appointmentRows[0]?.total || 0, requestsChanged: requestRows[0]?.total || 0,
+        approvalsIncluded: approvalRows[0]?.total || 0, activityCount: auditRows[0]?.total || 0 };
+      for (const key of Object.keys(counts)) counts[key] = Number(counts[key] || 0);
+      return { from, to, counts, trackingStartedAt: Number(trackingStartedAt || to),
+        appointments: appointmentRows.map((r) => ({ ...r.data, status: r.status })),
+        requests: requestRows.map((r) => r.data), approvals: approvalRows.map((r) => ({ ...r.data, status: r.status })),
+        activity: auditRows.map(({ created, action, target }) => ({ created: Number(created), action, target })),
+        issues: issueRows.map((r) => r.value).filter((v) => v && Number(v.at) >= from && Number(v.at) < to),
+      };
+    },
+
     // ---- key/value: cache, locks, rate limits ---------------------------------------
     async kvGet(key) {
       const rows = await q("select value from bob.kv where key=$1 and (expires is null or expires>$2)", [key, clock()]);
@@ -280,6 +346,7 @@ export function createStore(db, { clock = Date.now } = {}) {
 
     async cleanup() {
       const now = clock();
+      await observer.cleanup();
       await q("delete from bob.holds where expires<=$1", [now]);
       await q("delete from bob.sessions where expires<=$1", [now]);
       await q("delete from bob.admins where expires<=$1", [now]);

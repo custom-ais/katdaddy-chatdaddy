@@ -588,6 +588,10 @@ const UPGRADES = {
 };
 
 export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {}) {
+  return turnInternal(text, current, config, faqs, opts);
+}
+
+function turnInternal(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {}) {
   const s = structuredClone(current || initialSession());
   if (!s.v) Object.assign(s, { ...initialSession(), ...s, v: 3 });
   const t = normalize(text);
@@ -869,7 +873,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       return specialOffer(
         ["emergency"],
         "emergency",
-        "For an urgent blockage, our **Emergency Same-Day Clog Relief** is the right service: urgent blockage removal and airflow restoration. Same-day visits need a quick approval from our team before they're confirmed. You'll pick a time and we'll ask them right away. Keep the dryer off until the technician arrives.",
+        "For an urgent blockage, our **Emergency Same-Day Clog Relief** covers urgent blockage removal and airflow restoration. After your details, you can request an on-call availability check. A technician must accept before BOB offers a live opening, and you still approve the final booking. " + (config.phoneServiceReady === false ? "Emergency and same-day appointments are temporarily paused while the phone connection is being set up; requests go to the office for follow-up. " : "") + "Keep the dryer off until it has been checked by a qualified professional.",
         brief,
         ["Schedule regular cleaning", "Ask a question"],
       );

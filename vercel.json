@@ -3,6 +3,10 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "crons": [
+    { "path": "/api/cron/daily-report", "schedule": "10 0 * * *" },
+    { "path": "/api/cron/on-call", "schedule": "* * * * *" }
+  ],
   "functions": {
     "api/bob.mjs": { "maxDuration": 60 }
   },

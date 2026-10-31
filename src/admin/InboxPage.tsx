@@ -104,6 +104,7 @@ function RequestModal({ request: r, onClose }: { request: any; onClose: () => vo
         </div>
       </>}>
       {r.safety && <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3 text-sm font-bold text-rose-800 flex gap-2"><AlertTriangle size={18} />Safety flag: {r.safety}</div>}
+      {r.urgent && <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 text-sm text-amber-900"><strong>Emergency / same-day support ticket</strong><p>Office email: {r.emailNotification === 'sent' ? 'accepted by the email service' : r.emailNotification || 'pending'}. {r.appointmentId ? `Appointment ${r.appointmentId}.` : 'No appointment has been confirmed.'}</p>{r.address && <p>{r.address}, {r.city}, AZ {r.zip}</p>}</div>}
       <div className="text-sm text-slate-700 space-y-1">
         <p><a className="font-bold hover:text-orange-600" href={`tel:${r.phone}`}>{r.phone}</a>{r.email ? ` · ${r.email}` : ''}{r.zip ? ` · ZIP ${r.zip}` : ''}</p>
         <p className="text-xs text-slate-500">{r.smsConsent ? 'OK to text' : 'No texting consent'}{r.route ? ` · asked about ${r.route}` : ''}</p>
@@ -134,7 +135,7 @@ export function InboxPage({ focusApproval }: { focusApproval?: string | null }) 
 
   const approvals = useMemo(() => [...data.approvals].sort((x, y) => (x.status === 'pending' ? 0 : 1) - (y.status === 'pending' ? 0 : 1) || y.requestedAt - x.requestedAt), [data.approvals]);
   const pendingApprovals = approvals.filter((a) => a.status === 'pending');
-  const requests = useMemo(() => [...data.requests].sort((x, y) => Date.parse(y.createdAt) - Date.parse(x.createdAt)), [data.requests]);
+  const requests = useMemo(() => [...data.requests].sort((x, y) => Number(Boolean(y.urgent && y.status !== 'resolved')) - Number(Boolean(x.urgent && x.status !== 'resolved')) || Date.parse(y.createdAt) - Date.parse(x.createdAt)), [data.requests]);
   const openRequests = requests.filter((r) => r.status !== 'resolved');
   const shownRequests = showDone ? requests : openRequests;
   const approval = approvals.find((a) => a.id === approvalId);
@@ -176,7 +177,7 @@ export function InboxPage({ focusApproval }: { focusApproval?: string | null }) 
         <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div>
             <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2"><MessageSquare size={18} className="text-orange-500" />Customer requests {openRequests.length > 0 && <span className="px-2 py-0.5 text-[11px] font-bold rounded-full bg-rose-500 text-white">{openRequests.length}</span>}</h3>
-            <p className="text-xs text-slate-500 font-medium">Callback and question requests from the chat. Each one is also saved to LeadConnector when it's connected.</p>
+            <p className="text-xs text-slate-500 font-medium">Callback requests, customer questions, and urgent support tickets. Urgent tickets are emailed to West Valley.</p>
           </div>
           <label className="text-xs font-bold text-slate-600 flex items-center gap-2 cursor-pointer shrink-0"><input type="checkbox" className="accent-orange-500" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />Show resolved</label>
         </div>

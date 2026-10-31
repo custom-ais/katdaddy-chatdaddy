@@ -11,11 +11,13 @@ import { createBobHandler } from "../server/app.mjs";
 import { estimateDriveMinutes } from "../server/geo.mjs";
 import { JobberNotConnected } from "../server/jobber.mjs";
 import { DEFAULT_CONFIG } from "../shared/domain.mjs";
+import { createIntegrationSettings } from '../server/integration-settings.mjs';
 
 export const baseTime = Date.parse("2026-09-21T20:00:00Z"); // Monday 1:00 PM Arizona
 export const approved = {
   ...DEFAULT_CONFIG,
   bookingEnabled: true,
+  phoneServiceReady: true,
   pricesAcknowledged: true,
   scheduleAcknowledged: true,
   serviceZips: ["85326", "85374"],
@@ -168,7 +170,7 @@ export async function restDb(pglite) {
   return { ...db, close: () => pglite.close() };
 }
 
-export async function harness(t, { ready = true, config = {}, jobber: jobberOpts = {}, lc: lcOpts = {}, dataDir, assistant = null, rest = false, env: envOpts = {} } = {}) {
+export async function harness(t, { ready = true, config = {}, jobber: jobberOpts = {}, lc: lcOpts = {}, dataDir, assistant = null, email = null, rest = false, env: envOpts = {} } = {}) {
   let now = baseTime;
   const clock = () => now;
   const pg = await createPgliteDb(dataDir);
@@ -181,7 +183,8 @@ export async function harness(t, { ready = true, config = {}, jobber: jobberOpts
   const geo = fakeGeo();
   const scheduler = createScheduler({ store, jobber, geo });
   const env = { BOB_SETUP_TOKEN: "test-only-setup-token", ...envOpts };
-  const handle = createBobHandler({ store, jobber, lc, geo, scheduler, assistant, env, clock });
+  const integrationSettings = createIntegrationSettings({ store, env });
+  const handle = createBobHandler({ store, jobber, lc, geo, scheduler, assistant, email, integrationSettings, env, clock });
   const server = http.createServer((req, res) => handle(req, res));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;

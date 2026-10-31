@@ -58,10 +58,12 @@ export function TechnicianManagement({ onOpen }: { onOpen: (id: string) => void 
                     <p className="text-[11px] font-semibold mt-1 flex items-center gap-1.5 text-slate-500"><Link2 size={12} />{tech.jobberUserId ? 'Linked to Jobber user' : 'Not linked to Jobber'} · {takesOnline ? 'Takes online bookings' : 'No online bookings'}</p>
                   </div>
                 </div>
-                <select aria-label={`${tech.name} status`} value={tech.status} onChange={(e) => setStatus(tech.id, e.target.value as Technician['status'])} className={`text-xs font-extrabold px-3 py-1.5 rounded-xl border outline-none cursor-pointer ${STATUS[tech.status][1]}`}>
-                  {Object.entries(STATUS).map(([k, [label]]) => <option key={k} value={k}>{label}</option>)}
-                </select>
+                <div className="space-y-2 text-right">
+                  <span className={`block rounded-xl px-3 py-1.5 text-xs font-extrabold ${tech.availability?.state === 'available' ? 'bg-emerald-50 text-emerald-700' : tech.availability?.state === 'busy' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>{({ available: 'Available now', busy: 'Busy now', off_duty: 'Off duty', unknown: 'Availability unknown' })[tech.availability?.state || 'unknown']}</span>
+                  <select aria-label={`${tech.name} duty setting`} value={tech.status === 'off_duty' ? 'off_duty' : 'available'} onChange={(e) => setStatus(tech.id, e.target.value as Technician['status'])} className="rounded-lg border border-slate-200 px-2 py-1 text-xs"><option value="available">Use live calendar</option><option value="off_duty">Mark off duty</option></select>
+                </div>
               </div>
+              <p className="text-xs text-slate-500">{tech.availability?.reason || 'Checking calendar availability…'}{tech.availability?.until ? ` Until ${azTime(tech.availability.until)}.` : ''}{tech.availability && ` Checked ${azTime(tech.availability.checkedAt)} · ${tech.availability.source}`}</p>
               {tech.bio && <p className="text-xs text-slate-600 leading-relaxed font-medium bg-slate-50 p-3 rounded-xl border border-slate-100">{tech.bio}</p>}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                 <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 text-center"><span className="text-[10px] font-bold text-slate-400 block">Jobs today</span><span className="text-lg font-black text-slate-900 block">{todays.length}</span></div>

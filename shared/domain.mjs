@@ -30,6 +30,8 @@ export const DEFAULT_CONFIG = {
   // LeadConnector confirmations.
   smsConfirmations: true,
   emailConfirmations: true,
+  // Enable only after the office has tested its phone connection.
+  phoneServiceReady: false,
   // Service catalog (packages, home versions, add-ons). Edited in admin → Services & prices.
   services: SERVICE_CATALOG,
   // Emergency Same-Day Clog Relief can be booked with less notice than regular visits.
@@ -42,6 +44,7 @@ export const DEFAULT_CONFIG = {
   approver: { name: '', phone: '', email: '' },
   // Smart chat: Gemini reads free-typed messages. Off = button-and-keyword chat only.
   aiAssistant: true,
+  aiSettings: { model: '', temperature: null, maxOutputTokens: 1024, timeoutMs: 9000 },
   // From the scheduling workbook (dvs_sched_sql_truth_pkg). Rank open times by route fit.
   routeScoring: true,
   // Same-day regular visits: only before the cutoff hour, with notice, next to a booked job.
@@ -126,6 +129,7 @@ export function bookingQuote(route,config=DEFAULT_CONFIG,ctx={}) {
 // Saved settings win, but catalog items added in a later release (like new add-ons) are filled in.
 export const withConfigDefaults = saved => {
  const c={...DEFAULT_CONFIG,...(saved||{})};
+ c.aiSettings={...DEFAULT_CONFIG.aiSettings,...saved?.aiSettings};
  if(Array.isArray(saved?.services)){const ids=new Set(saved.services.map(x=>x.id));c.services=[...saved.services.map(x=>RETIRED_FAMILIES.has(x.family)?{...x,active:false}:x),...SERVICE_CATALOG.filter(x=>!ids.has(x.id))];}
  return c;
 };
@@ -181,6 +185,12 @@ export function validateConfig(c) {
  for(const k of ['businessName','phone','email','preparation','cleaningProcess','assessmentProcess'])if(typeof c[k]!=='string'||c[k].length>3000)errors.push(`Invalid ${k}.`);
  if(c.phone && !normalizePhone(c.phone)) errors.push('Enter a valid office phone number or leave it blank.');
  for(const k of ['requirePhoneVerification','aiAssistant','routeScoring'])if(typeof c[k]!=='boolean')errors.push(`Invalid ${k}.`);
+ if(typeof c.phoneServiceReady!=='boolean')errors.push('Invalid phone readiness setting.');
+ const ai=c.aiSettings||{};
+ if(typeof ai.model!=='string'||!/^([a-zA-Z0-9._-]{1,100})?$/.test(ai.model))errors.push('Enter a valid Gemini model name.');
+ if(ai.temperature!==null&&(!Number.isFinite(ai.temperature)||ai.temperature<0||ai.temperature>2))errors.push('AI temperature must be 0–2 or provider default.');
+ if(!Number.isInteger(ai.maxOutputTokens)||ai.maxOutputTokens<256||ai.maxOutputTokens>4096)errors.push('AI response limit must be 256–4096 tokens.');
+ if(!Number.isInteger(ai.timeoutMs)||ai.timeoutMs<2000||ai.timeoutMs>15000)errors.push('AI timeout must be 2–15 seconds.');
  const families=new Set((c.services||[]).map(x=>x.family));
  if(!Array.isArray(c.approvalServices)||c.approvalServices.some(f=>typeof f!=='string'||!families.has(f)))errors.push('Choose approval services from the service list.');
  const a=c.approver||{};

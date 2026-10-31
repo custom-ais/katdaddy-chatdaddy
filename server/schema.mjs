@@ -1,3 +1,5 @@
+import { OBSERVABILITY_DDL } from "./observability.mjs";
+
 // BOB's Postgres schema (Supabase). Everything lives in the `bob` schema, which is
 // not exposed through Supabase's public Data API; only the server connects to it.
 // Timestamps are epoch milliseconds (bigint), matching the original SQLite store.
@@ -98,11 +100,11 @@ create table if not exists bob.kv (
   expires bigint
 );
 create index if not exists kv_expires on bob.kv (expires);
-`;
+` + OBSERVABILITY_DDL.map((sql) => `${sql};`).join("\n");
 
 // Row-level security on, no policies: nothing but the server's own role can read these.
 export const RLS_SQL = [
-  "settings", "sessions", "admins", "holds", "appointments", "requests", "approvals", "events", "audit", "kv",
+  "settings", "sessions", "admins", "holds", "appointments", "requests", "approvals", "events", "audit", "kv", "conversations", "conversation_events",
 ]
   .map((t) => `alter table bob.${t} enable row level security;`)
   .join("\n");
