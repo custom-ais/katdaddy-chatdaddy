@@ -192,7 +192,7 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
       headers: {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": googleKey,
-        "X-Goog-FieldMask": "originIndex,destinationIndex,duration,condition",
+        "X-Goog-FieldMask": "originIndex,destinationIndex,status,duration,condition,distanceMeters",
       },
       body: JSON.stringify({ origins: [wp(origin)], destinations: destinations.map(wp), travelMode: "DRIVE", routingPreference: "TRAFFIC_UNAWARE" }),
     });
@@ -202,6 +202,7 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
     return json.map((el) => ({
       d: el.destinationIndex ?? 0,
       minutes: el.condition === "ROUTE_EXISTS" && el.duration ? Math.round(Number(String(el.duration).replace("s", "")) / 60) : null,
+      miles: el.condition === "ROUTE_EXISTS" && !el.status?.code && Number.isFinite(el.distanceMeters) ? el.distanceMeters / 1609.344 : null,
     }));
   }
 
@@ -246,5 +247,48 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
     return out;
   }
 
-  return { geocode, driveMinutes, lastIssue, suggestAddresses, addressFor, suggestions: Boolean(googleKey), provider: googleKey ? "google" : "estimate" };
+  // Coverage uses measured road miles only. A routing outage must never silently become a radius.
+  async function roadRoutes(pairs) {
+    if (!googleKey) throw Object.assign(new Error("Driving-distance coverage requires Google Routes to be configured."), { code: "ROUTING_UNAVAILABLE" });
+    const out = Array(pairs.length).fill(null), groups = new Map();
+    for (let i = 0; i < pairs.length; i++) {
+      const { from, to } = pairs[i];
+      if (!from || !to) continue;
+      if (pointKey(from) === pointKey(to)) { out[i] = { miles: 0, minutes: 0 }; continue; }
+      const cached = await cache.kvGet(`road:${pointKey(from)}>${pointKey(to)}`);
+      if (cached && Number.isFinite(cached.miles)) { out[i] = cached; continue; }
+      const key = pointKey(from);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(i);
+    }
+    for (const indexes of groups.values()) for (let start = 0; start < indexes.length; start += 24) {
+      const chunk = indexes.slice(start, start + 24);
+      let elements;
+      try { elements = await matrix(pairs[chunk[0]].from, chunk.map((i) => pairs[i].to)); }
+      catch (cause) { throw Object.assign(new Error("Road-distance lookup is unavailable. Please try again or ask the office to review the address."), { code: "ROUTING_UNAVAILABLE", cause }); }
+      for (let pos = 0; pos < chunk.length; pos++) {
+        const i = chunk[pos], el = elements.find((e) => e.d === pos);
+        if (el?.miles == null) continue;
+        out[i] = { miles: el.miles, minutes: el.minutes };
+        await cache.kvSet(`road:${pointKey(pairs[i].from)}>${pointKey(pairs[i].to)}`, out[i], DRIVE_TTL);
+      }
+    }
+    return out;
+  }
+
+  async function serviceAreaSamples(base, maximumMiles) {
+    const key = `area-samples:${pointKey(base)}:${maximumMiles}`;
+    const hit = await cache.kvGet(key);
+    if (hit) return hit;
+    const points = [];
+    for (const fraction of [0.25, 0.55, 0.85]) for (let bearing = 0; bearing < 12; bearing++) {
+      const angle = bearing * Math.PI / 6, miles = maximumMiles * fraction;
+      points.push({ lat: base.lat + miles * Math.cos(angle) / 69, lng: base.lng + miles * Math.sin(angle) / (69 * Math.cos(base.lat * Math.PI / 180)) });
+    }
+    const routes = await roadRoutes(points.map((to) => ({ from: base, to })));
+    const samples = points.map((point, i) => ({ ...point, ...(routes[i] || {}), reachable: Boolean(routes[i]) }));
+    await cache.kvSet(key, samples, 86_400);
+    return samples;
+  }
+  return { geocode, driveMinutes, roadRoutes, serviceAreaSamples, lastIssue, suggestAddresses, addressFor, suggestions: Boolean(googleKey), provider: googleKey ? "google" : "estimate" };
 }

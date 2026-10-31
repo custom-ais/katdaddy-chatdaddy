@@ -41,3 +41,6 @@ body { margin: 0; background: #f1f5f9; color: #0f172a; font-family: var(--font-s
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; scroll-behavior: auto !important; }
 }
+
+/* Keep the conversation mounted while the header becomes a compact launcher. */
+.bob-minimized > :not(:first-child) { display: none !important; }

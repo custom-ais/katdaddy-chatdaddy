@@ -229,7 +229,7 @@ test("notifications not configured are explicitly recorded", async (t) => {
   const h = await harness(t, { lc: { configured: false }, config: { requirePhoneVerification: false } });
   const r = await h.book();
   assert.match(r.data.receipt.notification, /not been confirmed sent/);
-  assert.equal((await h.db.query("select status from bob.events"))[0].status, "not_configured");
+  assert.equal((await h.db.query("select status from bob.events where kind='booking.created'"))[0].status, "not_configured");
 });
 test("settings use optimistic concurrency", async (t) => {
   const h = await harness(t);

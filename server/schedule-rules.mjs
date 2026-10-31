@@ -6,6 +6,7 @@
 // techIds null = blocks every technician (e.g. an unassigned Jobber visit).
 
 import { phoenixDate, dateTime } from "../shared/domain.mjs";
+import { emergencySameDayEligible } from "./activity.mjs";
 import { routeScore } from "./route-score.mjs";
 
 const MIN = 60_000;
@@ -26,6 +27,7 @@ export function candidateStarts({ config, durationMins, now, date = "", ticketCe
   for (let offset = 0; offset <= config.horizonDays; offset++) {
     const d = phoenixDate(new Date(now + offset * 86_400_000));
     if (date && d !== date) continue;
+    if (d === today && Number.isFinite(config.emergencyRequestedAt) && !emergencySameDayEligible(config.emergencyRequestedAt, d)) continue;
     if (config.blockedDates.includes(d)) continue;
     const weekday = new Date(`${d}T12:00:00-07:00`).getUTCDay();
     if (weekday === 0) continue;

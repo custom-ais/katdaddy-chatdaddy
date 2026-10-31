@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bird, Bot, Building, Calendar, Check, CheckCircle, ChevronDown, ChevronRight, Clock,
-  Download, Droplet, Flame, HelpCircle, Home, Layers, List, Loader2, MapPin, MessageCircle, MoreHorizontal, Pencil, Phone, RotateCcw,
+  Download, Droplet, Flame, HelpCircle, Home, Layers, List, Loader2, MapPin, MessageCircle, Minus, MoreHorizontal, Plus, Pencil, Phone, RotateCcw,
   Search, Send, Shield, ShieldCheck, Sparkles, Star, Thermometer, Timer, User, Wind, Wrench, X, Zap,
 } from 'lucide-react';
 import { api, ApiError, saveText } from '../lib/api';
@@ -563,6 +563,28 @@ function Receipt({ receipt, pending, onRestart }: { receipt: any; pending: boole
 
 export function BookingBot({ embedded = false, preview = false }: { embedded?: boolean; preview?: boolean }) {
   const [token, setToken] = useState(''), [session, setSession] = useState<any>(null), [config, setConfig] = useState<any>(null);
+  const [minimized, setMinimized] = useState(() => { try { return sessionStorage.getItem(preview ? 'bob.preview.minimized' : 'bob.minimized') === '1'; } catch { return false; } });
+  const expandRef = useRef<HTMLButtonElement>(null);
+  const changeMinimized = (value: boolean) => {
+    setMinimized(value);
+    try { sessionStorage.setItem(preview ? 'bob.preview.minimized' : 'bob.minimized', value ? '1' : '0'); } catch {}
+    if (token) void api('/api/activity', { method: 'POST', token, body: { kind: value ? 'widget.minimized' : 'widget.expanded' } }).catch(() => {});
+    if (embedded && value && window.parent !== window) {
+      let parentOrigin = '*'; try { parentOrigin = new URL(document.referrer).origin; } catch {}
+      window.parent.postMessage({ type: 'bob:minimize' }, parentOrigin);
+    }
+    if (!value) requestAnimationFrame(() => inputRef.current?.focus());
+    else requestAnimationFrame(() => expandRef.current?.focus());
+  };
+  useEffect(() => {
+    if (!embedded) return;
+    const receive = (event: MessageEvent) => {
+      let parentOrigin = ''; try { parentOrigin = new URL(document.referrer).origin; } catch {}
+      if (event.source === window.parent && parentOrigin && event.origin === parentOrigin && event.data?.type === 'bob:restore') { setMinimized(false); try { sessionStorage.removeItem(preview ? 'bob.preview.minimized' : 'bob.minimized'); } catch {} }
+    };
+    window.addEventListener('message', receive); return () => window.removeEventListener('message', receive);
+  }, [embedded, preview]);
+
   const [messages, setMessages] = useState<Msg[]>([]), [options, setOptions] = useState<string[]>([]), [multi, setMulti] = useState(false), [suggested, setSuggested] = useState('');
   const [picked, setPicked] = useState<string[]>([]), [text, setText] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [ready, setReady] = useState(false);
   const [action, setAction] = useState(''), [receipt, setReceipt] = useState<any>(null), [pending, setPending] = useState(false), [requestId, setRequestId] = useState(''), [faqOpen, setFaqOpen] = useState(false);
@@ -605,6 +627,9 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [storageKey]);
   useEffect(() => { mounted.current = true; void initialize(); return () => { mounted.current = false; }; }, [initialize]);
+  useEffect(() => {
+    if (error && token) void api('/api/activity', { method: 'POST', token, body: { kind: 'client.error', message: error } }).catch(() => {});
+  }, [error, token]);
   // Chats open at the top. The welcome screen starts at its heading; a conversation that is loaded starts at its latest reply.
   // A new reply opens at its first line. The customer's own message, the typing indicator and cards scroll to the latest point.
   const seen = useRef(0);
@@ -858,10 +883,10 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const showOptions = !busy && !receipt && !requestId && action !== 'emergency' && options.length > 0 && (last?.role === 'model' || !!contactStep);
   const started = messages.length > 0;
 
-  const shell = embedded ? 'h-dvh rounded-none border-0' : preview ? 'h-[780px] rounded-3xl max-w-4xl mx-auto' : 'h-[min(820px,calc(100dvh-2rem))] rounded-3xl max-w-3xl mx-auto';
+  const shell = minimized ? 'h-auto rounded-3xl max-w-3xl mx-auto' : embedded ? 'h-dvh rounded-none border-0' : preview ? 'h-[780px] rounded-3xl max-w-4xl mx-auto' : 'h-[min(820px,calc(100dvh-2rem))] rounded-3xl max-w-3xl mx-auto';
 
   return (
-    <div className={`bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden flex flex-col relative text-white ${shell}`}>
+    <div className={`bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden flex flex-col relative text-white ${minimized ? 'bob-minimized' : ''} ${shell}`}>
       <div className="bg-slate-800/90 backdrop-blur-md px-4 py-3 border-b border-slate-700/60 flex items-center justify-between z-20">
         <div className="flex items-center gap-3">
           <BobFace size={40} />
@@ -875,6 +900,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button ref={expandRef} type="button" onClick={() => changeMinimized(!minimized)} className="text-xs font-bold text-slate-300 hover:text-white p-2 rounded-xl bg-slate-700/50 hover:bg-slate-700" aria-expanded={!minimized} aria-label={minimized ? 'Expand BOB' : 'Minimize BOB'} title={minimized ? 'Expand BOB' : 'Minimize BOB'}>{minimized ? <Plus size={17} /> : <Minus size={17} />}</button>
           <button onClick={() => setFaqOpen(!faqOpen)} aria-expanded={faqOpen} className={`text-xs font-bold px-3 py-1.5 rounded-xl border flex items-center gap-1.5 ${faqOpen ? 'bg-orange-500 text-white border-orange-500' : 'text-slate-300 hover:text-white bg-slate-700/50 hover:bg-slate-700 border-slate-600'}`}>
             <HelpCircle size={14} className={faqOpen ? 'text-white' : 'text-orange-400'} /><span>FAQs</span>
           </button>

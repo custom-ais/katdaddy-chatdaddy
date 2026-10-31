@@ -6,12 +6,13 @@ import { Header, type Tab } from './Header';
 import { AppointmentManager } from './AppointmentManager';
 import { AnalyticsDashboard } from './AnalyticsDashboard';
 import { InboxPage } from './InboxPage';
+import { ActivityLogPage } from './ActivityLogPage';
 import { SettingsPage } from './SettingsPage';
 import { NewAppointmentModal } from './NewAppointmentModal';
 import { ErrorNote, Field, ToastContainer, inputClass, primaryButton, secondaryButton } from './ui';
 import { BookingBot } from '../customer/BookingBot';
 
-const TABS: Tab[] = ['appointments', 'inbox', 'analytics', 'bot', 'settings'];
+const TABS: Tab[] = ['appointments', 'inbox', 'analytics', 'activity', 'bot', 'settings'];
 
 function SignIn({ setupRequired, onSignedIn }: { setupRequired: boolean; onSignedIn: () => void }) {
   const [setup, setSetup] = useState(setupRequired);
@@ -102,6 +103,7 @@ function Dashboard({ onSignedOut, focusApproval }: { onSignedOut: () => void; fo
         {tab === 'appointments' && <AppointmentManager />}
         {tab === 'inbox' && <InboxPage focusApproval={focusApproval} />}
         {tab === 'analytics' && <AnalyticsDashboard onNavigateToAppointments={() => choose('appointments')} />}
+        {tab === 'activity' && <ActivityLogPage />}
         {tab === 'bot' && <BotPreview />}
         {tab === 'settings' && <SettingsPage />}
       </main>

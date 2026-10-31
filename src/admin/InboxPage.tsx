@@ -109,6 +109,7 @@ function RequestModal({ request: r, onClose }: { request: any; onClose: () => vo
         <p className="text-xs text-slate-500">{r.smsConsent ? 'OK to text' : 'No texting consent'}{r.route ? ` · asked about ${r.route}` : ''}</p>
       </div>
       <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-sm text-slate-800 whitespace-pre-wrap">{r.message}</div>
+      {r.kind === 'availability' && <div className={`rounded-2xl p-4 border text-sm ${r.notification?.status === 'failed' ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-blue-50 border-blue-200 text-blue-900'}`}><strong>Staff availability inquiry · {r.notification?.status === 'accepted' ? 'Text accepted by messaging provider' : r.notification?.status === 'failed' ? 'Staff text failed' : 'Text pending'}</strong><p className="mt-1">{r.notification?.recipient && `Recipient: ${r.notification.recipient}. `}{r.notification?.error || 'Technician availability and appointment confirmation still need to be completed.'}</p>{r.notification?.messageId && <p className="text-xs font-mono mt-2">Message ID: {r.notification.messageId}</p>}</div>}
       {r.concerns?.length > 0 && <p className="text-xs text-slate-600"><b>Customer said:</b> {r.concerns.join(' · ')}</p>}
       {transcript.length > 0 && (
         <div className="space-y-2">

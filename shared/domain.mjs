@@ -1,5 +1,6 @@
 import {SERVICE_CATALOG,RETIRED_FAMILIES,effectiveFamily,lineForService,addOnLines} from './catalog.mjs';
 import {difficultyMinutes} from './airflow.mjs';
+import {validPoint,customCoverage} from './coverage.mjs';
 // Cleaning packages get extra time when the answers point to a restricted or severe vent.
 const DIFFICULTY_FAMILIES=new Set(['premium','ultimate','express','postservice']);
 export const TIME_ZONE = 'America/Phoenix';
@@ -20,6 +21,11 @@ export const DEFAULT_CONFIG = {
   // Geo rules. The truck's starting point, the farthest drive BOB will book,
   // and the most driving allowed between two jobs on the same day.
   baseAddress: '',
+  baseLocation: null,
+  customServiceAreas: [],
+  serviceAreaMode: 'zip', // Existing coverage remains active until distance settings are saved.
+  serviceAreaMiles: 25,
+  travelAreaMiles: 45,
   maxDriveFromBaseMin: 60,
   maxDriveBetweenJobsMin: 20,
   // Travel fee by drive time from base: [{upToMin:45,feeCents:2500}, ...].
@@ -132,14 +138,24 @@ export const withConfigDefaults = saved => {
 /** "Text confirmations" is the switch for every text to customers: with it off, the phone code isn't sent either. */
 export const textCodeOn=(config)=>Boolean(config.requirePhoneVerification)&&config.smsConfirmations!==false;
 /** Where a ZIP stands: in the service area, just outside it (travel charge), or not served. */
-export function areaFor(zip,config=DEFAULT_CONFIG,state='') {
+export function areaFor(zip,config=DEFAULT_CONFIG,state='',drivingMiles=null,point=null) {
+ if(['driving_distance','radius'].includes(config.serviceAreaMode))return drivingAreaFor(drivingMiles,config,state,point);
  if(state&&String(state).toUpperCase()!=='AZ')return 'out';
  if((config.serviceZips||[]).includes(zip))return 'in';
  if((config.travelZips||[]).includes(zip))return 'travel';
  return 'out';
 }
+export function drivingAreaFor(miles,config=DEFAULT_CONFIG,state='',point=null) {
+ if(state&&String(state).toUpperCase()!=='AZ')return 'out';
+ const customized=customCoverage(point,config.customServiceAreas);
+ if(customized)return customized;
+ if(typeof miles!=='number'||!Number.isFinite(miles)||miles<0)return 'unknown';
+ if(miles<=config.serviceAreaMiles)return 'in';
+ return miles<=config.travelAreaMiles?'travel':'out';
+}
 export function isBookable(config) {
- return !!(config.bookingEnabled && config.scheduleAcknowledged && config.pricesAcknowledged && config.serviceZips.length && config.activeTechnicianIds.length);
+ const coverage=['driving_distance','radius'].includes(config.serviceAreaMode)?Boolean((config.baseAddress?.trim()||validPoint(config.baseLocation))&&config.serviceAreaMiles>0&&config.travelAreaMiles>=config.serviceAreaMiles):config.serviceZips.length;
+ return !!(config.bookingEnabled && config.scheduleAcknowledged && config.pricesAcknowledged && coverage && config.activeTechnicianIds.length);
 }
 export function normalizePhone(value) {
  const digits=String(value||'').replace(/\D/g,'');
@@ -175,6 +191,11 @@ export function validateConfig(c) {
  if(!Number.isInteger(c.emergencyLeadHours)||c.emergencyLeadHours<0||c.emergencyLeadHours>48)errors.push('Emergency notice must be 0–48 hours.');
  if(!Array.isArray(c.services)||!c.services.length||c.services.length>80||c.services.some(x=>!x||typeof x.id!=='string'||typeof x.family!=='string'||typeof x.variant!=='string'||typeof x.name!=='string'||!x.name.trim()||x.name.length>150||typeof x.description!=='string'||x.description.length>800||!Number.isInteger(x.priceCents)||x.priceCents<0||x.priceCents>1000000||!Number.isInteger(x.minutes)||x.minutes<0||x.minutes>600||typeof x.active!=='boolean'))errors.push('Each service needs a name, price, and duration.');
  if(typeof c.baseAddress!=='string'||c.baseAddress.length>300)errors.push('Invalid base address.');
+ if(!['zip','driving_distance','radius'].includes(c.serviceAreaMode))errors.push('Choose a service-area coverage method.');
+ if(!Number.isFinite(c.serviceAreaMiles)||c.serviceAreaMiles<=0||c.serviceAreaMiles>150||!Number.isFinite(c.travelAreaMiles)||c.travelAreaMiles<c.serviceAreaMiles||c.travelAreaMiles>150)errors.push('Driving distance limits must be 1–150 miles, with the travel area at least as large as the standard area.');
+ if(c.baseLocation!==null&&!validPoint(c.baseLocation))errors.push('Choose a valid base point on the map.');
+ if(['driving_distance','radius'].includes(c.serviceAreaMode)&&!c.baseAddress.trim()&&!validPoint(c.baseLocation))errors.push('Enter the base address or choose the base point on the map.');
+ if(!Array.isArray(c.customServiceAreas)||c.customServiceAreas.length>12||c.customServiceAreas.some(a=>!a||typeof a.id!=='string'||a.id.length>80||!['include','exclude'].includes(a.kind)||!Array.isArray(a.points)||a.points.length<3||a.points.length>60||a.points.some(p=>!validPoint(p))))errors.push('Draw valid included or excluded areas (3–60 points per shape, up to 12 shapes).');
  if(!Number.isInteger(c.maxDriveFromBaseMin)||c.maxDriveFromBaseMin<5||c.maxDriveFromBaseMin>240)errors.push('Max drive from base must be 5–240 minutes.');
  if(!Number.isInteger(c.maxDriveBetweenJobsMin)||c.maxDriveBetweenJobsMin<5||c.maxDriveBetweenJobsMin>120)errors.push('Max drive between jobs must be 5–120 minutes.');
  if(!Array.isArray(c.travelFeeTiers)||c.travelFeeTiers.length>10||c.travelFeeTiers.some(t=>!t||!Number.isInteger(t.upToMin)||t.upToMin<1||t.upToMin>240||!Number.isInteger(t.feeCents)||t.feeCents<0||t.feeCents>100000))errors.push('Each travel fee tier needs a drive time (minutes) and a fee.');
@@ -190,6 +211,6 @@ export function validateConfig(c) {
  const ov=c.overflow||{};
  if(typeof ov.enabled!=='boolean'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(ov.start||'')||!Number.isInteger(ov.maxDurationMins)||ov.maxDurationMins<15||ov.maxDurationMins>240||!Number.isInteger(ov.minTicketCents)||ov.minTicketCents<0||ov.minTicketCents>1000000||typeof ov.requireNearby!=='boolean')errors.push('Check the 5 PM overflow settings.');
  if(!Number.isInteger(c.dailyRevenueTargetCents)||c.dailyRevenueTargetCents<0||c.dailyRevenueTargetCents>10000000)errors.push('Invalid daily revenue target.');
- if(c.bookingEnabled&&(!c.scheduleAcknowledged||!c.pricesAcknowledged||!c.serviceZips?.length||!c.activeTechnicianIds?.length))errors.push('Review prices, acknowledge BOB as the scheduling source, select a technician, and enter approved service ZIP codes before enabling bookings.');
+ if(c.bookingEnabled&&!isBookable(c))errors.push('Review prices, acknowledge the schedule source, select a technician, and configure the service area before enabling bookings.');
  return errors;
 }

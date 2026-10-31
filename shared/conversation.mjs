@@ -709,7 +709,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
         return `Thanks, ZIP ${s.zip}.`;
       case "serviceAddress":
         // Only good news is acknowledged here; "just outside" and "not served" have their own replies.
-        return areaFor(s.zip, config, s.serviceAddress?.state) === "in" ? inArea() : "";
+        return areaFor(s.zip, config, s.serviceAddress?.state, s.serviceAddress?.drivingMiles, s.serviceAddress) === "in" ? inArea() : "";
       case "hasDryer":
         return p.hasDryer === "No" ? "Got it, duct line service only." : "Understood.";
       case "recentService":
@@ -958,7 +958,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   };
 
   // -- service area: in, just outside (travel charge), or not served ------------------------------
-  const inArea = () => (s.serviceAddress?.city ? `Good news: ${s.serviceAddress.city} is in our service area.` : "Good news: you're in our service area.");
+  const inArea = () => ["driving_distance", "radius"].includes(config.serviceAreaMode) ? "Good news: your address is within our standard service area." : (s.serviceAddress?.city ? `Good news: ${s.serviceAddress.city} is in our service area.` : "Good news: you're in our service area.");
   const travelFee = () => (priced && config.travelZoneFeeCents > 0 ? ` of ${money(config.travelZoneFeeCents)}` : "");
   const travelOffer = () => {
     s.stage = "travel_offer";
@@ -981,7 +981,8 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   const next = (brief = false) => {
     if (!s.intent) return welcome();
     if (s.zip) {
-      const area = areaFor(s.zip, config, s.serviceAddress?.state);
+      const area = areaFor(s.zip, config, s.serviceAddress?.state, s.serviceAddress?.drivingMiles, s.serviceAddress);
+      if (area === "unknown") return ask("serviceAddress");
       if (area === "out") return outOfArea();
       if (area === "travel" && !s.travelAccepted) return travelOffer();
     }
@@ -1167,12 +1168,13 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   // The address: the server looks it up (opts.place); a typed ZIP still works if it can't.
   if (s.pending === "serviceAddress" && opts.place) {
     const place = opts.place;
+    if (place.routingUnavailable) return respond("I couldn’t verify the driving distance right now. Please try your full address again, or contact the office to check coverage.", []);
     if (place.found) {
       s.zip = place.zip;
-      s.serviceAddress = { street: place.street, city: place.city, zip: place.zip, state: place.state || "", formatted: place.formatted || "" };
+      s.serviceAddress = { street: place.street, city: place.city, zip: place.zip, state: place.state || "", formatted: place.formatted || "", drivingMiles: place.drivingMiles ?? null, lat: place.lat ?? null, lng: place.lng ?? null };
       s.travelAccepted = false;
       s.travelDeclined = false;
-      if (areaFor(s.zip, config, place.state) === "in") ack = inArea();
+      if (areaFor(s.zip, config, place.state, place.drivingMiles, place) === "in") ack = inArea();
       return next();
     }
     if (place.incomplete) return respond("Please enter the full street address, including the house number, so I can check it.", []);
