@@ -29,6 +29,23 @@ const ISSUE_KEY = "diag:geo";
 const WEST_VALLEY = { latitude: 33.53, longitude: -112.38 };
 const ADDRESS_TYPES = ["street_address", "premise", "subpremise"];
 
+/** Google's error object from { error } or [{ error }], or null. */
+export const googleErrorOf = (json) => (Array.isArray(json) ? json[0]?.error : json?.error) || null;
+
+/** What to change in Google Cloud for the usual key problems, in plain words ("" if unknown). */
+export function googleFix(err, httpStatus, api) {
+  const reasons = (err?.details || []).map((d) => d?.reason).filter(Boolean).join(" ");
+  const text = `${reasons} ${err?.status || ""} ${err?.message || ""}`;
+  if (/SERVICE_DISABLED|has not been used|is disabled/i.test(text)) return `Fix: in Google Cloud, open APIs & Services → Library, find "${api}" and click Enable, in the same project as GOOGLE_MAPS_API_KEY. It can take a few minutes to start working.`;
+  if (/API_KEY_SERVICE_BLOCKED|requests to this API .* are blocked/i.test(text)) return `Fix: in Google Cloud → APIs & Services → Credentials, open the key and add "${api}" under API restrictions.`;
+  if (/REFERRER|referer/i.test(text)) return "Fix: the key only works from listed websites, and BOB calls Google from the server. In Google Cloud → Credentials, set the key's Application restrictions to None (or use a separate server key without a website restriction).";
+  if (/IP_ADDRESS_BLOCKED|IP address/i.test(text)) return "Fix: the key only works from listed IP addresses, and Vercel's change. In Google Cloud → Credentials, set the key's Application restrictions to None.";
+  if (/BILLING/i.test(text)) return "Fix: turn on billing for the Google Cloud project that owns the key.";
+  if (/API_KEY_INVALID|API key not valid/i.test(text)) return "Fix: GOOGLE_MAPS_API_KEY in Vercel isn't a valid key. Copy it again from Google Cloud → Credentials and redeploy.";
+  if (httpStatus === 429 || /RESOURCE_EXHAUSTED|quota/i.test(text)) return "Fix: the key hit a Google quota. Raise it under APIs & Services → Quotas, or try again later.";
+  return "";
+}
+
 export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY || "", fetchImpl = fetch, clock = () => Date.now() } = {}) {
   /** GET a JSON API with a time limit; an error page or a hang becomes a plain Error. */
   async function getJson(url, label) {
@@ -118,8 +135,10 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
   // One session token per address entry: the typing requests and the final Place Details call
   // are billed together as one session.
   const placesError = async (response, json, label) => {
-    const reason = json?.error ? `${json.error.status || response.status}${json.error.message ? ` (${json.error.message})` : ""}` : response.status;
-    const message = `${label} failed: ${reason}`;
+    const err = googleErrorOf(json);
+    const reason = err ? `${err.status || response.status}${err.message ? ` (${err.message})` : ""}` : response.status;
+    const fix = googleFix(err, response.status, label.includes("Routes") ? "Routes API" : "Places API (New)");
+    const message = `${label} failed: ${reason}${fix ? ` ${fix}` : ""}`;
     await cache.kvSet(ISSUE_KEY, { at: clock(), message }, 60 * 60 * 24 * 7).catch(() => {});
     return new Error(message);
   };
@@ -184,9 +203,20 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
   /** The last time every address lookup failed, for the dashboard (null if none this week). */
   const lastIssue = async () => (await cache.kvGet(ISSUE_KEY).catch(() => null)) || null;
 
+  // A network failure or timeout is recorded for the Connections panel like any Google refusal.
+  async function routesFetch(init) {
+    try {
+      return await fetchImpl("https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix", init);
+    } catch (error) {
+      const message = `Google Routes (drive distance) didn't answer: ${error.name === "TimeoutError" ? "timed out" : error.message}`;
+      await cache.kvSet(ISSUE_KEY, { at: clock(), message }, 60 * 60 * 24 * 7).catch(() => {});
+      throw new Error(message);
+    }
+  }
+
   async function matrix(origin, destinations) {
     const wp = (p) => ({ waypoint: { location: { latLng: { latitude: p.lat, longitude: p.lng } } } });
-    const response = await fetchImpl("https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix", {
+    const response = await routesFetch({
       method: "POST",
       signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
       headers: {
@@ -197,7 +227,8 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
       body: JSON.stringify({ origins: [wp(origin)], destinations: destinations.map(wp), travelMode: "DRIVE", routingPreference: "TRAFFIC_UNAWARE" }),
     });
     const json = await response.json().catch(() => null);
-    if (!response.ok || !Array.isArray(json)) throw new Error(`Route matrix failed: ${json?.error?.message || response.status}`);
+    // Errors come back as { error } or, because the matrix streams, as [{ error }].
+    if (!response.ok || !Array.isArray(json) || googleErrorOf(json)) throw await placesError(response, json, "Google Routes (drive distance)");
     // Proto3 JSON omits zero values, so a missing index means 0.
     return json.map((el) => ({
       d: el.destinationIndex ?? 0,
@@ -249,7 +280,7 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
 
   // Coverage uses measured road miles only. A routing outage must never silently become a radius.
   async function roadRoutes(pairs) {
-    if (!googleKey) throw Object.assign(new Error("Driving-distance coverage requires Google Routes to be configured."), { code: "ROUTING_UNAVAILABLE" });
+    if (!googleKey) throw Object.assign(new Error("GOOGLE_MAPS_API_KEY isn't set in Vercel. Add it (from a Google Cloud project with the Routes API turned on) and redeploy."), { code: "ROUTING_UNAVAILABLE" });
     const out = Array(pairs.length).fill(null), groups = new Map();
     for (let i = 0; i < pairs.length; i++) {
       const { from, to } = pairs[i];

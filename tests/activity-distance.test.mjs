@@ -54,6 +54,19 @@ test("road coverage uses route meters and never substitutes a straight-line esti
   await assert.rejects(geo.roadRoutes([{ from, to: { lat: 34, lng: -113 } }]), { code: "ROUTING_UNAVAILABLE" });
 });
 
+test("a Google refusal on drive distance says why and what to change, and shows in Connections", async () => {
+  const cache = new Map();
+  const disabled = [{ error: { code: 403, status: "PERMISSION_DENIED", message: "Routes API has not been used in project 123 before or it is disabled.", details: [{ reason: "SERVICE_DISABLED" }] } }];
+  const geo = createGeo({ googleKey: "test", cache: { kvGet: async (k) => cache.get(k), kvSet: async (k, v) => cache.set(k, v) }, fetchImpl: async () => new Response(JSON.stringify(disabled), { status: 403 }) });
+  const error = await geo.roadRoutes([{ from: { lat: 33.4, lng: -112.5 }, to: { lat: 33.5, lng: -112.6 } }]).catch((e) => e);
+  assert.equal(error.code, "ROUTING_UNAVAILABLE");
+  assert.match(error.cause.message, /PERMISSION_DENIED/);
+  assert.match(error.cause.message, /"Routes API" and click Enable/);
+  assert.match((await geo.lastIssue()).message, /Routes API/);
+  const noKey = await createGeo({ googleKey: "", cache: { kvGet: async () => null, kvSet: async () => {} } }).roadRoutes([]).catch((e) => e);
+  assert.match(noKey.message, /GOOGLE_MAPS_API_KEY isn't set/);
+});
+
 test("availability text is requested before triage and deduplicated, even when customer texts are off", async (t) => {
   const h = await harness(t, { config: { smsConfirmations: false, approver: { name: "Ryan", phone: "6235550100", email: "" } } });
   h.advance(40 * 86_400_000); // October 31, 1 PM Arizona

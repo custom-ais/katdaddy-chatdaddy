@@ -1047,7 +1047,12 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
           if (!geo.serviceAreaSamples && c.serviceAreaMode !== "radius") fail(503, "Driving-distance mapping is unavailable.");
           let points;
           try { points = c.serviceAreaMode === "radius" ? [] : await geo.serviceAreaSamples(base, c.travelAreaMiles); }
-          catch { fail(503, "Google road-distance lookup is unavailable. Check the Routes API connection and try again."); }
+          catch (error) {
+            // Say what Google actually said (and how to fix it), not just that it failed.
+            const reason = error.cause?.message || error.message;
+            console.error("[service-area] road-distance lookup failed:", reason);
+            fail(503, `Google road-distance lookup failed. ${reason}`);
+          }
           return send(200, { base, points: points.map((point) => ({ ...point, area: drivingAreaFor(point.miles, c, "", point) })), generatedAt: clock(), limits: { standard: c.serviceAreaMiles, travel: c.travelAreaMiles } });
         }
 

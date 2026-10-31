@@ -76,7 +76,7 @@ function Connections() {
     ['Smart chat', !!i.assistant?.configured, i.assistant?.configured ? `Gemini (${i.assistant.model}) reads typed messages. It can't set prices or book — BOB's rules do that.` : 'Add GEMINI_API_KEY in Vercel. Until then BOB uses buttons and keyword matching.'],
     ['Maps', i.maps?.provider === 'google' && !i.maps?.issue,
       <>{i.maps?.provider === 'google' ? 'Google finds addresses and drive times enforce the drive-time rules. If Google refuses, the free Census lookup is used.' : 'Free Census address lookup with straight-line drive estimates. Add GOOGLE_MAPS_API_KEY for real drive times.'}
-        {i.maps?.issue && <span className="block mt-1 font-semibold text-amber-800">Address lookup failed {when(i.maps.issue.at)}: {i.maps.issue.message}</span>}</>],
+        {i.maps?.issue && <span className="block mt-1 font-semibold text-amber-800">Google lookup failed {when(i.maps.issue.at)}: {i.maps.issue.message}</span>}</>],
     ['Database', !!i.database, i.database === 'supabase-rest' ? 'Supabase (ChatDaddy project), through the service key.' : i.database === 'postgres' ? 'Postgres connection string.' : 'Local test database — data is not kept.'],
     ...(i.lastError ? [['Last server error', false, <span className="text-rose-800">{when(i.lastError.at)} on {i.lastError.path}: {i.lastError.message}</span>] as [string, boolean, React.ReactNode]] : []),
   ];
