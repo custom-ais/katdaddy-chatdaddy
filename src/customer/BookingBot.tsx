@@ -318,7 +318,7 @@ function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { t
   }
   const check = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (busyRef.current || !sent || code.replace(/\D/g, '').length !== 6) return;
+    if (busyRef.current || !sent || code.replace(/\D/g, '').length !== CODE_DIGITS) return;
     busyRef.current = true; setBusy(true); setOperation('check'); setError('');
     try {
       const r = await api('/api/verify/check', { method: 'POST', token, body: { code } });
