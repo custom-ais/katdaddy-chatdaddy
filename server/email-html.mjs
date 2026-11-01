@@ -46,7 +46,7 @@ const options={
     'border-collapse':[/^(?:collapse|separate)$/], 'border-radius':[/^\d{1,2}px$/],
     'line-height':[/^(?:[12](?:\.\d{1,2})?|\d{1,2}px)$/],
   }},
-  transformTags:{a:(tagName,attribs)=>({tagName,attribs:{...attribs,...(!attribs.href?.trim()?{href:undefined}:{})}})},
+  transformTags:{a:(tagName,attribs)=>{ const clean={...attribs}; if(!clean.href?.trim()) delete clean.href; return {tagName,attribs:clean}; }},
 };
 export function sanitizeEmailHtml(html) { return sanitizeHtml(html,options); }
 export function htmlToPlainText(html) {
