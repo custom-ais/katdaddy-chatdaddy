@@ -19,7 +19,7 @@ test('four channel states roundtrip legacy booleans without enabling transport',
   assert.deepEqual(out.confirmationChannelPatch(state),{smsConfirmations:sms,emailConfirmations:email});
  }
  const changes=[];const config={smsConfirmations:false,emailConfirmations:false,messageTemplates:{ownerBookingSms:'Preserve me'}};
- const tree=out.MessageTemplates({config,integrations:{},onPatch:patch=>changes.push(patch)});
+ const tree=out.MessageTemplates({config,integrations:{},allowOwner:true,allowMessaging:true,onPatch:patch=>changes.push(patch)});
  find(tree,node=>node.type==='select').props.onChange({target:{value:'both'}});
  assert.deepEqual(changes,[{smsConfirmations:true,emailConfirmations:true}]);assert.equal(config.messageTemplates.ownerBookingSms,'Preserve me');
  const html=renderToStaticMarkup(tree);assert.match(html,/unavailable or disabled/);assert.match(html,/does not enable or configure/);assert.match(html,/Texts require customer consent/);
@@ -45,13 +45,13 @@ test('sample preview is escaped plaintext, validates variables, and blank uses e
 test('Templates uses mounted shared Settings drafts and preserves Client Hub independent saving',async()=>{
  const settings=await readFile(new URL('../src/admin/SettingsPage.tsx',import.meta.url),'utf8');
  assert.match(settings,/\['templates', 'Templates'\]/);assert.match(settings,/hidden=\{page !== 'templates'\}/);
- assert.match(settings,/<MessageTemplates config=\{c\} integrations=\{data.integrations\} onPatch=/);
+ assert.match(settings,/<MessageTemplates config=\{c\} integrations=\{data.integrations\} allowOwner=\{can\('ownerSms.manage'\)\} allowMessaging=\{can\('integrations.manage'\)\} onPatch=/);
  assert.match(settings,/<ClientHubSettings \/>/);assert.match(source,/Verification codes and emergency approval requests are separate/);
 });
 
 test('HTML format selector keeps drafts and only patches the explicit format',()=>{
  const changes=[];const config={messageTemplates:{confirmationEmailBody:'<p>Preserved body</p>'},messageEmailFormat:'plain'};
- const tree=out.MessageTemplates({config,integrations:{},onPatch:p=>changes.push(p)});
+ const tree=out.MessageTemplates({config,integrations:{},allowOwner:true,allowMessaging:true,onPatch:p=>changes.push(p)});
  const mode=find(tree,node=>node.type==='select'&&node.props.value==='plain');assert.ok(mode);
  mode.props.onChange({target:{value:'html'}});assert.deepEqual(changes,[{messageEmailFormat:'html'}]);
  assert.equal(config.messageTemplates.confirmationEmailBody,'<p>Preserved body</p>');

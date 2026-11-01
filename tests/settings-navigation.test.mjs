@@ -6,6 +6,9 @@ import ts from 'typescript';
 const require=createRequire(import.meta.url);
 const source=await readFile(new URL('../src/admin/SettingsPage.tsx',import.meta.url),'utf8');
 const root=await readFile(new URL('../src/admin/AdminRoot.tsx',import.meta.url),'utf8');
+const accessSource=await readFile(new URL('../src/admin/access.ts',import.meta.url),'utf8');
+const permissions=await import('../shared/admin-permissions.mjs');
+const access={};new Function('require','exports',ts.transpileModule(accessSource,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText)(id=>id==='../../shared/admin-permissions.mjs'?permissions:require(id),access);
 const helpers=source.slice(source.indexOf('export const SETTINGS_PAGES'),source.indexOf('export function SettingsPage('));
 const exports={};new Function('require','exports',ts.transpileModule(helpers,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText)(require,exports);
 test('all Settings sections have explicit deep links with safe default and browser history restoration',()=>{
@@ -19,7 +22,7 @@ test('all Settings sections have explicit deep links with safe default and brows
 });
 test('inactive panels stay mounted and the shared save state remains outside the panels',()=>{
  for(const [id] of exports.SETTINGS_PAGES) assert.ok(source.includes(`hidden={page !== '${id}'}`),id);
- const navigate=source.slice(source.indexOf('  const navigate ='),source.indexOf('  const { data, mutate }',source.indexOf('export function SettingsPage(')));
+ const navigate=source.slice(source.indexOf('  const navigate ='),source.indexOf('  const [c, setC]',source.indexOf('export function SettingsPage(')));
  assert.doesNotMatch(navigate,/setC\(|setDirty\(|setTechs\(|setTechDirty\(|save\(/);
  assert.match(source,/Unsaved \{changed\.join\(' and '\)\} — kept as you switch sections/);
  assert.equal((source.match(/<SaveDock changed=/g)||[]).length,1);
@@ -38,7 +41,7 @@ test('all original settings controls are retained in the nine visible subpages',
 test('top-level navigation and history keep Settings mounted; dirty drafts warn on reload',()=>{
  assert.match(root,/url.searchParams.set\('tab', t\)/);
  assert.match(root,/addEventListener\('popstate', restore\)/);
- assert.match(root,/settingsMounted && <div hidden=\{tab !== 'settings'\}><SettingsPage active=\{tab === 'settings'\}/);
+ assert.match(root,/settingsMounted && canViewTab\(data.access, 'settings'\) && <div hidden=\{tab !== 'settings'\}><SettingsPage active=\{tab === 'settings'\}/);
  assert.match(source,/active && <SaveDock/);
  assert.match(source,/addEventListener\('beforeunload', warn\)/);
  assert.match(source,/removeEventListener\('beforeunload', warn\)/);
@@ -48,7 +51,7 @@ test('top-level route parser restores Settings and other tabs without trusting a
  const constants=root.match(/const TABS: Tab\[\] = [^;]+;/)[0];
  const helper=root.slice(root.indexOf('export function adminTabFromSearch'),root.indexOf('\nfunction Dashboard('));
  const compiled=ts.transpileModule(`${constants}\n${helper}`,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
- const out={};new Function('require','exports',compiled)(require,out);
+ const out={};new Function('require','exports','ADMIN_TABS',compiled)(require,out,access.ADMIN_TABS);
  for(const tab of ['appointments','inbox','analytics','activity','bot','settings']) assert.equal(out.adminTabFromSearch(`?tab=${tab}&settings=schedule`),tab);
  assert.equal(out.adminTabFromSearch('?tab=unknown'),'appointments');
  assert.equal(out.adminTabFromSearch('?approval=APR-test'),'inbox');

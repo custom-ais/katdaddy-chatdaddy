@@ -1,5 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from '../lib/api';
+import { hasPermission } from '../../shared/admin-permissions.mjs';
+
+export interface AdminPrincipal { id?: string; email?: string; name?: string; role: 'master' | 'member' | 'legacy'; permissions?: string[]; version?: number; sessionVersion?: number }
 
 export type AppointmentStatus = 'confirmed' | 'in_progress' | 'completed' | 'cancelled' | 'action_needed' | 'failed' | 'confirming';
 
@@ -22,6 +25,8 @@ export interface Technician {
 }
 
 export interface Snapshot {
+  access?: AdminPrincipal;
+  analyticsAppointments?: Appointment[];
   bookingEnabled?: boolean;
   config: any; faqs: any[]; technicians: Technician[]; appointments: Appointment[]; requests: any[]; approvals: any[];
   heldLocksCount: number; conversations: number; notifications: any[]; integrations: any; westValleyZips: string[]; now: number;
@@ -37,6 +42,7 @@ interface Ctx {
   showToast: (t: Omit<ToastMessage, 'id'>) => void;
   dismissToast: (id: string) => void;
   activeAppointments: Appointment[];
+  can: (permission: string) => boolean;
 }
 
 const DashboardContext = createContext<Ctx | null>(null);
@@ -86,9 +92,10 @@ export function DashboardProvider({ initial, onSignedOut, children }: { initial:
   }, [onSignedOut, showToast]);
 
   const activeAppointments = useMemo(() => data.appointments.filter((a) => a.status !== 'failed'), [data.appointments]);
+  const can = useCallback((permission: string) => hasPermission(data.access, permission), [data.access]);
 
   return (
-    <DashboardContext.Provider value={{ data, loading, refresh, mutate, toasts, showToast, dismissToast, activeAppointments }}>
+    <DashboardContext.Provider value={{ data, loading, refresh, mutate, toasts, showToast, dismissToast, activeAppointments, can }}>
       {children}
     </DashboardContext.Provider>
   );

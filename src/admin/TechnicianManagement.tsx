@@ -11,17 +11,24 @@ const STATUS: Record<Technician['status'], [string, string]> = {
 };
 
 export function TechnicianManagement({ onOpen }: { onOpen: (id: string) => void }) {
-  const { data, activeAppointments: appointments, mutate, showToast } = useDashboard();
+  const { data, activeAppointments: appointments, mutate, showToast, can } = useDashboard();
+  const canViewFinance = can('finance.view');
+  const canViewSchedule = can('settings.schedule.view');
+  const canManageSchedule = canViewSchedule && can('settings.schedule.manage');
+  const canManageAppointments = can('appointments.view') && can('appointments.manage');
+  const amount = (value: number) => canViewFinance ? Number.isFinite(value) ? dollars(value) : '—' : 'Restricted';
   const today = azDate(Date.now());
   const weekAgo = Date.now() - 7 * 86_400_000;
-  const target = (data.config.dailyRevenueTargetCents || 0) / 100;
+  const target = canViewFinance ? (data.config.dailyRevenueTargetCents || 0) / 100 : 0;
 
   const setStatus = async (id: string, status: Technician['status']) => {
+    if (!can('settings.schedule.view') || !can('settings.schedule.manage')) return;
     try {
       await mutate('/api/admin/technicians', { technicians: data.technicians.map((t) => (t.id === id ? { ...t, status } : t)) }, 'POST', 'Status updated');
     } catch (e) { showToast({ type: 'error', title: "Couldn't update", description: (e as Error).message }); }
   };
   const reassign = async (apptId: string, technicianId: string) => {
+    if (!can('appointments.view') || !can('appointments.manage')) return;
     const a = appointments.find((x) => x.id === apptId);
     if (!a) return;
     try {
@@ -40,12 +47,12 @@ export function TechnicianManagement({ onOpen }: { onOpen: (id: string) => void 
         {data.technicians.map((tech) => {
           const mine = appointments.filter((a) => a.technicianId === tech.id && a.status !== 'cancelled');
           const todays = mine.filter((a) => azDate(a.scheduledAt) === today);
-          const revenueToday = todays.reduce((n, a) => n + a.price, 0);
+          const revenueToday = todays.reduce((n, a) => n + (Number.isFinite(a.price) ? a.price : 0), 0);
           const week = mine.filter((a) => a.status === 'completed' && Date.parse(a.scheduledAt) >= weekAgo).length;
           const readings = mine.filter((a) => a.status === 'completed' && a.airflowReadings?.beforeCfm && a.airflowReadings?.afterCfm);
           const gain = readings.length ? Math.round(readings.reduce((n, a) => n + ((a.airflowReadings!.afterCfm! - a.airflowReadings!.beforeCfm!) / a.airflowReadings!.beforeCfm!) * 100, 0) / readings.length) : null;
           const onSite = mine.find((a) => a.status === 'in_progress');
-          const takesOnline = data.config.activeTechnicianIds.includes(tech.id);
+          const takesOnline = (data.config.activeTechnicianIds || []).includes(tech.id);
           return (
             <div key={tech.id} className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-6 space-y-5">
               <div className="flex items-start justify-between gap-4">
@@ -55,23 +62,23 @@ export function TechnicianManagement({ onOpen }: { onOpen: (id: string) => void 
                     <div className="flex items-center gap-2 flex-wrap"><h3 className="text-xl font-black text-slate-900 tracking-tight">{tech.name}</h3>{tech.vehicle && <span className="text-xs font-mono font-bold px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200">{tech.vehicle}</span>}</div>
                     {tech.zone && <p className="text-xs font-semibold text-slate-500 mt-0.5 flex items-center gap-1.5"><MapPin size={13} className="text-orange-500" />{tech.zone}</p>}
                     {tech.phone && <p className="text-xs font-medium text-slate-600 mt-0.5 flex items-center gap-1.5"><Phone size={13} className="text-slate-400" /><a href={`tel:${tech.phone}`} className="hover:text-orange-600 font-semibold">{tech.phone}</a></p>}
-                    <p className="text-[11px] font-semibold mt-1 flex items-center gap-1.5 text-slate-500"><Link2 size={12} />{tech.jobberUserId ? 'Linked to Jobber user' : 'Not linked to Jobber'} · {takesOnline ? 'Takes online bookings' : 'No online bookings'}</p>
+                    {canViewSchedule && <p className="text-[11px] font-semibold mt-1 flex items-center gap-1.5 text-slate-500"><Link2 size={12} />{tech.jobberUserId ? 'Linked to Jobber user' : 'Not linked to Jobber'} · {takesOnline ? 'Takes online bookings' : 'No online bookings'}</p>}
                   </div>
                 </div>
-                <select aria-label={`${tech.name} status`} value={tech.status} onChange={(e) => setStatus(tech.id, e.target.value as Technician['status'])} className={`text-xs font-extrabold px-3 py-1.5 rounded-xl border outline-none cursor-pointer ${STATUS[tech.status][1]}`}>
+                <select aria-label={`${tech.name} status`} value={tech.status} disabled={!canManageSchedule} onChange={(e) => setStatus(tech.id, e.target.value as Technician['status'])} className={`text-xs font-extrabold px-3 py-1.5 rounded-xl border outline-none cursor-pointer ${STATUS[tech.status][1]}`}>
                   {Object.entries(STATUS).map(([k, [label]]) => <option key={k} value={k}>{label}</option>)}
                 </select>
               </div>
               {tech.bio && <p className="text-xs text-slate-600 leading-relaxed font-medium bg-slate-50 p-3 rounded-xl border border-slate-100">{tech.bio}</p>}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                 <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 text-center"><span className="text-[10px] font-bold text-slate-400 block">Jobs today</span><span className="text-lg font-black text-slate-900 block">{todays.length}</span></div>
-                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 text-center"><span className="text-[10px] font-bold text-slate-400 block">Booked today</span><span className="text-lg font-black text-emerald-600 block">{dollars(revenueToday)}</span></div>
+                <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 text-center"><span className="text-[10px] font-bold text-slate-400 block">Booked today</span><span className="text-lg font-black text-emerald-600 block">{amount(revenueToday)}</span></div>
                 <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 text-center"><span className="text-[10px] font-bold text-slate-400 block">Avg airflow gain</span><span className="text-lg font-black text-orange-600 flex items-center justify-center gap-0.5"><Gauge size={14} />{gain === null ? '—' : `${gain >= 0 ? '+' : ''}${gain}%`}</span></div>
                 <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 text-center"><span className="text-[10px] font-bold text-slate-400 block">Done, 7 days</span><span className="text-lg font-black text-slate-900 block">{week}</span></div>
               </div>
               {target > 0 && (
                 <div>
-                  <div className="flex justify-between text-[11px] font-bold text-slate-500 mb-1"><span className="flex items-center gap-1"><Target size={12} />Daily target</span><span>{dollars(revenueToday)} of {dollars(target)}</span></div>
+                  <div className="flex justify-between text-[11px] font-bold text-slate-500 mb-1"><span className="flex items-center gap-1"><Target size={12} />Daily target</span><span>{amount(revenueToday)} of {amount(target)}</span></div>
                   <div className="h-2 rounded-full bg-slate-100 overflow-hidden"><div className={`h-full ${revenueToday >= target ? 'bg-emerald-500' : 'bg-orange-500'}`} style={{ width: `${Math.min(100, (revenueToday / target) * 100)}%` }} /></div>
                 </div>
               )}
@@ -98,12 +105,12 @@ export function TechnicianManagement({ onOpen }: { onOpen: (id: string) => void 
           {upcoming.map((a) => (
             <div key={a.id} className="py-4 flex flex-col md:flex-row md:items-center justify-between gap-4 px-2">
               <button className="space-y-1 text-left" onClick={() => onOpen(a.id)}>
-                <div className="flex items-center gap-2.5 flex-wrap"><span className="font-extrabold text-sm text-slate-900">{a.customerName}</span><StatusBadge appt={a} compact /><span className="text-xs font-extrabold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-md border border-orange-200">{dollars(a.price)}</span><span className="text-xs font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">{a.package}</span></div>
+                <div className="flex items-center gap-2.5 flex-wrap"><span className="font-extrabold text-sm text-slate-900">{a.customerName}</span><StatusBadge appt={a} compact /><span className="text-xs font-extrabold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-md border border-orange-200">{amount(a.price)}</span><span className="text-xs font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">{a.package}</span></div>
                 <div className="flex items-center gap-3 text-xs text-slate-500 font-medium"><span className="flex items-center gap-1"><Calendar size={12} />{azDay(a.scheduledAt)} {azTime(a.scheduledAt)}</span><span className="flex items-center gap-1"><MapPin size={12} />{a.address}, {a.city}</span></div>
               </button>
               <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-2xl border border-slate-200 self-start md:self-auto" title={isLinked(a) ? 'Reassign this visit in Jobber' : undefined}>
                 {data.technicians.map((t) => (
-                  <button key={t.id} disabled={isLinked(a) || a.technicianId === t.id} onClick={() => reassign(a.id, t.id)} className={`px-3 py-1.5 rounded-xl text-xs font-extrabold ${a.technicianId === t.id ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200/50 disabled:hover:bg-transparent disabled:opacity-50'}`}>
+                  <button key={t.id} disabled={!canManageAppointments || isLinked(a) || a.technicianId === t.id} onClick={() => reassign(a.id, t.id)} className={`px-3 py-1.5 rounded-xl text-xs font-extrabold ${a.technicianId === t.id ? 'bg-white text-slate-900 shadow-xs border border-slate-200' : 'text-slate-500 hover:text-slate-900 hover:bg-slate-200/50 disabled:hover:bg-transparent disabled:opacity-50'}`}>
                     {t.name.split(' ')[0]}{a.technicianId === t.id && <span className="ml-1 text-orange-500">✓</span>}
                   </button>
                 ))}

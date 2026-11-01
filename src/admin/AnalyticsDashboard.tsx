@@ -29,7 +29,9 @@ function Empty({ children }: { children: React.ReactNode }) {
 }
 
 export function AnalyticsDashboard({ onNavigateToAppointments }: { onNavigateToAppointments: () => void }) {
-  const { data, activeAppointments } = useDashboard();
+  const { data, can } = useDashboard();
+  const appointments = data.analyticsAppointments || data.appointments;
+  const activeAppointments = useMemo(() => appointments.filter(a => a.status !== 'failed'), [appointments]);
   const now = Date.now();
   const booked = useMemo(() => activeAppointments.filter((a) => a.status !== 'cancelled'), [activeAppointments]);
 
@@ -41,9 +43,9 @@ export function AnalyticsDashboard({ onNavigateToAppointments }: { onNavigateToA
     const readings = booked.filter((a) => a.airflowReadings?.beforeCfm && a.airflowReadings?.afterCfm);
     const gain = readings.length ? Math.round(readings.reduce((n, a) => n + ((a.airflowReadings!.afterCfm! - a.airflowReadings!.beforeCfm!) / a.airflowReadings!.beforeCfm!) * 100, 0) / readings.length) : null;
     const needsOffice = activeAppointments.filter((a) => a.status === 'action_needed').length;
-    const notBooked = data.appointments.filter((a) => a.status === 'failed').length;
+    const notBooked = appointments.filter((a) => a.status === 'failed').length;
     return { revenue, avg: booked.length ? revenue / booked.length : 0, completed, upcoming, online, readings: readings.length, gain, needsOffice, notBooked };
-  }, [booked, activeAppointments, data.appointments, now]);
+  }, [booked, activeAppointments, appointments, now]);
 
   // Revenue by day, a week back and a week ahead, in Arizona time.
   const trend = useMemo(() => {
@@ -97,7 +99,7 @@ export function AnalyticsDashboard({ onNavigateToAppointments }: { onNavigateToA
             <span className="text-[11px] font-bold text-slate-300 block">Times held right now</span>
             <span className="text-xl font-black text-orange-400 flex items-center justify-center gap-1.5 mt-0.5"><Timer size={16} />{data.heldLocksCount}</span>
           </div>
-          <button onClick={onNavigateToAppointments} className="px-5 py-3 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-extrabold text-sm rounded-2xl shadow-lg shadow-orange-500/30 active:scale-95 whitespace-nowrap">View appointments</button>
+          {can('appointments.view') && <button onClick={onNavigateToAppointments} className="px-5 py-3 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-extrabold text-sm rounded-2xl shadow-lg shadow-orange-500/30 active:scale-95 whitespace-nowrap">View appointments</button>}
         </>}>
         Every number here is counted from appointments in BOB. Nothing is estimated — a blank means there's no data yet.
       </Banner>

@@ -133,7 +133,7 @@ test('confirmation email status is independent of OTP and admin send actions sup
   assert.match(source, /i\.email\?\.configured/);
   assert.match(source, /c\.integrations\?\.email === false/);
   const detail = await readFile(new URL('../src/admin/AppointmentDetailModal.tsx', import.meta.url), 'utf8');
-  assert.match(detail, />Send confirmation<\/button>/);
+  assert.match(detail, />Send manual confirmation<\/button>/);
   assert.doesNotMatch(detail, /Resend confirmation|'Confirmation sent'/);
   assert.match(detail, /not confirmed delivery/);
   assert.match(detail, /failed_or_uncertain.*office review/);
