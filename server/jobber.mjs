@@ -370,7 +370,7 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     const input = {
       firstName: contact.firstName,
       lastName: contact.lastName || "-",
-      // LeadConnector sends the confirmations, so Jobber's client reminders stay off by default.
+      // ChatDaddy's selected transports send confirmations; Jobber client reminders stay off by default.
       receivesReminders: env.JOBBER_CLIENT_REMINDERS === "true",
       properties: [{ address: addr }],
     };

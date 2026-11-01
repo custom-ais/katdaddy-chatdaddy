@@ -80,3 +80,60 @@ test('optional absent store is safe and common credential patterns are redacted'
   const text = JSON.stringify(await status.snapshot());
   assert.equal(/secret-value|secret-token/.test(text), false);
 });
+
+function googleFixture() {
+  const h = fixture();
+  // Exact operation set used by the production Google adapter; this fixture
+  // records observations only and must never issue a live provider request.
+  let now = 1000;
+  const status = createIntegrationStatus({ cache: h.cache, provider: 'google', revision: 'fake-google-config', operations: ['geocode', 'places', 'routes'], clock: () => now });
+  return { status, advance: ms => { now += ms; } };
+}
+
+test('fresh measured routes and geocoding can succeed while unused Places keeps summary unknown', async () => {
+  const { status } = googleFixture();
+  await status.recordSuccess('geocode');
+  await status.recordSuccess('routes');
+  const snapshot = await status.snapshot();
+  assert.equal(snapshot.status, 'unknown');
+  assert.equal(snapshot.lastSuccessAt, 1000);
+  assert.equal(snapshot.activeIssue, null);
+  assert.equal(snapshot.operations.geocode.status, 'healthy');
+  assert.equal(snapshot.operations.routes.status, 'healthy');
+  assert.equal(snapshot.operations.places.status, 'unknown');
+  assert.equal(snapshot.operations.places.checkedAt, null);
+  assert.equal(snapshot.operations.places.lastSuccessAt, null);
+});
+
+test('passive refresh never renews Google observations; success expires at fifteen minutes', async () => {
+  const { status, advance } = googleFixture();
+  for (const op of ['geocode', 'places', 'routes']) await status.recordSuccess(op);
+  advance(15 * 60_000 - 1);
+  assert.equal((await status.snapshot()).status, 'healthy');
+  advance(1);
+  const snapshot = await status.snapshot();
+  assert.equal(snapshot.status, 'unknown');
+  assert.equal(snapshot.lastSuccessAt, 1000);
+  for (const op of Object.values(snapshot.operations)) {
+    assert.equal(op.status, 'unknown');
+    assert.equal(op.stale, true);
+    assert.equal(op.checkedAt, 1000);
+    assert.equal(op.lastSuccessAt, 1000);
+  }
+  assert.deepEqual(await status.snapshot(), snapshot);
+});
+
+test('active route failure takes precedence over fresh geocode and Places successes', async () => {
+  const { status, advance } = googleFixture();
+  await status.recordFailure('routes', 'Measured route unavailable');
+  advance(1);
+  await status.recordSuccess('geocode');
+  await status.recordSuccess('places');
+  const snapshot = await status.snapshot();
+  assert.equal(snapshot.status, 'error');
+  assert.equal(snapshot.lastSuccessAt, 1001);
+  assert.equal(snapshot.activeIssue.operation, 'routes');
+  assert.equal(snapshot.operations.routes.status, 'error');
+  assert.equal(snapshot.operations.geocode.status, 'healthy');
+  assert.equal(snapshot.operations.places.status, 'healthy');
+});

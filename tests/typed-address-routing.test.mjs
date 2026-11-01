@@ -7,7 +7,7 @@ import { initialSession } from '../shared/conversation.mjs';
 
 const source=await readFile(new URL('../server/app.mjs',import.meta.url),'utf8');
 const start=source.indexOf('  async function lookupPlace(text, c) {');
-const end=source.indexOf('\n  // ---- phone verification',start);
+const end=source.indexOf('\n  // ---- ',start);
 assert.ok(start>0&&end>start);
 const snippet=source.slice(start,end);
 const make=(code,geo)=>new Function('geo','validPoint','distanceMiles',`${code};return lookupPlace;`)(geo,()=>true,()=>5);

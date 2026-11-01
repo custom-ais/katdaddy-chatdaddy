@@ -3,7 +3,7 @@ import { emergencySameDayEligible, localDay, requestedVisit } from "./activity.m
 import { normalizePhone } from "../shared/domain.mjs";
 
 /** Ask the office about availability early; this never books or reserves an appointment. */
-export async function captureAvailabilityRequest({ store, lc, sendStaffSms = null, config, data, message, session, now, origin, log }) {
+export async function captureAvailabilityRequest({ store, sendStaffSms = null, config, data, message, session, now, origin, log }) {
   const emergency = data.intent === "emergency" || data.package === "emergency";
   // Older conversations did not have a dedicated preferred-time field.
   const earlier = data.requestedVisit || (data.history || []).filter((entry) => entry.role === "user").reduce((value, entry) => requestedVisit(entry.text, value, now), {});
@@ -45,12 +45,12 @@ export async function captureAvailabilityRequest({ store, lc, sendStaffSms = nul
     const phone = normalizePhone(approver.phone);
     const recipient = approver.name || "the team";
     try {
-      if ((!sendStaffSms && !lc.configured) || !phone) throw new Error(!lc.configured ? "LeadConnector messaging is not configured." : "No staff availability phone is configured. Add the approver or Ryan's phone in settings.");
-      const contactId = !sendStaffSms ? await lc.upsertContact({ name: recipient, phone, tags: ["bob-approver"] }) : null;
+      if (typeof sendStaffSms !== "function") throw new Error("Twilio staff messaging is not configured.");
+      if (!phone) throw new Error("No staff availability phone is configured. Add the approver phone in settings.");
       const text = `BOB availability check: ${recipient}, is a technician available for ${requested}? ${emergency ? "Emergency request received before 2 p.m. " : ""}${address}. This is an availability inquiry; confirm the booking separately. Review: ${origin}/admin?tab=inbox`;
       // Customer confirmation preferences do not disable internal staff notifications.
-      const response = sendStaffSms ? await sendStaffSms({ phone, text }) : await lc.sendSms(contactId, text);
-      request.notification = { status: "accepted", provider: sendStaffSms ? "Twilio" : "LeadConnector", recipient, to: `•••${phone.slice(-4)}`, messageId: response?.messageId || response?.id || null, at: now };
+      const response = await sendStaffSms({ phone, text });
+      request.notification = { status: "accepted", provider: "Twilio", recipient, to: `•••${phone.slice(-4)}`, messageId: response?.messageId || response?.id || null, at: now };
       await log("notification.accepted", { requestId: request.id, ...request.notification, delivery: "Delivery is not yet confirmed" });
     } catch (error) {
       request.notification = { status: "failed", recipient, error: String(error.message).slice(0, 500), at: now };

@@ -22,6 +22,7 @@ export interface Technician {
 }
 
 export interface Snapshot {
+  bookingEnabled?: boolean;
   config: any; faqs: any[]; technicians: Technician[]; appointments: Appointment[]; requests: any[]; approvals: any[];
   heldLocksCount: number; conversations: number; notifications: any[]; integrations: any; westValleyZips: string[]; now: number;
 }

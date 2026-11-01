@@ -6,16 +6,17 @@ test('admin refresh returns passive provider health and retained history without
   const h = await harness(t);
   const cookie = await h.login();
   const maps = { status: 'unknown', checkedAt: null, activeIssue: null, history: [{ at: 1, message: 'Historical routing failure' }] };
-  const lc = { status: 'error', checkedAt: 2, activeIssue: { at: 2, message: 'Recorded contact failure' }, history: [] };
   h.geo.health = async () => maps;
-  h.lc.health = async () => lc;
   h.geo.geocode = async () => { throw Error('refresh must not call Google'); };
-  h.lc.upsertContact = async () => { throw Error('refresh must not call CRM'); };
+  h.twilio.sendSms = async () => { throw Error('refresh must not send SMS'); };
+  h.twilio.sendVerification = async () => { throw Error('refresh must not send verification'); };
   for (let n = 0; n < 2; n++) {
     const r = await h.call('/api/admin/data', { cookie });
     assert.equal(r.status, 200);
     assert.deepEqual(r.data.integrations.maps.health, maps);
-    assert.deepEqual(r.data.integrations.leadConnector.health, lc);
+    assert.equal(r.data.integrations.leadConnector, undefined);
+    assert.equal(r.data.integrations.sms.provider, 'twilio');
+    assert.equal(r.data.integrations.verification.provider, 'twilio');
   }
   assert.equal((await h.call('/api/admin/data')).status, 401, 'diagnostics remain admin-only');
 });

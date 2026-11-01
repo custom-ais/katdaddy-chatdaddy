@@ -72,12 +72,12 @@ test('claim failure sends nothing; post-send persistence failure retains pre-sen
 });
 
 // Real HTTP/store pipeline, mocked external providers only.
-import { harness as appHarness, contact } from './helpers.mjs';
+import { harness as appHarness, contact, fakeTwilio } from './helpers.mjs';
 
 test('a normal confirmed booking sends one separate owner alert even without customer SMS consent', async t => {
   const calls = [];
-  const twilio = { messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner' }; } };
-  const h = await appHarness(t, { config: { bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100' }, twilio, env: { BOOKING_SMS_PROVIDER: 'twilio' } });
+  const twilio = { ...fakeTwilio(), messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner' }; } };
+  const h = await appHarness(t, { config: { bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100' }, twilio });
   const r = await h.book('cleaning', { ...contact, smsConsent: false });
   assert.equal(r.status, 201);
   assert.equal(calls.length, 1);
@@ -90,8 +90,8 @@ test('a normal confirmed booking sends one separate owner alert even without cus
 
 test('uncertain Jobber appointment alerts only after office confirms it exists, never on resend', async t => {
   const calls = [];
-  const twilio = { messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner' }; } };
-  const h = await appHarness(t, { config: { bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100' }, twilio, env: { BOOKING_SMS_PROVIDER: 'twilio' } });
+  const twilio = { ...fakeTwilio(), messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner' }; } };
+  const h = await appHarness(t, { config: { bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100' }, twilio });
   h.jobber.failNext = 'timeout';
   const booked = await h.book('cleaning');
   assert.equal(booked.status, 202);
@@ -109,8 +109,8 @@ test('uncertain Jobber appointment alerts only after office confirms it exists, 
 
 test('emergency booking owner alert waits for named approval and successful booking', async t => {
   const calls = [];
-  const twilio = { messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner' }; } };
-  const h = await appHarness(t, { config: { emergencyLeadHours: 1, bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100', approver: { name: 'Office', phone: '6235559999', email: '' } }, twilio, env: { BOOKING_SMS_PROVIDER: 'twilio' } });
+  const twilio = { ...fakeTwilio(), messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner' }; } };
+  const h = await appHarness(t, { config: { emergencyLeadHours: 1, bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100', approver: { name: 'Office', phone: '6235559999', email: '' } }, twilio });
   const token = await h.prepare('emergency');
   const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
   const asked = await h.call('/api/approvals', { method: 'POST', token, body: { holdId: held.data.hold.id, approved: true } });

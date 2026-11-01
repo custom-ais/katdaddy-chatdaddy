@@ -432,7 +432,7 @@ test("a job created without its visit is kept for the office as action needed", 
   assert.equal(a.status, "action_needed");
   assert.equal(a.jobberState, "visit_failed");
   assert.equal(a.jobber.jobNumber, 101);
-  assert.ok(!h.lc.calls.some((c) => c[0] === "sms" || c[0] === "email"), "no confirmation for an unconfirmed visit");
+  assert.ok(!h.twilio.calls.some((c) => c[0] === "sms" || c[0] === "email"), "no confirmation for an unconfirmed visit");
 });
 
 test("disconnected Jobber turns online confirmation off instead of guessing", async (t) => {
@@ -476,7 +476,7 @@ test("emergency clog relief is offered inside normal notice, but books only afte
   assert.equal(asked.status, 201, JSON.stringify(asked.data));
   assert.equal(asked.data.approval.status, "pending");
   assert.equal(asked.data.approval.approverName, "Seth");
-  const text = h.lc.calls.find((c) => c[0] === "sms");
+  const text = h.twilio.calls.find((c) => c[0] === "sms");
   assert.match(text[2], /BOB approval needed/);
   assert.equal(await h.count("appointments"), 0, "nothing is booked while waiting");
   const cookie = await h.login();
@@ -563,43 +563,49 @@ test("travel fee tier is added to the quote, receipt and Jobber line items", asy
   assert.deepEqual(h.jobber.jobs[0].lineItems.map((i) => i.cents), [17900, 2500]);
 });
 
-// ---- LeadConnector confirmations ---------------------------------------------------
+// ---- Twilio confirmations ---------------------------------------------------
 
-test("LeadConnector sends a text only with consent, plus an email when given", async (t) => {
+test("Twilio sends a confirmation text only with consent; removed CRM/email is not called", async (t) => {
   const h = await harness(t);
   const r = await h.book("cleaning", { ...contact, smsConsent: true, email: "test@example.com" });
-  const kinds = h.lc.calls.map((c) => c[0]);
-  assert.deepEqual(kinds.filter((k) => k !== "note"), ["upsert", "sms", "email"]);
-  assert.match(h.lc.calls.find((c) => c[0] === "sms")[2], /Reply STOP/);
-  assert.match(r.data.receipt.notification, /confirmation text and a confirmation email/);
-  assert.deepEqual(h.lc.calls[0][1].tags, ["bob-booked"]);
+  assert.equal(r.status, 201);
+  assert.deepEqual(h.twilio.calls.map(c => c[0]), ["sms"]);
+  assert.match(h.twilio.calls[0][2], /Reply STOP/);
+  assert.match(r.data.receipt.notification, /confirmation text/);
+  assert.doesNotMatch(r.data.receipt.notification, /sent.*confirmation email/);
+  assert.deepEqual(h.lc.calls, []);
+  assert.equal((await h.store.appointments())[0].notifications.email, "skipped");
 });
 
-test("no SMS consent means no text", async (t) => {
+test("no SMS consent means no confirmation text or removed CRM call", async (t) => {
   const h = await harness(t);
   const r = await h.book("cleaning", { ...contact, smsConsent: false, email: "test@example.com" });
-  assert.ok(!h.lc.calls.some((c) => c[0] === "sms"));
-  assert.match(r.data.receipt.notification, /confirmation email/);
+  assert.equal(r.status, 201);
+  assert.ok(!h.twilio.calls.some((c) => c[0] === "sms"));
+  assert.deepEqual(h.lc.calls, []);
+  assert.equal((await h.store.appointments())[0].notifications.email, "skipped");
 });
 
-test("a LeadConnector failure never undoes a confirmed booking", async (t) => {
+test("a Twilio failure never undoes a confirmed booking", async (t) => {
   const h = await harness(t);
   const token = await h.prepare("cleaning", { ...contact, smsConsent: true });
-  h.lc.failSms = true;
+  h.twilio.failSms = true;
   const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
   const r = await h.confirm(token, held.data.hold);
   assert.equal(r.status, 201);
   const [a] = await h.store.appointments();
   assert.equal(a.status, "confirmed");
   assert.equal(a.notifications.sms, "failed");
+  assert.deepEqual(h.lc.calls, []);
 });
 
-test("team requests land in LeadConnector with a note", async (t) => {
+test("team requests persist locally without the removed CRM", async (t) => {
   const h = await harness(t);
   const token = await h.fresh();
-  await h.call("/api/requests", { method: "POST", token, body: { ...contact, message: "Vent cap is loose.", idempotencyKey: randomUUID() } });
-  assert.deepEqual(h.lc.calls[0][1].tags, ["bob-request"]);
-  assert.match(h.lc.calls.find((c) => c[0] === "note")[2], /Vent cap is loose/);
+  const r = await h.call("/api/requests", { method: "POST", token, body: { ...contact, message: "Vent cap is loose.", idempotencyKey: randomUUID() } });
+  assert.equal(r.status, 201);
+  assert.deepEqual(h.lc.calls, []);
+  assert.match(JSON.stringify(await h.store.requests()), /Vent cap is loose/);
 });
 
 // ---- admin integrations --------------------------------------------------------------
@@ -681,15 +687,18 @@ test("an unexpected server error is shown to the office in Connections", async (
   assert.equal(data.data.integrations.lastError.path, "POST /api/contact");
   assert.equal(data.data.integrations.lastError.message, "Something unexpected");
 });
-test("a text code LeadConnector won't send is explained to the office in Connections", async (t) => {
-  const h = await harness(t, { lc: { failSms: true } });
+test("a failed Twilio code send fails safely without invoking removed CRM", async (t) => {
+  const h = await harness(t);
+  h.twilio.failVerify = true;
   const token = await h.accept();
   const r = await h.call("/api/contact", { method: "POST", token, body: contact });
   assert.equal(r.status, 200);
-  assert.equal(r.data.verification.sent, false);
-  assert.equal(r.data.verification.error, true);
-  const data = await h.call("/api/admin/data", { cookie: await h.login() });
-  assert.match(data.data.integrations.leadConnector.issue.message, /^Text code not sent: sms down/);
+  assert.equal(r.data.verification.chooseChannel, true);
+  const sent = await h.call("/api/verify/send", { method: "POST", token, body: { channel: "sms" } });
+  assert.equal(sent.status, 502);
+  assert.match(sent.data.error, /code could not be sent/i);
+  assert.equal((await h.call("/api/availability", { token })).status, 409);
+  assert.deepEqual(h.lc.calls, []);
 });
 
 // ---- address suggestions -------------------------------------------------------------
@@ -816,30 +825,25 @@ test("an address we don't serve gets a polite no and can try a different address
   assert.match(r.reply, /^Good news/);
 });
 
-// ---- "Text confirmations" off means no texts at all ----------------------------------------
-test("with text confirmations off, BOB sends no phone code and no confirmation text, and booking still works", async (t) => {
+// Confirmation consent and ownership verification are independent.
+test("text confirmations off still verifies ownership but sends no booking text", async (t) => {
   const h = await harness(t, { config: { smsConfirmations: false, requirePhoneVerification: true } });
-  const token = await h.prepare();
-  const s = await h.call("/api/session", { token });
-  assert.equal(s.data.config.phoneVerification, false);
-  assert.equal(s.data.config.textMessages, false);
-  const c = await h.call("/api/contact", { method: "POST", token, body: { ...contact, smsConsent: true } });
-  assert.equal(c.status, 200);
-  assert.equal(c.data.verification.required, false);
-  assert.equal(c.data.session.stage, "slots");
-  assert.equal((await h.call("/api/verify/send", { method: "POST", token, body: {} })).status, 409);
+  const token = await h.prepare("cleaning", { ...contact, smsConsent: true });
+  const session = await h.call("/api/session", { token });
+  assert.equal(session.data.config.phoneVerification, true);
+  assert.equal(session.data.config.textMessages, false);
   const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
   const done = await h.confirm(token, held.data.hold);
   assert.equal(done.status, 201, JSON.stringify(done.data));
-  assert.equal(h.lc.calls.filter((x) => x[0] === "sms").length, 0, "no texts were attempted");
+  assert.equal(h.twilio.calls.filter((x) => x[0] === "sms").length, 0);
+  assert.deepEqual(h.lc.calls, []);
 });
-
 
 test("regular booking confirms directly without company approval or staff inquiry", async (t) => {
   const h = await harness(t, { config: { approver: { name: "Office", phone: "6235559999", email: "" } } });
   const token = await h.prepare();
   await h.chat(token, "Can a tech come today at 5pm?");
-  assert.ok(!h.lc.calls.some((c) => c[0] === "sms"), "regular same-day inquiry sends no company text");
+  assert.ok(!h.twilio.calls.some((c) => c[0] === "sms"), "regular same-day inquiry sends no company text");
   const [slot] = await h.slots(token);
   assert.equal(slot.approval, false);
   const held = await h.hold(token, slot.scheduledAt);
@@ -847,7 +851,7 @@ test("regular booking confirms directly without company approval or staff inquir
   assert.equal(asked.status, 409);
   assert.equal((await h.confirm(token, held.data.hold)).status, 201);
   assert.equal((await h.store.approvals()).length, 0);
-  assert.ok(!h.lc.calls.some((c) => c[0] === "sms"), "no company text and customer has not opted into SMS");
+  assert.ok(!h.twilio.calls.some((c) => c[0] === "sms"), "no company text and customer has not opted into SMS");
 });
 
 test("legacy pending non-emergency approval cannot bypass office-only exception policy", async (t) => {

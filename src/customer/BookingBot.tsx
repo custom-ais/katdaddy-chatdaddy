@@ -217,7 +217,7 @@ const contactPrompt = (step: ContactStep, d: any, cfg?: any): string => {
   const first = String(d?.name || '').trim().split(/\s+/)[0];
   switch (step) {
     case 'name': return 'To reserve your appointment slot, what is your first and last name?';
-    case 'email': return `${first ? `Thanks, ${first}. ` : ''}What is the best email address for your booking confirmation and receipt?`;
+    case 'email': return `${first ? `Thanks, ${first}. ` : ''}What is the best email address for booking contact and optional email verification?`;
     case 'phone': return cfg?.verificationChannels?.includes('email') ? `${d?.email ? 'Got it. ' : ''}What is your callback phone number (mobile or landline)? You can verify by email instead of text.` : `${d?.email ? 'Got it. ' : ''}What is your mobile phone number?${cfg?.phoneVerification === false ? '' : " We'll text a code to confirm it."}`;
     case 'sms': return `Understood. Is it okay to send automated text updates and technician arrival notifications to ${d?.phone || 'this number'}? Not marketing. Message and data rates may apply; reply STOP anytime.`;
     case 'address': return 'Thank you. What is the street address for the service location? Include a unit number if there is one.';

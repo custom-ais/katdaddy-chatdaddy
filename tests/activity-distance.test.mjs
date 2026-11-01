@@ -73,11 +73,11 @@ test("availability text is requested before triage and deduplicated, even when c
   const token = await h.fresh();
   const first = await h.chat(token, "Emergency Clog / Overheating");
   assert.equal(first.session.pending, "safetyCheck");
-  assert.ok(h.lc.calls.some((c) => c[0] === "sms" && /availability check/.test(c[2])));
+  assert.ok(h.twilio.calls.some((c) => c[0] === "sms" && /availability check/.test(c[2])));
   await h.chat(token, "Can a tech come today at 5pm?");
-  const sent = h.lc.calls.filter((c) => c[0] === "sms").length;
+  const sent = h.twilio.calls.filter((c) => c[0] === "sms").length;
   await h.chat(token, "Can a tech come today at 5pm?");
-  assert.equal(h.lc.calls.filter((c) => c[0] === "sms").length, sent);
+  assert.equal(h.twilio.calls.filter((c) => c[0] === "sms").length, sent);
   const requests = await h.store.requests();
   const requested = requests.find((r) => r.requestedVisit?.time === "17:00");
   assert.equal(requested.requestedVisit.date, "2026-10-31");
@@ -96,11 +96,12 @@ test("after the cutoff the safety flow continues, but no same-day emergency text
   const r = await h.chat(await h.fresh(), "Emergency Clog / Overheating");
   assert.match(r.reply, /before 2 p\.m/);
   assert.equal(r.session.pending, "safetyCheck");
-  assert.ok(!h.lc.calls.some((c) => c[0] === "sms"));
+  assert.ok(!h.twilio.calls.some((c) => c[0] === "sms"));
 });
 
 test("failed staff messages are saved and activity survives session cleanup and store reconstruction", async (t) => {
-  const h = await harness(t, { lc: { failSms: true }, config: { approver: { name: "Ryan", phone: "6235550100", email: "" } } });
+  const h = await harness(t, { config: { approver: { name: "Ryan", phone: "6235550100", email: "" } } });
+  h.twilio.failSms = true;
   const token = await h.fresh();
   const r = await h.chat(token, "Emergency Clog / Overheating");
   assert.match(r.reply, /text could not be sent/);

@@ -36,8 +36,8 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
     if (before || after) body.airflowReadings = { beforeCfm: before ? Number(before) : null, afterCfm: after ? Number(after) : null };
     return mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}`, body, 'PATCH', 'Appointment updated');
   });
-  const resolve = (outcome: 'in_jobber' | 'not_in_jobber') => run(() => mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}/resolve`, { outcome, jobNumber }, 'POST', outcome === 'in_jobber' ? 'Confirmed and customer notified' : 'Released — the time is open again'));
-  const resend = () => run(() => mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}/confirmation`, {}, 'POST', 'Confirmation sent'));
+  const resolve = (outcome: 'in_jobber' | 'not_in_jobber') => run(() => mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}/resolve`, { outcome, jobNumber }, 'POST', outcome === 'in_jobber' ? 'Appointment confirmed — check notification status' : 'Released — the time is open again'));
+  const resend = () => run(() => mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}/confirmation`, {}, 'POST', 'Confirmation request processed — check notification status'));
   const sms = a.notifications?.sms, email = a.notifications?.email;
 
   return (
@@ -50,7 +50,7 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
         <>
           <div className="flex items-center gap-2">
             {a.jobber?.webUri && <a className={secondaryButton} href={a.jobber.webUri} target="_blank" rel="noreferrer">Open in Jobber<ExternalLink size={14} /></a>}
-            {a.status === 'confirmed' && data.integrations?.leadConnector?.configured && <button className={subtleButton} onClick={resend} disabled={busy}><Send size={15} />Resend confirmation</button>}
+            {a.status === 'confirmed' && ((data.integrations?.sms?.enabled !== false && data.integrations?.sms?.configured) || (data.integrations?.email?.enabled !== false && data.integrations?.email?.configured)) && <button className={subtleButton} onClick={resend} disabled={busy}><Send size={15} />Send confirmation</button>}
           </div>
           <div className="flex items-center gap-2.5">
             <button className={secondaryButton} onClick={onClose}>Close</button>
@@ -147,6 +147,7 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
         <textarea rows={3} className={inputClass} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Gate codes, pets, dryer details…" />
       </Field>
       <p className="text-xs text-slate-500 flex items-center gap-2"><FileText size={14} />Confirmation: text {sms || 'not sent'} · email {email || 'not sent'}</p>
+      <p className="text-xs text-slate-500">Email “accepted” means the provider accepted the request, not confirmed delivery. “rejected” means it was rejected; “failed_or_uncertain” requires office review before any further contact. An email already attempted is not resent automatically, including from this button. Texts may be resent when enabled and consented.</p>
       {error && <ErrorNote>{error}</ErrorNote>}
     </Modal>
   );
