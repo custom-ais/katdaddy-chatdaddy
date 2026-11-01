@@ -461,7 +461,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     if (["driving_distance", "radius"].includes(c.serviceAreaMode)) {
       try {
         const base = validPoint(c.baseLocation) ? c.baseLocation : c.baseAddress ? await geo.geocode(c.baseAddress) : null;
-        const [route] = c.serviceAreaMode === "radius" && base ? [{ miles: distanceMiles(base, g) }] : base && geo.roadRoutes ? await geo.roadRoutes([{ from: base, to: g }], { fresh }) : [];
+        const [route] = c.serviceAreaMode === "radius" && base ? [{ miles: distanceMiles(base, g) }] : base && geo.roadRoutes ? await geo.roadRoutes([{ from: base, to: g }], { fresh: false }) : [];
         if (!route) return { routingUnavailable: true };
         drivingMiles = route.miles;
       } catch { return { routingUnavailable: true }; }
