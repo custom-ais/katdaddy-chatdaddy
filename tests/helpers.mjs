@@ -230,8 +230,8 @@ export async function harness(t, { ready = true, config = {}, jobber: jobberOpts
     return token;
   };
   const lastCode = () => {
-    const sms = lc.calls.filter((c) => c[0] === "sms" && /verification code is (\d{6})/.test(c[2])).at(-1);
-    return sms ? sms[2].match(/verification code is (\d{6})/)[1] : null;
+    const sms = lc.calls.filter((c) => c[0] === "sms" && /verification code is (\d{4})/.test(c[2])).at(-1);
+    return sms ? sms[2].match(/verification code is (\d{4})/)[1] : null;
   };
   /** Contact details, then the text code, as the page does. */
   const contactAndVerify = async (token, who = contact) => {
