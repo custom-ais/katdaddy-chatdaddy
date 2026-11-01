@@ -495,6 +495,26 @@ test("emergency clog relief is offered inside normal notice, but books only afte
   assert.equal(h.jobber.jobs.length, 1);
 });
 
+test("after a smoke or fire alert, a customer who says everyone is safe can still book, and the team sees it was a fire", async (t) => {
+  const h = await harness(t, { config: { emergencyLeadHours: 1, leadHours: 24, approver: { name: "Seth", phone: "6235559999", email: "" } } });
+  const token = await h.fresh();
+  await h.chat(token, "Emergency Clog / Overheating");
+  const alert = await h.chat(token, "it caught fire and it's smoking now");
+  assert.equal(alert.action, "emergency");
+  assert.deepEqual(alert.options, ["Everyone is safe & fire/smoke is handled"]);
+  assert.equal((await h.call("/api/contact", { method: "POST", token, body: contact })).status, 409, "no booking during the alert");
+  let r;
+  for (const m of ["Everyone is safe & fire/smoke is handled", "Burning smell", "85326", "1-Story Home", "Electric Dryer", "Emergency Same-Day · $349", "Accept"]) r = await h.chat(token, m);
+  assert.equal(r.action, "contact", r.reply);
+  await h.contactAndVerify(token);
+  const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
+  assert.equal(held.status, 201, JSON.stringify(held.data));
+  const asked = await h.call("/api/approvals", { method: "POST", token, body: { holdId: held.data.hold.id, approved: true } });
+  assert.equal(asked.status, 201, JSON.stringify(asked.data));
+  const a = await h.store.approval(asked.data.approval.id);
+  assert.ok(a.concerns.some((c) => /reported smoke or fire/.test(c)), "the approver sees it was a fire");
+});
+
 test("a declined or expired approval books nothing and frees the time", async (t) => {
   const h = await harness(t, { config: { emergencyLeadHours: 1 } });
   const ask = async () => {
