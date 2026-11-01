@@ -107,6 +107,22 @@ test('uncertain sends count, invalidate old verification and honor cooldown', as
   await rejects(h.service.send('one', 'sms'), 429);
 });
 
+test('a duplicate or channel switch during cooldown preserves the pending code and code-entry information', async () => {
+  const h = harness();
+  const first = await h.service.send('one', 'sms');
+  for (const channel of ['sms', 'email']) {
+    const reused = await h.service.send('one', channel);
+    assert.equal(reused.sent, true);
+    assert.equal(reused.reused, true);
+    assert.equal(reused.chooseChannel, false);
+    assert.equal(reused.channel, 'sms');
+    assert.equal(reused.expiresAt, first.expiresAt);
+    assert.equal(reused.retryInSeconds, 30);
+  }
+  assert.equal(h.calls.length, 1);
+  assert.equal((await h.service.check('one', '123456')).verifiedContact.channel, 'sms');
+});
+
 test('switching channels shares cooldown and removes previous ownership', async () => {
   const h = harness();
   await h.service.send('one', 'sms');

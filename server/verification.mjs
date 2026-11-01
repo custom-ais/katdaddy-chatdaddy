@@ -10,6 +10,12 @@ export function createVerification({ store, twilio, clock, fail }) {
     return Boolean(v && ['sms', 'email'].includes(v.channel) && v.to === destination(data, v.channel) && clock() - v.at < VERIFIED_FOR);
   };
   const info = (data, extra = {}) => ({ required: true, available: Boolean(twilio?.verifyConfigured), channels: channels(data), sent: false, chooseChannel: true, ...extra });
+  const pendingInfo = data => {
+    const v = data.verification;
+    if (!v || v.provider !== 'twilio' || v.to !== destination(data, v.channel) || v.expires <= clock()) return null;
+    const to = v.channel === 'sms' ? `•••${v.to.slice(-4)}` : `${v.to[0]}•••@${v.to.split('@')[1]}`;
+    return { sent: true, reused: true, chooseChannel: false, channel: v.channel, to, expiresAt: v.expires };
+  };
   async function locked(token, fn) {
     if (!await store.lock(`verification:${token}`, 30)) fail(409, 'A verification request is in progress. Please wait.');
     try {
@@ -26,7 +32,7 @@ export function createVerification({ store, twilio, clock, fail }) {
       const to = destination(data, channel);
       if (!to) fail(400, 'Enter your contact details first.');
       const now = clock(), last = data.verifyLastAttempt;
-      if (last != null && now - last < 30_000) return info(data, { channel, retryInSeconds: Math.ceil((30_000 - (now - last)) / 1000) });
+      if (last != null && now - last < 30_000) return info(data, { channel, ...pendingInfo(data), retryInSeconds: Math.ceil((30_000 - (now - last)) / 1000) });
       // Destination counter also spans new conversations; count failed/uncertain sends.
       if (!await store.rateHit(`verify-destination:${hash(`${channel}:${to}`)}`, 4, 3_600_000) || !await store.rateHit(`verify-session:${token}`, 6, 3_600_000)) fail(429, 'Too many codes requested. Please wait an hour or contact the office.');
       data.verifyLastAttempt = now;

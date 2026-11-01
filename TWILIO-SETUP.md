@@ -30,6 +30,8 @@ Early company availability notices are emergency same-day only. They are inquiri
 
 ## Verification and rollout
 
+Requests for different booking conversations run independently. Overlapping updates to one booking wait briefly for its current operation; activity logging does not hold that booking's lock. A duplicate code request during cooldown returns the existing pending code information without another provider send. The browser retries only an explicit `CONVERSATION_PENDING` response, which means the operation has not run; it never automatically retries an uncertain provider send or booking. Existing destination limits, cooldowns, code expiry and attempt limits still apply.
+
 Run `npm test`, `npm run typecheck`, and `npm run build` without production environment credentials. Tests use fake providers and in-process Postgres; no real booking/SMS/email is needed.
 
 Before publishing: review the diff, verify provider configuration in a non-production environment, confirm the exact company approver/contact and registered SMS sender, obtain approval for one controlled SMS and email OTP test and one confirmation test, then verify provider acceptance/delivery independently. No production push/deploy or real message is authorized by these local changes.
