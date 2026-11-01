@@ -14,15 +14,17 @@ test("times stay locked until the customer enters the text code", async (t) => {
   const h = await harness(t);
   const token = await h.accept();
   const r = await h.call("/api/contact", { method: "POST", token, body: contact });
-  assert.equal(r.data.verification.sent, true);
-  assert.equal(r.data.verification.to, "(•••) •••-1234");
+  assert.equal(r.data.verification.chooseChannel, true);
+  const sent = await h.call('/api/verify/send', { method: 'POST', token, body: { channel: 'sms' } });
+  assert.equal(sent.data.verification.sent, true);
+  assert.equal(sent.data.verification.to, '•••1234');
   assert.equal(r.data.session.stage, "verify");
-  assert.ok(!JSON.stringify(r.data).includes(h.lastCode()), "the code is never sent back to the page");
+  assert.equal(r.data.verification.code, undefined, "the code is never sent back to the page");
   const early = await h.call("/api/availability", { token });
   assert.equal(early.status, 409);
   const wrong = await h.call("/api/verify/check", { method: "POST", token, body: { code: "0000" === h.lastCode() ? "1111" : "0000" } });
   assert.equal(wrong.status, 400);
-  assert.match(wrong.data.error, /4 tries left/);
+  assert.match(wrong.data.error, /does not match/);
   const ok = await h.call("/api/verify/check", { method: "POST", token, body: { code: h.lastCode() } });
   assert.equal(ok.status, 200);
   assert.equal((await h.call("/api/availability", { token })).status, 200);
@@ -32,11 +34,12 @@ test("a code can't be reused, guessed forever, or carried over to a new phone nu
   const h = await harness(t);
   const token = await h.accept();
   await h.call("/api/contact", { method: "POST", token, body: contact });
+  await h.call("/api/verify/send", { method: "POST", token, body: { channel: "sms" } });
   const code = h.lastCode();
   for (let i = 0; i < 5; i++) await h.call("/api/verify/check", { method: "POST", token, body: { code: code === "9999" ? "8888" : "9999" } });
   assert.equal((await h.call("/api/verify/check", { method: "POST", token, body: { code } })).status, 429, "locked after five wrong tries");
   h.advance(31_000);
-  await h.call("/api/verify/send", { method: "POST", token, body: {} });
+  await h.call("/api/verify/send", { method: "POST", token, body: { channel: "sms" } });
   assert.equal((await h.call("/api/verify/check", { method: "POST", token, body: { code: h.lastCode() } })).status, 200);
   assert.equal((await h.call("/api/verify/check", { method: "POST", token, body: { code: h.lastCode() } })).status, 409, "single use");
   const changed = await h.call("/api/contact", { method: "POST", token, body: { ...contact, phone: "6235550000" } });
@@ -48,12 +51,13 @@ test("codes expire after ten minutes", async (t) => {
   const h = await harness(t);
   const token = await h.accept();
   await h.call("/api/contact", { method: "POST", token, body: contact });
+  await h.call("/api/verify/send", { method: "POST", token, body: { channel: "sms" } });
   h.advance(10 * 60_000 + 1);
   assert.equal((await h.call("/api/verify/check", { method: "POST", token, body: { code: h.lastCode() } })).status, 410);
 });
 
-test("with verification required and no LeadConnector, online booking turns itself off", async (t) => {
-  const h = await harness(t, { lc: { configured: false } });
+test("with verification required and no verification provider, online booking turns itself off", async (t) => {
+  const h = await harness(t, { twilio: null });
   assert.equal((await h.call("/api/public/config")).data.bookingEnabled, false);
 });
 
@@ -71,7 +75,7 @@ test("a Jobber timeout is held for the office: not confirmed, not retried, time 
   const again = await h.confirm(token, held.data.hold);
   assert.equal(again.data.receipt.id, r.data.receipt.id, "a retry returns the same pending visit");
   assert.equal(h.jobber.jobs.length, 0);
-  assert.ok(!h.lc.calls.some((c) => c[0] === "sms"), "no confirmation text");
+  assert.ok(!h.twilio.calls.some((c) => c[0] === "sms"), "no confirmation text");
   const other = await h.prepare("cleaning", { ...contact, name: "Second Person", phone: "6235550001" });
   assert.ok(!(await h.slots(other)).some((s) => s.scheduledAt === slot), "the uncertain time isn't offered again");
 
@@ -86,7 +90,7 @@ test("a Jobber timeout is held for the office: not confirmed, not retried, time 
   const [done] = await h.store.appointments().then((x) => x.filter((y) => y.id === a.id));
   assert.equal(done.status, "confirmed");
   assert.equal(done.jobber.jobNumber, 4521);
-  assert.ok(h.lc.calls.some((c) => c[0] === "sms"), "confirmation goes out once the office confirms it");
+  assert.ok(h.twilio.calls.some((c) => c[0] === "sms"), "confirmation goes out once the office confirms it");
 });
 
 test("an uncertain visit the office can't find in Jobber is released", async (t) => {
@@ -184,5 +188,5 @@ test("non-emergency 5 PM overflow remains office-only even when the scheduling l
   assert.equal(held.data.code, "OFFICE_SCHEDULING_REQUIRED");
   assert.equal(await h.count("holds"), 0);
   assert.equal(await h.count("appointments"), 0);
-  assert.ok(!h.lc.calls.some((c) => c[0] === "sms"), "no company approval text for regular overflow");
+  assert.ok(!h.twilio.calls.some((c) => c[0] === "sms"), "no company approval text for regular overflow");
 });

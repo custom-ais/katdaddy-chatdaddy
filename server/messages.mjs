@@ -1,4 +1,4 @@
-// Customer confirmation copy (sent through LeadConnector).
+// Customer confirmation copy (sent through explicitly configured transports).
 
 import { money, windowLabel } from "../shared/domain.mjs";
 

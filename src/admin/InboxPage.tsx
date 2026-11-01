@@ -67,7 +67,7 @@ function ApprovalModal({ approval: a, onClose }: { approval: any; onClose: () =>
       </div>
       {a.concerns?.length > 0 && <p className="text-xs text-slate-600"><b>Customer said:</b> {a.concerns.join(' · ')}</p>}
       {a.notes && <p className="text-xs text-slate-600"><b>Notes:</b> {a.notes}</p>}
-      {a.notified && <p className="text-[11px] text-slate-400">Approver text {a.notified.sms} · email {a.notified.email}{a.notified.reason === 'not_configured' ? ' (add the approver and LeadConnector in Settings)' : ''}</p>}
+      {a.notified && <p className="text-[11px] text-slate-400">Approver text {a.notified.sms} · email {a.notified.email}{a.notified.reason === 'not_configured' ? ' (add the approver phone and configure Twilio in Settings)' : ''}</p>}
       {pending ? (
         <div className="space-y-3 pt-2 border-t border-slate-100">
           <Field label="Your name" hint={data.config.approver?.name ? `The named approver is ${data.config.approver.name}. Your name is saved with the decision.` : 'Saved with the decision.'}>
@@ -177,7 +177,7 @@ export function InboxPage({ focusApproval }: { focusApproval?: string | null }) 
         <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div>
             <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2"><MessageSquare size={18} className="text-orange-500" />Customer requests {openRequests.length > 0 && <span className="px-2 py-0.5 text-[11px] font-bold rounded-full bg-rose-500 text-white">{openRequests.length}</span>}</h3>
-            <p className="text-xs text-slate-500 font-medium">Callback and question requests from the chat. Each one is also saved to LeadConnector when it's connected.</p>
+            <p className="text-xs text-slate-500 font-medium">Callback and question requests from the chat are saved here for the team.</p>
           </div>
           <label className="text-xs font-bold text-slate-600 flex items-center gap-2 cursor-pointer shrink-0"><input type="checkbox" className="accent-orange-500" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} />Show resolved</label>
         </div>

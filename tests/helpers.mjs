@@ -1,6 +1,7 @@
-// Test harness: real BOB handler + in-process Postgres + fake Jobber / LeadConnector / maps.
+// Test harness: real BOB handler + in-process Postgres + fake Jobber / Twilio / maps (legacy CRM spy must stay unused).
 
 import http from "node:http";
+import { createIntegrationControls, controlProviders } from "../server/integration-controls.mjs";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createPgliteDb, createSupabaseRpcDb } from "../server/db.mjs";
@@ -153,6 +154,27 @@ export function fakeLc({ configured = true, failSms = false } = {}) {
   return lc;
 }
 
+export function fakeTwilio() {
+  const provider = {
+    verifyConfigured: true, messagingConfigured: true, calls: [], failSms: false, failVerify: false,
+    async sendVerification(args) {
+      provider.calls.push(["verify", args]);
+      if (provider.failVerify) throw new Error("verification down");
+      return { sid: "VE" + "1".repeat(32), status: "pending" };
+    },
+    async checkVerification(args) {
+      provider.calls.push(["check", args]);
+      return { status: args.code === "1234" ? "approved" : "pending" };
+    },
+    async sendSms(phone, text) {
+      provider.calls.push(["sms", phone, text]);
+      if (provider.failSms) throw new Error("sms down");
+      return { messageId: "SM" + "2".repeat(32), status: "queued" };
+    },
+  };
+  return provider;
+}
+
 /** Chat steps that reach the contact step for each kind of visit. */
 export const FLOWS = {
   cleaning: (zip) => ["Dryer Vent Cleaning", zip, "Have Dryer", "No", "1-Story", "Electric", "Standard", "Dries in one normal cycle", "No signs", "Premium 1-2-3 · $179", "Accept & Continue"],
@@ -179,7 +201,7 @@ export async function restDb(pglite) {
   return { ...db, close: () => pglite.close() };
 }
 
-export async function harness(t, { ready = true, config = {}, jobber: jobberOpts = {}, lc: lcOpts = {}, dataDir, assistant = null, twilio = null, integrationAccounts = null, rest = false, env: envOpts = {} } = {}) {
+export async function harness(t, { ready = true, config = {}, jobber: jobberOpts = {}, lc: lcOpts = {}, dataDir, assistant = null, twilio = undefined, sendgrid = null, integrationAccounts = null, rest = false, env: envOpts = {} } = {}) {
   let now = baseTime;
   const clock = () => now;
   const pg = await createPgliteDb(dataDir);
@@ -190,10 +212,13 @@ export async function harness(t, { ready = true, config = {}, jobber: jobberOpts
   if (ready) await store.set("technicians", (await store.technicians()).map(t => ({ ...t, jobberUserId: t.id === "tech-ryan" ? "J-RYAN" : "J-ANDREW" })));
   const jobber = fakeJobber(jobberOpts);
   const lc = fakeLc(lcOpts);
+  if (twilio === undefined) twilio = fakeTwilio();
   const geo = fakeGeo();
-  const scheduler = createScheduler({ store, jobber, geo });
-  const env = { BOB_SETUP_TOKEN: "test-only-setup-token", ...envOpts };
-  const handle = createBobHandler({ store, jobber, lc, geo, scheduler, assistant, twilio, integrationAccounts, env, clock });
+  const controls = createIntegrationControls({ store });
+  const wrapped = controlProviders({ controls, jobber, geo, twilio, sendgrid });
+  const scheduler = createScheduler({ store, jobber: wrapped.jobber, geo: wrapped.geo });
+  const env = { BOB_SETUP_TOKEN: "test-only-setup-token", BOOKING_VERIFICATION_PROVIDER: "twilio", BOOKING_SMS_PROVIDER: "twilio", ...envOpts };
+  const handle = createBobHandler({ store, jobber: wrapped.jobber, lc, geo: wrapped.geo, scheduler, assistant, twilio: wrapped.twilio, sendgrid: wrapped.sendgrid, integrationAccounts, env, clock });
   const server = http.createServer((req, res) => handle(req, res));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -240,19 +265,21 @@ export async function harness(t, { ready = true, config = {}, jobber: jobberOpts
     assert.equal(r.action, "contact", `expected the contact step, got: ${r.reply}`);
     return token;
   };
-  const lastCode = () => {
-    const sms = lc.calls.filter((c) => c[0] === "sms" && /verification code is (\d{4})/.test(c[2])).at(-1);
-    return sms ? sms[2].match(/verification code is (\d{4})/)[1] : null;
-  };
-  /** Contact details, then the text code, as the page does. */
+  const lastCode = () => "1234";
+  /** Contact details, channel choice, then the code, as the page does. */
   const contactAndVerify = async (token, who = contact) => {
     const r = await call("/api/contact", { method: "POST", token, body: who });
     assert.equal(r.status, 200, JSON.stringify(r.data));
-    if (r.data.verification?.sent) {
+    if (r.data.verification?.required && !r.data.verification?.verified) {
+      if (!r.data.verification.sent) {
+        const sent = await call("/api/verify/send", { method: "POST", token, body: { channel: "sms" } });
+        assert.equal(sent.status, 200, JSON.stringify(sent.data));
+      }
       const v = await call("/api/verify/check", { method: "POST", token, body: { code: lastCode() } });
       assert.equal(v.status, 200, JSON.stringify(v.data));
     }
-    lc.calls.length = 0; // tests below look only at what happens after verification
+    lc.calls.length = 0;
+    if (twilio?.calls) twilio.calls.length = 0; // booking assertions exclude verification
     return r;
   };
   const prepare = async (route = "cleaning", who = contact) => {
@@ -278,5 +305,5 @@ export async function harness(t, { ready = true, config = {}, jobber: jobberOpts
     return r.cookie;
   };
   const count = async (table) => Number((await db.query(`select count(*)::int as n from bob.${table}`))[0].n);
-  return { db, store, jobber, lc, geo, origin, call, fresh, chat, accept, contactAndVerify, lastCode, prepare, slots, hold, confirm, book, login, count, advance: (ms) => (now += ms) };
+  return { db, store, jobber, lc, twilio, sendgrid, geo, origin, call, fresh, chat, accept, contactAndVerify, lastCode, prepare, slots, hold, confirm, book, login, count, advance: (ms) => (now += ms) };
 }

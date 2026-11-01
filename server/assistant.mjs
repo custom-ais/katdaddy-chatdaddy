@@ -1,4 +1,4 @@
-// Gemini, as BOB's language layer.
+// Gemini or OpenAI API, as BOB's language layer.
 //
 // Gemini reads what the customer typed and returns JSON: which of BOB's own commands it
 // means, the home details it states, and — for questions — a short answer written only
@@ -6,7 +6,8 @@
 // (shared/conversation.mjs) and the server do that. Everything Gemini writes passes the
 // guard() checks before a customer sees it, and any failure falls back to the rules engine.
 //
-// Env: GEMINI_API_KEY (required), GEMINI_MODEL (default gemini-3.8-flash).
+// Env: GEMINI_API_KEY / GEMINI_MODEL; OPENAI_API_KEY / OPENAI_MODEL.
+// API credentials are server-only; a ChatGPT subscription is not an API key.
 
 import { PACKAGES, TIERS, MORE } from "../shared/catalog.mjs";
 import { QUESTIONS, FACT_VALUES, SYMPTOMS, WELCOME } from "../shared/conversation.mjs";
@@ -194,9 +195,11 @@ function parseJson(text) {
 export function createAssistant({ env = process.env, fetchImpl = globalThis.fetch, timeoutMs = 9000, generate } = {}) {
   const key = env.GEMINI_API_KEY || "";
   const model = env.GEMINI_MODEL || "gemini-3.8-flash";
-  let useSchema = true, useThinking = true;
+  const openaiKey = env.OPENAI_API_KEY || "";
+  const openaiModel = env.OPENAI_MODEL || "gpt-4.1-mini";
 
   async function callGemini(system, prompt) {
+    let useSchema = true, useThinking = true;
     const body = (schemaOn, thinkingOn) => ({
       systemInstruction: { parts: [{ text: system }] },
       contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -210,6 +213,7 @@ export function createAssistant({ env = process.env, fetchImpl = globalThis.fetc
     for (let attempt = 0; attempt < 3; attempt++) {
       const r = await fetchImpl(`${ENDPOINT}/${encodeURIComponent(model)}:generateContent`, {
         method: "POST",
+        redirect: "error",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify(body(useSchema, useThinking)),
         signal: AbortSignal.timeout(timeoutMs),
@@ -223,22 +227,69 @@ export function createAssistant({ env = process.env, fetchImpl = globalThis.fetc
       // Older or newer models may not accept every option: drop it once and retry.
       if (r.status === 400 && useSchema && /schema/i.test(message)) { useSchema = false; continue; }
       if (r.status === 400 && useThinking && /think/i.test(message)) { useThinking = false; continue; }
-      const error = new Error(`Gemini ${r.status}: ${message.slice(0, 200)}`);
+      const error = new Error(`Gemini request failed (${r.status}).`);
       error.status = r.status;
       throw error;
     }
     throw new Error("Gemini request options were rejected.");
   }
 
-  async function interpret({ text, session, config, faqs, options = session.options || [] }) {
-    const kb = knowledge(config, faqs);
-    const system = `${RULES}\n\nKNOWLEDGE:\n${kb}`;
-    const prompt = `${context(session, options)}\n\nCUSTOMER'S LATEST MESSAGE:\n"""${String(text).slice(0, 2000)}"""\n\nReturn the JSON object only.`;
-    const out = generate ? await generate({ system, prompt, schema }) : await callGemini(system, prompt);
-    return normalizeResult(out, { config, faqs, options, kb });
+  // OpenAI strict structured output requires every property to be required and
+  // additionalProperties:false at each object level. The nullable facts remain
+  // semantically identical to the existing Gemini schema.
+  const strictSchema = structuredClone(schema);
+  strictSchema.additionalProperties = false;
+  strictSchema.properties.facts.additionalProperties = false;
+  strictSchema.properties.facts.required = Object.keys(strictSchema.properties.facts.properties);
+
+  async function callOpenAI(system, prompt) {
+    const r = await fetchImpl("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      redirect: "error",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${openaiKey}` },
+      body: JSON.stringify({
+        model: openaiModel,
+        store: false,
+        messages: [{ role: "system", content: system }, { role: "user", content: prompt }],
+        response_format: { type: "json_schema", json_schema: { name: "booking_interpretation", strict: true, schema: strictSchema } },
+        max_completion_tokens: 1024,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!r.ok) throw new Error("OpenAI request failed.");
+    const data = await r.json();
+    const choice = data?.choices?.[0];
+    if (choice?.finish_reason !== "stop" || choice?.message?.refusal || typeof choice?.message?.content !== "string") throw new Error("OpenAI did not return a complete interpretation.");
+    return parseJson(choice.message.content);
   }
 
-  return { configured: Boolean(key) || Boolean(generate), model, interpret };
+  function adapter(provider, configured, selectedModel, call, injected) {
+    return Object.freeze({
+      provider, configured, model: selectedModel,
+      async interpret({ text, session, config, faqs, options = session.options || [] }) {
+        if (!configured) throw Object.assign(new Error("Selected AI provider is not configured."), { code: "AI_PROVIDER_UNAVAILABLE" });
+        try {
+          const kb = knowledge(config, faqs);
+          const system = `${RULES}\n\nKNOWLEDGE:\n${kb}`;
+          const prompt = `${context(session, options)}\n\nCUSTOMER'S LATEST MESSAGE:\n"""${String(text).slice(0, 2000)}"""\n\nReturn the JSON object only.`;
+          const out = injected ? await injected({ system, prompt, schema }) : await call(system, prompt);
+          return normalizeResult(out, { config, faqs, options, kb });
+        } catch {
+          // Never expose provider bodies, credentials, prompts or network errors.
+          throw Object.assign(new Error("Selected AI provider could not interpret this message."), { code: "AI_PROVIDER_FAILED" });
+        }
+      },
+    });
+  }
+  const gemini = adapter("gemini", Boolean(key) || Boolean(generate), model, callGemini, generate);
+  const openai = adapter("openai", Boolean(openaiKey), openaiModel, callOpenAI);
+  const adapters = Object.freeze({ gemini, openai });
+  const providers = Object.freeze(Object.fromEntries(Object.entries(adapters).map(([name, a]) => [name, Object.freeze({ configured: a.configured, model: a.model })])));
+  function forProvider(provider = "gemini") {
+    if (provider !== "gemini" && provider !== "openai") throw Object.assign(new Error("Unsupported AI provider."), { code: "AI_PROVIDER_UNAVAILABLE" });
+    return adapters[provider];
+  }
+  return Object.freeze({ ...gemini, providers, forProvider });
 }
 
 /** Keep only what BOB understands, and only text that passes the guard. */

@@ -1,9 +1,7 @@
 // Account identity is not provider health or permission to send messages.
 // Read-only endpoints, only invoked by an explicitly requested admin refresh:
 // https://www.twilio.com/docs/iam/api/account
-// https://marketplace.gohighlevel.com/docs/ghl/locations/get-location/index.html
 import { createHash } from 'node:crypto';
-import { cleanSecret } from './leadconnector.mjs';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const sid = (value, prefix) => new RegExp(`^${prefix}[a-fA-F0-9]{32}$`).test(value);
@@ -13,8 +11,7 @@ export function createIntegrationAccounts({ env = process.env, fetchImpl = fetch
   const account = String(env.TWILIO_ACCOUNT_SID || '').trim();
   const apiKey = String(env.TWILIO_API_KEY_SID || '').trim();
   const apiSecret = String(env.TWILIO_API_KEY_SECRET || '').trim();
-  const lcToken = cleanSecret(env.LC_PRIVATE_TOKEN), location = cleanSecret(env.LC_LOCATION_ID);
-  const secrets = [account, apiKey, apiSecret, lcToken, location, env.JOBBER_CLIENT_SECRET].filter(Boolean);
+  const secrets = [account, apiKey, apiSecret, env.JOBBER_CLIENT_SECRET].filter(Boolean);
   const safeName = (value, extraSecrets = []) => {
     if (typeof value !== 'string') return null;
     let name = value.replace(/[\x00-\x1f\x7f]/g, ' ').trim();
@@ -24,11 +21,19 @@ export function createIntegrationAccounts({ env = process.env, fetchImpl = fetch
   };
   const cfg = {
     twilio: { configured: sid(account, 'AC') && sid(apiKey, 'SK') && Boolean(apiSecret), revision: hash([account, apiKey, apiSecret]) },
-    leadConnector: { configured: Boolean(lcToken) && /^[a-zA-Z0-9_-]{1,120}$/.test(location), revision: hash([lcToken, location]) },
   };
   // The OAuth helper reads only local token state, never a provider. Without a
   // revision helper we cannot safely reuse Jobber identity across reconnections.
   async function context(provider) {
+    // Honor tenant switches on every passive read and explicit refresh, including
+    // the post-request check. An unreadable config cannot authorize a lookup.
+    let integrations;
+    try { integrations = (await store?.config?.())?.integrations || {}; }
+    catch { return { configured: false, revision: null }; }
+    if ((provider === 'jobber' && integrations.jobber === false) ||
+        (provider === 'twilio' && integrations.verification === false && integrations.sms === false)) {
+      return { configured: false, revision: null };
+    }
     if (provider !== 'jobber') return cfg[provider];
     try {
       const revision = await jobber?.accountIdentityRevision?.();
@@ -48,7 +53,7 @@ export function createIntegrationAccounts({ env = process.env, fetchImpl = fetch
   }
   async function snapshot() {
     const result = {};
-    for (const provider of ['jobber', 'twilio', 'leadConnector']) result[provider] = await read(provider, await context(provider));
+    for (const provider of ['jobber', 'twilio']) result[provider] = await read(provider, await context(provider));
     return result;
   }
   async function get(url, headers) {
@@ -62,11 +67,6 @@ export function createIntegrationAccounts({ env = process.env, fetchImpl = fetch
       if (data.sid !== account) throw new Error('Account identity mismatch');
       return { displayName: safeName(data.friendly_name, [data.auth_token]), accountStatus: data.status };
     }
-    if (provider === 'leadConnector') {
-      const data = await get(`https://services.leadconnectorhq.com/locations/${encodeURIComponent(location)}`, { Authorization: `Bearer ${lcToken}`, Version: 'v3' });
-      if (data.location?.id !== location) throw new Error('Account identity mismatch');
-      return { displayName: safeName(data.location.name || data.location.business?.name) };
-    }
     const data = await jobber.accountIdentity();
     if (data?.verified !== true) throw new Error('Account identity unavailable');
     return { displayName: safeName(data?.name) };
@@ -74,7 +74,7 @@ export function createIntegrationAccounts({ env = process.env, fetchImpl = fetch
   let pending = null;
   async function performRefresh() {
     const result = {};
-    await Promise.all(['jobber', 'twilio', 'leadConnector'].map(async provider => {
+    await Promise.all(['jobber', 'twilio'].map(async provider => {
       const config = await context(provider);
       if (!config.configured) { result[provider] = empty(); return; }
       let record;

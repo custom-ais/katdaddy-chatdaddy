@@ -49,8 +49,11 @@ export const DEFAULT_CONFIG = {
   // Services that need a named approver's yes (sent through LeadConnector) before booking.
   approvalServices: ['emergency'],
   approver: { name: '', phone: '', email: '' },
-  // Smart chat: Gemini reads free-typed messages. Off = button-and-keyword chat only.
+  // Smart chat: the selected provider reads free-typed messages. Off = button-and-keyword chat only.
   aiAssistant: true,
+  aiProvider: 'gemini',
+  // Operational switches never replace credential/readiness checks. Database remains mandatory.
+  integrations: { jobber: true, maps: true, verification: true, sms: true, email: true },
   // From the scheduling workbook (dvs_sched_sql_truth_pkg). Rank open times by route fit.
   routeScoring: true,
   // Same-day regular visits: only before the cutoff hour, with notice, next to a booked job.
@@ -136,6 +139,8 @@ export function bookingQuote(route,config=DEFAULT_CONFIG,ctx={}) {
 // Saved settings win, but catalog items added in a later release (like new add-ons) are filled in.
 export const withConfigDefaults = saved => {
  const c={...DEFAULT_CONFIG,...(saved||{})};
+ const gates=saved?.integrations;
+ c.integrations=gates===undefined?{...DEFAULT_CONFIG.integrations}:gates&&typeof gates==='object'&&!Array.isArray(gates)?{...DEFAULT_CONFIG.integrations,...gates}:gates;
  // Settings saved before the office's coverage list switch to it once; later edits in Settings stand.
  if((saved?.coverageVersion||0)<COVERAGE_VERSION){c.serviceZips=[...COVERAGE_IN];c.travelZips=[...COVERAGE_TRAVEL];c.coverageVersion=COVERAGE_VERSION;}
  if(Array.isArray(saved?.services)){const ids=new Set(saved.services.map(x=>x.id));c.services=[...saved.services.map(x=>RETIRED_FAMILIES.has(x.family)?{...x,active:false}:x),...SERVICE_CATALOG.filter(x=>!ids.has(x.id))];}
@@ -185,6 +190,9 @@ export function validateContact(data,{address=true}={}) {
 }
 export function validateConfig(c) {
  const errors=[];
+ if(!['gemini','openai'].includes(c.aiProvider))errors.push('Choose Gemini or OpenAI as the AI provider.');
+ if(!c.integrations||typeof c.integrations!=='object'||Array.isArray(c.integrations)||Object.keys(c.integrations).some(k=>!['jobber','maps','verification','sms','email'].includes(k)))errors.push('Invalid integration switches.');
+ for(const k of ['jobber','maps','verification','sms','email'])if(typeof c.integrations?.[k]!=='boolean')errors.push(`Invalid integration switch: ${k}.`);
  for(const [key,min,max] of [['cleaningPriceCents',0,1000000],['assessmentPriceCents',0,1000000],['cleaningMinutes',30,480],['assessmentMinutes',30,480],['bundleMinutes',30,600],['bufferMinutes',0,180],['maxJobsPerDay',1,30],['leadHours',0,168],['horizonDays',1,180]]) {
   if(!Number.isInteger(c[key])||c[key]<min||c[key]>max)errors.push(`Invalid ${key}.`);
  }

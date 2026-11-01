@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { harness, contact } from './helpers.mjs';
+import { harness, contact, fakeTwilio } from './helpers.mjs';
 
 function transport(configured = true) {
   const calls = [];
-  return { calls, messagingConfigured: configured, sendSms: async (phone, message) => { calls.push({ phone, message }); return { messageId: 'SM-test', status: 'accepted' }; } };
+  return { ...fakeTwilio(), calls, messagingConfigured: configured, sendSms: async (phone, message) => { calls.push({ phone, message }); return { messageId: 'SM-test', status: 'accepted' }; } };
 }
 
 for (const mode of ['unavailable', 'upsert-failed']) {
@@ -18,7 +18,7 @@ for (const mode of ['unavailable', 'upsert-failed']) {
     assert.equal(twilio.calls[0].phone, '+16235551234');
     const [a] = await h.store.appointments();
     assert.equal(a.notifications.sms, 'sent');
-    assert.equal(a.notifications.email, mode === 'unavailable' ? 'skipped' : 'failed');
+    assert.equal(a.notifications.email, 'skipped');
     assert.equal(h.lc.calls.some(c => c[0] === 'sms'), false);
   });
 }
@@ -30,26 +30,30 @@ test('selected Twilio without approved sender fails closed with no LC fallback',
   assert.equal(r.status, 201);
   assert.equal(twilio.calls.length, 0);
   assert.equal(h.lc.calls.some(c => c[0] === 'sms'), false);
-  assert.equal(h.lc.calls.some(c => c[0] === 'email'), true);
+  assert.equal(h.lc.calls.length, 0);
   const [a] = await h.store.appointments();
-  assert.equal(a.notifications.sms, 'failed');
-  assert.equal(a.notifications.email, 'sent');
+  assert.equal(a.notifications.sms, 'skipped');
+  assert.equal(a.notifications.smsReason, 'not_configured_or_disabled');
+  assert.equal(a.notifications.email, 'skipped');
+  assert.equal(a.notifications.emailReason, 'disabled_or_not_configured');
 });
 
-test('Twilio selection preserves LC email and CRM, while SMS consent remains required', async t => {
+test('Twilio SMS consent remains required; retired CRM and email are never called', async t => {
   const twilio = transport();
   const h = await harness(t, { config: { requirePhoneVerification: false }, twilio, env: { BOOKING_SMS_PROVIDER: 'twilio' } });
   await h.book('cleaning', { ...contact, smsConsent: false, email: 'test@example.com' });
   assert.equal(twilio.calls.length, 0);
-  assert.deepEqual(h.lc.calls.map(c => c[0]), ['upsert', 'email', 'note']);
+  assert.deepEqual(h.lc.calls, []);
 });
 
-test('ordinary SMS and email retain LC default even with configured Twilio', async t => {
+test('ordinary SMS defaults to configured Twilio and email remains explicitly unavailable', async t => {
   const twilio = transport();
   const h = await harness(t, { twilio });
   await h.book('cleaning', { ...contact, smsConsent: true, email: 'test@example.com' });
-  assert.equal(twilio.calls.length, 0);
-  assert.deepEqual(h.lc.calls.map(c => c[0]), ['upsert', 'sms', 'email', 'note']);
+  assert.equal(twilio.calls.length, 1);
+  assert.deepEqual(h.lc.calls, []);
+  const [a] = await h.store.appointments();
+  assert.equal(a.notifications.emailReason, 'disabled_or_not_configured');
 });
 
 test('emergency approver Twilio text is independent of LC CRM outage', async t => {
@@ -64,7 +68,9 @@ test('emergency approver Twilio text is independent of LC CRM outage', async t =
   assert.equal(response.status, 201, JSON.stringify(response.data));
   const approval = await h.store.approval(response.data.approval.id);
   assert.equal(approval.notified.sms, 'sent');
-  assert.equal(approval.notified.email, 'failed');
+  assert.equal(approval.notified.email, 'skipped');
+  assert.equal(approval.notified.emailReason, 'disabled_or_not_configured');
+  assert.deepEqual(h.lc.calls, []);
   assert.equal(twilio.calls.some(c => c.phone === '+16235559999' && /approval needed/.test(c.message)), true);
   assert.equal(await h.count('appointments'), 0);
 });

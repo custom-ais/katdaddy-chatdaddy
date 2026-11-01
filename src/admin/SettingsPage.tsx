@@ -63,11 +63,16 @@ function RecordedHealth({ configured, health, legacyIssue }: { configured: boole
   const checked = Number.isFinite(health?.checkedAt) && health.checkedAt > 0;
   const success = Number.isFinite(health?.lastSuccessAt) && health.lastSuccessAt > 0;
   const active = health?.status === 'error' ? health.activeIssue : null;
+  const operationNames: Record<string, string> = { geocode: 'Address lookup', places: 'Address suggestions', routes: 'Driving routes' };
+  const operations = Object.entries(health?.operations || {}) as [string, any][];
+  const operationSucceeded = (op: any) => configured && op?.status === 'healthy' && op.stale !== true && op.fresh !== false && Number.isFinite(op.lastSuccessAt) && op.lastSuccessAt > 0;
+  const partialSuccess = configured && health?.status === 'unknown' && !operations.some(([, op]) => op?.status === 'error') && operations.some(([, op]) => operationSucceeded(op)) && operations.some(([, op]) => !operationSucceeded(op));
   const history = [...(Array.isArray(health?.history) ? health.history : []), health?.lastIssue, legacyIssue]
     .filter((entry, index, all) => entry?.message && !(active && entry.at === active.at && entry.message === active.message) && all.findIndex((other) => other?.at === entry.at && other?.message === entry.message) === index);
   return <div className="mt-2 space-y-1">
-    <p className="font-semibold text-slate-700">{!configured ? 'Configuration missing' : health?.status === 'healthy' && success ? 'Configuration present · last recorded check succeeded' : health?.status === 'error' && active ? 'Configuration present · active recorded failure' : 'Configuration present · unverified'}</p>
+    <p className="font-semibold text-slate-700">{!configured ? 'Configuration missing' : health?.status === 'healthy' && success ? 'Configuration present · last recorded check succeeded' : health?.status === 'error' && active ? 'Configuration present · active recorded failure' : partialSuccess ? 'Some recorded checks succeeded; other checks unverified/stale' : 'Configuration present · unverified'}</p>
     <p>Last checked: {checked ? when(health.checkedAt) : 'not yet recorded'}.{success ? ` Last success: ${when(health.lastSuccessAt)}.` : ''} This is recorded status, not a live connection test.</p>
+    {operations.length > 0 && <ul className="space-y-1">{operations.map(([name, op]) => <li key={name}><span className="font-semibold">{operationNames[name] || name}:</span> {!configured ? 'configuration missing; unverified' : op?.status === 'error' ? 'recorded failure' : operationSucceeded(op) ? `last recorded check succeeded (${when(op.lastSuccessAt)})` : op?.stale || op?.fresh === false ? 'stale; current status unverified' : Number.isFinite(op?.checkedAt) && op.checkedAt > 0 ? 'unverified' : 'never checked; unverified'}{configured && op?.status === 'error' && op.activeIssue?.message ? ` — ${op.activeIssue.message}` : ''}</li>)}</ul>}
     {active && <p className="font-semibold text-amber-800">Active failure{Number.isFinite(active.at) ? ` (${when(active.at)})` : ''}: {active.message}</p>}
     {history.length > 0 && <details className="pt-1 text-slate-500">
       <summary className="cursor-pointer font-semibold">Previous errors ({history.length}) — history only</summary>
@@ -81,10 +86,10 @@ function AccountIdentity({ account }: { account?: { status?: string; displayName
   return <p className="mt-2 text-xs text-slate-600">{account?.status === 'verified' && name ? <>Verified account: <span className="font-semibold">{name}</span></> : 'Account identity not verified'}{Number.isFinite(account?.checkedAt) ? ` · checked ${when(account!.checkedAt!)}` : ''}</p>;
 }
 
-function Connections() {
+function Connections({ config, onChange }: { config: any; onChange: (key: string, value: any) => void }) {
   const { data, mutate, showToast, refresh, loading } = useDashboard();
   const i = data.integrations || {};
-  const accounts: Record<string, any> = { Jobber: i.accounts?.jobber, LeadConnector: i.accounts?.leadConnector, 'Twilio Verify': i.accounts?.twilio, 'Twilio appointment texts': i.accounts?.twilio };
+  const accounts: Record<string, any> = { Jobber: i.accounts?.jobber, 'Twilio Verify': i.accounts?.twilio, 'Twilio appointment texts': i.accounts?.twilio };
   const [accountsBusy, setAccountsBusy] = useState(false), [accountsError, setAccountsError] = useState('');
   const refreshAccounts = async () => {
     if (accountsBusy) return;
@@ -99,33 +104,50 @@ function Connections() {
     setBusy(true);
     try { await mutate('/api/admin/jobber/disconnect', {}, 'POST', 'Jobber disconnected'); } catch (e) { showToast({ type: 'error', title: "Couldn't disconnect", description: (e as Error).message }); } finally { setBusy(false); }
   };
+  const enabled = (key: string) => config.integrations?.[key] !== false;
+  const offWarning: Record<string, string> = {
+    jobber: 'Turning Jobber off pauses online booking. Existing appointments and the connected account remain unchanged. Turn it off in your draft?',
+    maps: 'Turning Maps off stops address and routing calls and pauses all online booking, including ZIP-based coverage. Turn it off in your draft?',
+    verification: 'Turning Verify off blocks bookings that require verification; it never bypasses the code check. Turn it off in your draft?',
+  };
+  const switchFor = (key: string, label: string) => <Toggle checked={enabled(key)} onChange={(value) => {
+    if (!value && offWarning[key] && !confirm(offWarning[key])) return;
+    onChange('integrations', { ...config.integrations, [key]: value });
+  }} label={`Enable ${label}`} detail="Changes apply after Save. Unconfigured providers stay unavailable." />;
+  const aiProvider = config.aiProvider === 'openai' ? 'openai' : 'gemini';
+  const ai = i.assistant?.providers?.[aiProvider];
+  const aiName = aiProvider === 'openai' ? 'OpenAI (ChatGPT models)' : 'Gemini';
   const rows: [string, boolean, React.ReactNode, React.ReactNode?][] = [
-    ['Jobber', !!i.jobber?.connected,
-      i.jobber?.connected ? 'Reading the live calendar and creating scheduled jobs with visits.' : i.jobber?.appConfigured ? 'Not connected yet. Online booking stays off until it is.' : 'Add JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET and JOBBER_REDIRECT_URI in Vercel first.',
-      i.jobber?.appConfigured && (i.jobber?.connected ? <button className={subtleButton} onClick={disconnect} disabled={busy}>Disconnect</button> : <a className={primaryButton} href="/api/admin/jobber/connect">Connect Jobber</a>)],
-    ['LeadConnector', !!i.leadConnector?.configured && i.leadConnector?.health?.status === 'healthy' && Number.isFinite(i.leadConnector?.health?.lastSuccessAt) && i.leadConnector.health.lastSuccessAt > 0,
-      <>{i.leadConnector?.configured ? 'Saves CRM contacts and requests, and sends confirmation emails. Texts and verification codes use the selected providers.' : 'LeadConnector is not configured. CRM sync and confirmation emails need its server-side connection; legacy verification and texting also depend on it.'}
-        {i.leadConnector?.configured && ['jwt', 'other'].includes(i.leadConnector?.tokenKind) && <span className="block mt-1 font-semibold text-amber-800">Configuration warning (not a confirmed authentication failure): LC_PRIVATE_TOKEN doesn't look like a Private Integration token (those start with “pit-”).{i.leadConnector.tokenKind === 'jwt' ? ' It looks like an older API key or app token.' : ''} Copy the token from the sub-account's Settings → Private Integrations.</span>}
-        <RecordedHealth configured={!!i.leadConnector?.configured} health={i.leadConnector?.health} legacyIssue={i.leadConnector?.issue} /></>],
-    ...(i.verification?.provider === 'twilio' ? [['Twilio Verify', !!i.verification.configured, i.verification.configured ? 'Selected for booking codes by text or email. Email verification does not verify a phone. Configuration is present; delivery still needs a controlled test.' : 'Selected but not configured. Online booking waits for the server-side Verify connection. Do not paste credentials here.'] as [string, boolean, React.ReactNode]] : []),
-    ...(i.sms?.provider === 'twilio' ? [['Twilio appointment texts', !!i.sms.configured, i.sms.configured ? 'Selected sender configuration is present. Customer texts require consent; company approval texts are for emergency same-day requests only. Delivery is not yet established by this status.' : 'Selected but not ready. An approved sender and server-side messaging configuration are required. Verify does not send booking confirmations.'] as [string, boolean, React.ReactNode]] : []),
-    ['Smart chat', !!i.assistant?.configured, i.assistant?.configured ? `Gemini (${i.assistant.model}) reads typed messages. It can't set prices or book — BOB's rules do that.` : 'Add GEMINI_API_KEY in Vercel. Until then BOB uses buttons and keyword matching.'],
-    ['Maps', i.maps?.provider === 'google' && i.maps?.health?.status === 'healthy' && Number.isFinite(i.maps?.health?.lastSuccessAt) && i.maps.health.lastSuccessAt > 0,
-      <>{i.maps?.provider === 'google' ? 'Google configuration is present for address and driving-route lookups. Driving-distance coverage stays unverified if road routing fails.' : 'Census address lookup only. Measured driving routes are unavailable; automatic bookings that need a travel check stay blocked. Add GOOGLE_MAPS_API_KEY for measured driving routes.'}
-        <RecordedHealth configured={i.maps?.provider === 'google'} health={i.maps?.health} legacyIssue={i.maps?.issue} /></>],
-    ['Database', !!i.database, i.database === 'supabase-rest' ? 'Supabase (ChatDaddy project), through the service key.' : i.database === 'postgres' ? 'Postgres connection string.' : 'Local test database — data is not kept.'],
+    ['Jobber', enabled('jobber') && !!i.jobber?.connected,
+      <>{!enabled('jobber') ? 'Off in these settings: online booking stays paused. Turning this off does not disconnect the saved account.' : i.jobber?.connected ? 'Account connected for the live calendar and scheduled visits.' : i.jobber?.appConfigured ? 'Not connected yet. Online booking stays off until it is.' : 'Unavailable: add JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET and JOBBER_REDIRECT_URI in the server environment.'}
+        {i.jobber?.appConfigured && <div className="mt-2">{i.jobber?.connected ? <button className={subtleButton} onClick={disconnect} disabled={busy}>Disconnect account</button> : <a className={primaryButton} href="/api/admin/jobber/connect">Connect Jobber account</a>}</div>}</>, switchFor('jobber', 'Jobber')],
+    ['Twilio Verify', false,
+      <>{!enabled('verification') ? 'Off in these settings: required verification blocks online booking; it is never bypassed.' : i.verification?.configured ? 'Configuration present for booking codes by text or email. Delivery is not verified by this status.' : 'Unavailable: server-side Twilio Verify configuration is required. Online booking stays blocked.'}<p className="mt-1">Email verification verifies only email. Verify sends codes, not booking confirmations. Keys stay on the server.</p></>, switchFor('verification', 'verification')],
+    ['Twilio appointment texts', false,
+      <>{!enabled('sms') ? 'Off in these settings: appointment, owner-alert and company approval texts are suppressed.' : i.sms?.configured ? 'Approved sender configuration present. Delivery is not verified by this status.' : 'Unavailable: configure an approved texting sender on the server before texts can be sent.'}<p className="mt-1">Customer texts require consent. Emergency same-day approval and optional owner booking alerts remain separate rules. Verification codes use the separate Verify switch.</p></>, switchFor('sms', 'appointment texts')],
+    ['SendGrid appointment emails', false,
+      <>{!enabled('email') ? 'Off in these settings: appointment confirmation emails are suppressed. Verification codes are unaffected.' : i.email?.configured ? 'Sender configuration present. Delivery is not verified by this status.' : 'Unavailable: configure SendGrid and a verified sender on the server before confirmation emails can be sent.'}<p className="mt-1">Uses separate built-in HTML and plain-text appointment messages, not the verification-code template. Independent of SMS. API keys stay server-side.</p></>, switchFor('email', 'appointment emails')],
+    ['Smart chat', false,
+      <><p>{config.aiAssistant === false ? 'Off: buttons and keyword rules handle the chat.' : ai?.configured ? `${aiName} configuration present${ai.model ? ` (${ai.model})` : ''}. Provider availability is not verified here.` : `${aiName} is unavailable until its API key is configured on the server. The rules-based booking flow remains available.`}</p>
+        <Field label="Smart chat provider"><select className={inputClass} value={aiProvider} onChange={(event) => onChange('aiProvider', event.target.value)}><option value="gemini">Gemini</option><option value="openai">OpenAI (ChatGPT models)</option></select></Field>
+        <p>OpenAI API usage is billed separately; a ChatGPT subscription does not include API usage. API keys stay server-side, never in this form. AI cannot set prices or book appointments.</p></>,
+      <Toggle checked={config.aiAssistant !== false} onChange={(value) => onChange('aiAssistant', value)} label="Enable Smart chat" detail="Changes apply after Save." />],
+    ['Maps', enabled('maps') && i.maps?.provider === 'google' && i.maps?.health?.status === 'healthy' && Number.isFinite(i.maps?.health?.lastSuccessAt) && i.maps.health.lastSuccessAt > 0,
+      <>{!enabled('maps') ? 'Off in these settings: address and routing calls stop. All online booking is paused, including ZIP-based coverage.' : i.maps?.provider === 'google' ? 'Google configuration is present for address and measured-route lookups.' : 'Census address lookup only. Measured driving routes are unavailable; automatic bookings that need a travel check stay blocked. Add GOOGLE_MAPS_API_KEY for measured driving routes.'}
+        {enabled('maps') ? <RecordedHealth configured={i.maps?.configured === true || i.maps?.provider === 'google'} health={i.maps?.health} legacyIssue={i.maps?.issue} /> : <details className="mt-2"><summary className="cursor-pointer">Recorded check history — not current enabled status</summary><RecordedHealth configured={i.maps?.configured === true || i.maps?.provider === 'google'} health={i.maps?.health} legacyIssue={i.maps?.issue} /></details>}</>, switchFor('maps', 'Maps')],
+    ['Database', !!i.database, <>{i.database === 'supabase-rest' ? 'Supabase, through the server-side service key.' : i.database === 'postgres' ? 'Postgres connection.' : 'Local test database — data is not kept.'}<p className="mt-1 font-semibold">Required for safe booking state; no on/off switch.</p></>],
     ...(i.lastError ? [['Server error history', false, <details><summary className="cursor-pointer">Previous server error — not a current health check</summary><p>{when(i.lastError.at)} on {i.lastError.path}: {i.lastError.message}</p></details>] as [string, boolean, React.ReactNode]] : []),
   ];
   return (
-    <Section icon={<Link2 size={18} />} title="Connections" description="Keys live in Vercel environment variables. Refresh reloads recorded status only; it does not run external provider checks." action={<button type="button" className={subtleButton} disabled={busy || loading} onClick={() => void refresh()}>{loading ? 'Refreshing recorded status…' : 'Refresh recorded status'}</button>}>
+    <Section icon={<Link2 size={18} />} title="Connections" description="Switches and provider choice are drafts until Save. Keys stay server-side. Refresh reloads recorded status only; it does not run external provider checks." action={<button type="button" className={subtleButton} disabled={busy || loading} onClick={() => void refresh()}>{loading ? 'Refreshing recorded status…' : 'Refresh recorded status'}</button>}>
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" className={subtleButton} disabled={accountsBusy || busy} onClick={() => void refreshAccounts()}>{accountsBusy ? 'Loading account names…' : 'Refresh account names'}</button>
-        <p className="text-xs text-slate-500">Reads account names only. Does not send messages or test routing. Google and Gemini account identity is not verified here.</p>
+        <p className="text-xs text-slate-500">Reads account names only. Does not send messages or test routing. Google, Gemini and OpenAI account identity is not verified here.</p>
       </div>
       {accountsError && <ErrorNote>{accountsError}</ErrorNote>}
       <div className="divide-y divide-slate-100">
         {rows.map(([name, ok, detail, action]) => (
-          <div key={name} className="flex items-start justify-between gap-3 py-3">
+          <div key={name} className="flex flex-col sm:flex-row items-start justify-between gap-3 py-3">
             <div className="flex items-start gap-3"><Dot ok={ok} /><div><p className="text-sm font-extrabold text-slate-900">{name}</p><div className="text-xs text-slate-500 leading-snug max-w-xl">{detail}{name !== 'Server error history' && <AccountIdentity account={accounts[name]} />}</div></div></div>
             {action}
           </div>
@@ -376,14 +398,14 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
     try { setCheck(await api('/api/admin/geo/check', { method: 'POST', body: { address } })); } catch (e) { setCheck({ error: (e as Error).message }); }
   };
   const embed = `<script src="${location.origin}/embed.js" defer></script>`;
-  const twilioVerify = data.integrations?.verification?.provider === 'twilio';
-  const verificationReady = twilioVerify ? !!data.integrations?.verification?.configured : !(c.requirePhoneVerification && c.smsConfirmations) || !!data.integrations?.leadConnector?.configured;
+  const verificationRequired = data.integrations?.verification?.provider === 'twilio' || c.requirePhoneVerification !== false;
+  const verificationReady = !verificationRequired || (c.integrations?.verification !== false && !!data.integrations?.verification?.configured);
   const readiness = [
     [c.scheduleAcknowledged, 'Schedule source confirmed'],
     [c.pricesAcknowledged, 'Prices approved'],
     [['driving_distance', 'radius'].includes(c.serviceAreaMode) ? Boolean(c.baseAddress.trim() || c.baseLocation) : c.serviceZips.length > 0, 'Service area configured'],
     [c.activeTechnicianIds.length > 0, 'A technician takes bookings'],
-    [c.scheduleSource !== 'Jobber' || data.integrations?.jobber?.connected, 'Jobber connected'],
+    [c.integrations?.jobber !== false && (c.scheduleSource !== 'Jobber' || data.integrations?.jobber?.connected), 'Jobber enabled and connected when required'],
     [verificationReady, 'Selected verification provider configured'],
   ] as [boolean, string][];
 
@@ -402,7 +424,7 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
         {changed.length > 0 && <p role="status" className="text-sm font-semibold text-amber-800">Unsaved {changed.join(' and ')} — kept as you switch sections.</p>}
       </div>
       <div hidden={page !== 'connections'} className="space-y-6" data-settings-panel="connections">
-            <Connections />
+            <Connections config={c} onChange={update} />
       </div>
 
       <div hidden={page !== 'booking'} className="space-y-6" data-settings-panel="booking">
@@ -418,11 +440,11 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
             </Field>
             <Toggle checked={c.scheduleAcknowledged} onChange={(v) => update('scheduleAcknowledged', v)} label="The schedule source above is accurate and kept up to date" />
             <Toggle checked={c.bookingEnabled} onChange={(v) => update('bookingEnabled', v)} label="Let customers book visits online" detail="When off, BOB still answers questions and takes callback requests." />
-            <Toggle checked={twilioVerify || (c.requirePhoneVerification && c.smsConfirmations)} disabled={twilioVerify || !c.smsConfirmations} onChange={(v) => update('requirePhoneVerification', v)} label={twilioVerify ? 'Verify by text or email before booking' : 'Legacy: text a code before booking'} detail={twilioVerify ? 'Twilio Verify remains required independently of appointment text settings. The customer chooses text or email; this legacy switch cannot disable it.' : c.smsConfirmations ? 'Legacy verification uses LeadConnector.' : 'Legacy phone verification is off while text confirmations are off.'} />
-            <Toggle checked={c.aiAssistant} onChange={(v) => update('aiAssistant', v)} label="Smart chat (Gemini) reads typed messages" detail="Off = buttons and keyword matching only. Prices and booking never depend on it." />
+            <Toggle checked={verificationRequired} disabled onChange={() => {}} label="Verify by text or email before booking" detail={verificationRequired ? "Required independently of appointment texts. Turning Verify off in Connections pauses booking rather than skipping verification." : "Not required by the saved policy. Selecting Twilio Verify makes verification mandatory independently of appointment texts."} />
+            <Toggle checked={c.aiAssistant !== false} onChange={(v) => update('aiAssistant', v)} label="Smart chat reads typed messages" detail="Choose Gemini or OpenAI in Connections. Off = buttons and keyword matching. Prices and booking never depend on AI." />
             <div className="flex flex-wrap gap-x-6">
-              <Toggle checked={c.smsConfirmations} onChange={(v) => update('smsConfirmations', v)} label="Text confirmations" detail={twilioVerify ? 'Only to customers who agree to appointment texts. Off disables confirmations and the consent question, not the customer-requested verification code.' : 'Only to customers who agree to texts. Off also disables legacy phone codes and the texting question.'} />
-              <Toggle checked={c.emailConfirmations} onChange={(v) => update('emailConfirmations', v)} label="Email confirmations" />
+              <Toggle checked={c.smsConfirmations} onChange={(v) => update('smsConfirmations', v)} label="Text confirmations" detail="Only to customers who agree to appointment texts. Requires appointment texts enabled in Connections; verification codes remain separate." />
+              <Toggle checked={c.emailConfirmations} onChange={(v) => update('emailConfirmations', v)} label="Email confirmations" detail={c.integrations?.email === false ? "Appointment emails are off in Connections. Verification codes are unaffected." : data.integrations?.email?.configured ? "SendGrid sender configuration is present; delivery is not yet verified. Uses an appointment message, not the code template." : "Unavailable until SendGrid and a verified confirmation-email sender are configured. Verify email sends verification codes only."} />
             </div>
           </div>
           <ul className="space-y-2 bg-slate-50 rounded-2xl border border-slate-200 p-4 self-start">

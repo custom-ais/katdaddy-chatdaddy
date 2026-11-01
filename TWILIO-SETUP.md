@@ -1,6 +1,6 @@
 # Twilio booking integration — staged, not enabled by this change
 
-The default remains LeadConnector. No credentials, messages, or deployments are included.
+No messaging provider is selected implicitly. LeadConnector has been removed. No credentials, messages, or deployments are included.
 
 ## Server-only configuration contract
 
@@ -14,9 +14,9 @@ Use a Verify service with **4-digit codes** (Verify service → General settings
 
 Twilio verification is always required when explicitly selected, independently of the old phone-verification/text-confirmation switches. An incomplete configuration disables online booking. The customer explicitly chooses SMS or email before sending. A callback number remains required and can be a landline with email verification. Email verification never marks a phone verified and never grants SMS consent.
 
-For ordinary customer confirmation/company texts, separately select `BOOKING_SMS_PROVIDER=twilio`, configure `TWILIO_MESSAGING_SERVICE_SID`, and set `TWILIO_SMS_SENDER_APPROVED=true` **only after** business/campaign/sender registration and consent requirements have been verified. Merely creating a Verify service or approving a brand is not ordinary-SMS readiness. Missing approval/configuration fails closed; it never silently falls back to LeadConnector texting.
+For ordinary customer confirmation/company texts, separately select `BOOKING_SMS_PROVIDER=twilio`, configure `TWILIO_MESSAGING_SERVICE_SID`, and set `TWILIO_SMS_SENDER_APPROVED=true` **only after** business/campaign/sender registration and consent requirements have been verified. Merely creating a Verify service or approving a brand is not ordinary-SMS readiness. Missing approval/configuration fails closed; it never silently falls back to another provider.
 
-LeadConnector remains the CRM/contact and appointment-email integration (`LC_PRIVATE_TOKEN`, `LC_LOCATION_ID`, existing optional settings). Verify email is only an OTP, never a booking confirmation. Existing LeadConnector appointment emails remain enabled under their existing configuration. Twilio SMS is independent of LeadConnector contact-upsert success; CRM failures cannot silently change its selected provider. Keep LeadConnector configured for appointment emails and CRM.
+LeadConnector CRM/contact synchronization and its appointment-email transport have been removed. Existing local requests and Jobber booking records remain. No connector credentials are revoked or deleted. Verify email is only an OTP, never a booking confirmation. Separate SendGrid transactional delivery is supported with `BOOKING_EMAIL_PROVIDER=sendgrid`, `SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL` and `SENDGRID_SENDER_VERIFIED=true` only after sender verification. Optional `SENDGRID_FROM_NAME` controls the sender display name. The API key needs Mail Send access and stays server-side. Existing app HTML/text templates are used; no SendGrid dynamic template ID is required and the Verify OTP template is untouched. Until configured, email confirmations report `skipped`; they never pretend delivery succeeded. The Connections email switch disables confirmation and emergency approval email independently of Verify. A permanent per-record claim prevents duplicate attempts on retries or uncertain timeouts; `accepted` means SendGrid accepted the request, not that the inbox received it.
 
 Never use VITE_ or NEXT_PUBLIC_ names for Twilio secrets. Provision keys privately in the hosting environment, not chat/repository. Do not put raw codes or provider responses in logs.
 

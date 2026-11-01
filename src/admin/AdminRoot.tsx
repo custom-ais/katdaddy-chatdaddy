@@ -55,9 +55,10 @@ function SignIn({ setupRequired, onSignedIn }: { setupRequired: boolean; onSigne
 function BotPreview() {
   const { data } = useDashboard();
   const c = data.config, i = data.integrations || {};
-  const twilioVerify = i.verification?.provider === 'twilio';
-  const verificationReady = twilioVerify ? i.verification?.configured : !(c.requirePhoneVerification && c.smsConfirmations) || i.leadConnector?.configured;
-  const live = c.bookingEnabled && (c.scheduleSource !== 'Jobber' || i.jobber?.connected) && verificationReady;
+  const verificationRequired = i.verification?.provider === 'twilio' || c.requirePhoneVerification !== false;
+  const verificationReady = !verificationRequired || (i.verification?.enabled !== false && Boolean(i.verification?.configured));
+  const mapsReady = i.maps?.enabled !== false;
+  const live = data.bookingEnabled === true;
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6 animate-in">
       <div className="min-w-0"><BookingBot preview /></div>
@@ -66,8 +67,9 @@ function BotPreview() {
           <h3 className="font-extrabold text-slate-900 flex items-center gap-2"><Bot size={18} className="text-orange-500" />This is the live bot</h3>
           <p className="text-sm text-slate-600 leading-relaxed">It uses the same prices, rules and calendar customers see. {live ? 'Online booking is on, so a booking you finish here is real — use your own phone and cancel it in Jobber afterwards.' : 'Online booking is off right now, so it will offer a callback request instead of times.'}</p>
           <ul className="text-xs text-slate-600 space-y-1.5">
-            <li><b>Smart chat:</b> {c.aiAssistant ? (i.assistant?.configured ? `on (${i.assistant.model})` : 'on, waiting for GEMINI_API_KEY') : 'off'}</li>
-            <li><b>Verification:</b> {twilioVerify ? 'text or email required (Twilio)' : c.requirePhoneVerification && c.smsConfirmations ? 'phone code required (LeadConnector)' : 'legacy phone code off'}</li>
+            <li><b>Smart chat:</b> {c.aiAssistant ? (i.assistant?.configured ? `on (${i.assistant.model})` : 'on, waiting for the selected provider’s API key') : 'off'}</li>
+            <li><b>Verification:</b> {!verificationRequired ? 'not required by the saved policy' : verificationReady ? 'text or email required (Twilio)' : 'Twilio verification is not ready'}</li>
+            <li><b>Address lookup:</b> {mapsReady ? (i.maps?.provider === 'google' ? 'Google Maps enabled' : 'Census lookup only; measured routes unavailable') : 'off — online booking is paused, including ZIP-based service areas'}</li>
             <li><b>Online approvals:</b> emergency same-day only. Other approval-only exceptions remain office-only.</li>
           </ul>
           <a className={`${secondaryButton} w-full`} href="/chat" target="_blank" rel="noreferrer">Open the customer page<ExternalLink size={14} /></a>

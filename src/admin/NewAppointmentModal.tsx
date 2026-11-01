@@ -14,6 +14,8 @@ const tomorrow10 = () => {
 export function NewAppointmentModal({ onClose }: { onClose: () => void }) {
   const { data, mutate } = useDashboard();
   const c = data.config;
+  const smsReady = data.integrations?.sms?.enabled !== false && !!data.integrations?.sms?.configured;
+  const emailReady = data.integrations?.email?.enabled !== false && !!data.integrations?.email?.configured;
   const [f, setF] = useState({
     name: '', phone: '', email: '', address: '', city: '', zip: c.serviceZips[0] || '', service: 'cleaning:premium',
     stories: '1-story', upstairs: false, gas: false, noDryer: false, fogging: false, toolRetrieval: false,
@@ -98,7 +100,7 @@ export function NewAppointmentModal({ onClose }: { onClose: () => void }) {
           </div>
           <Field label="Gate codes and notes"><textarea rows={2} className={inputClass} value={f.notes} onChange={(e) => set({ notes: e.target.value })} /></Field>
           <Toggle checked={f.smsConsent} onChange={(v) => set({ smsConsent: v })} label="Customer agreed to appointment texts" />
-          <Toggle checked={f.sendConfirmation} onChange={(v) => set({ sendConfirmation: v })} label="Send the LeadConnector confirmation" detail={data.integrations?.leadConnector?.configured ? 'Text only with consent; email when given.' : 'LeadConnector isn’t connected, so nothing will be sent.'} />
+          <Toggle checked={f.sendConfirmation} onChange={(v) => set({ sendConfirmation: v })} disabled={!smsReady && !emailReady} label="Send an appointment confirmation" detail={smsReady || emailReady ? "Uses enabled confirmation channels: texts require consent; email requires a customer email address. Verification codes are separate." : "No confirmation sender is ready. Configure SMS or SendGrid in Connections first."} />
         </div>
 
         <div className="bg-orange-50 p-4 rounded-2xl flex items-center justify-between border border-orange-200">

@@ -22,10 +22,11 @@ test('Twilio email choice verifies email only and permits normal booking with SM
   const held=await h.hold(token,slots[0].scheduledAt); const booked=await h.confirm(token,held.data.hold);
   assert.equal(booked.status,201,JSON.stringify(booked.data));
   assert.equal(h.lc.calls.some(c=>c[0]==='sms'),false);
-  assert.equal(h.lc.calls.some(c=>c[0]==='email'),true,'confirmation remains LeadConnector email, not Verify');
+  assert.equal(h.lc.calls.length,0,'removed CRM/email provider is never called');
+  assert.equal((await h.store.appointments())[0].notifications.emailReason,'disabled_or_not_configured');
 });
 test('Twilio selection fails closed if unconfigured, even when customer text confirmations are off',async t=>{
- const h=await harness(t,{env:{BOOKING_VERIFICATION_PROVIDER:'twilio'},config:{smsConfirmations:false}});
+ const h=await harness(t,{twilio:null,env:{BOOKING_VERIFICATION_PROVIDER:'twilio'},config:{smsConfirmations:false}});
  assert.equal((await h.call('/api/public/config')).data.bookingEnabled,false);
 });
 test('Twilio SMS ownership and replay protection through API',async t=>{

@@ -46,14 +46,14 @@ test('unknown never treats stale activeIssue as current; missing configuration s
 });
 test('Connections uses recorded health rather than legacy issue absence and refreshes snapshot only', () => {
   assert.doesNotMatch(source, /configured && !i\.leadConnector\?\.issue|google' && !i\.maps\?\.issue/);
-  assert.match(source, /i\.leadConnector\?\.health\?\.status === 'healthy'/);
+  assert.doesNotMatch(source, /LeadConnector|LC_PRIVATE_TOKEN|leadConnector/);
   assert.match(source, /i\.maps\?\.health\?\.status === 'healthy'/);
   assert.match(source, /onClick=\{\(\) => void refresh\(\)\}/);
   assert.match(source, /does not run external provider checks/);
-  assert.match(source, /Configuration warning \(not a confirmed authentication failure\)/);
+  assert.match(source, /Required for safe booking state; no on\/off switch/);
 });
 
-const accountSource = source.slice(source.indexOf('function AccountIdentity('), source.indexOf('\nfunction Connections()'));
+const accountSource = source.slice(source.indexOf('function AccountIdentity('), source.indexOf('\nfunction Connections('));
 const accountCode = ts.transpileModule(`${when}\nexport ${accountSource}`, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS } }).outputText;
 const accountExports = {};
 new Function('require', 'exports', accountCode)(require, accountExports);
@@ -66,5 +66,106 @@ test('account names refresh is explicit and separate from passive status refresh
   assert.ok(source.includes("api('/api/admin/integration-accounts', { method: 'POST', body: {} })"));
   assert.match(source, /onClick=\{\(\) => void refreshAccounts\(\)\}/);
   assert.match(source, /i\.accounts\?\.jobber/);
-  assert.match(source, /Google and Gemini account identity is not verified/);
+  assert.match(source, /Google, Gemini and OpenAI account identity is not verified/);
+});
+
+test('connection switches edit draft integration config, with blocking warnings and no provider calls', () => {
+  assert.ok(source.includes("onChange('integrations', { ...config.integrations, [key]: value })"));
+  assert.ok(source.includes('!confirm(offWarning[key])'));
+  for (const key of ['jobber','maps','verification','sms','email']) assert.match(source, new RegExp(`switchFor\\('${key}'`));
+  assert.doesNotMatch(source, /switchFor\('database'/);
+  assert.match(source, /Turning Jobber off pauses online booking/);
+  assert.match(source, /pauses all online booking, including ZIP-based coverage/);
+  assert.match(source, /never bypasses the code check/);
+  assert.ok(source.includes('<Connections config={c} onChange={update} />'));
+});
+test('Verify and SMS remain visible unconfigured; provider selection and API costs are explicit', () => {
+  assert.doesNotMatch(source, /i\.verification\?\.provider === 'twilio' \?/);
+  assert.doesNotMatch(source, /i\.sms\?\.provider === 'twilio' \?/);
+  assert.match(source, /assistant\?\.providers\?\.\[aiProvider\]/);
+  assert.match(source, /onChange\('aiProvider', event.target.value\)/);
+  assert.match(source, /<option value="gemini">Gemini<\/option>/);
+  assert.match(source, /<option value="openai">OpenAI \(ChatGPT models\)<\/option>/);
+  assert.match(source, /a ChatGPT subscription does not include API usage/);
+  assert.match(source, /verified confirmation-email sender/);
+});
+test('rendered controls preserve other integration flags and decline disabling without changing drafts', () => {
+  const toggles = [], fields = [], changes = []; let providerCalls = 0;
+  const part = source.slice(source.indexOf('const when ='), source.indexOf('/** Edits are saved'));
+  const prelude = `const {useState}=require('react'); const {useDashboard,api,Toggle,Field,Section,Dot,ErrorNote,Link2}=require('ui-test'); const inputClass='',subtleButton='',primaryButton='';`;
+  const code = ts.transpileModule(`${prelude}\n${part}\nexport {Connections};`, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS } }).outputText;
+  const stubs = {
+    useDashboard: () => ({ data: {integrations:{assistant:{providers:{gemini:{configured:true,model:'test'},openai:{configured:false}}}}}, refresh:()=>{providerCalls++;}, mutate:()=>{providerCalls++;}, showToast:()=>{}, loading:false }),
+    api:()=>{providerCalls++;throw Error('No API call expected');},
+    Toggle: props => {toggles.push(props);return React.createElement('span',null,props.label);},
+    Field: props => {fields.push(props);return React.createElement('div',null,props.children);},
+    Section: props => React.createElement('section',null,props.children), Dot:()=>null,ErrorNote:()=>null,Link2:()=>null,
+  };
+  const out={};new Function('require','exports',code)(id=>id==='ui-test'?stubs:require(id),out);
+  const config={integrations:{jobber:true,maps:true,verification:true,sms:false},aiProvider:'gemini',aiAssistant:true};
+  const html=renderToStaticMarkup(React.createElement(out.Connections,{config,onChange:(...args)=>changes.push(args)}));
+  assert.doesNotMatch(html,/LeadConnector/); assert.match(html,/Twilio Verify/); assert.match(html,/Twilio appointment texts/); assert.match(html,/SendGrid appointment emails/); assert.match(html,/Unavailable: configure SendGrid/);
+  const previousConfirm=globalThis.confirm;
+  try {
+    globalThis.confirm=()=>false;toggles.find(t=>t.label==='Enable Jobber').onChange(false);assert.equal(changes.length,0);
+    globalThis.confirm=()=>true;toggles.find(t=>t.label==='Enable Jobber').onChange(false);
+    assert.deepEqual(changes.shift(),['integrations',{jobber:false,maps:true,verification:true,sms:false}]);
+    toggles.find(t=>t.label==='Enable Smart chat').onChange(false);assert.deepEqual(changes.shift(),['aiAssistant',false]);
+    fields.find(f=>f.label==='Smart chat provider').children.props.onChange({target:{value:'openai'}});assert.deepEqual(changes.shift(),['aiProvider','openai']);
+    toggles.find(t=>t.label==='Enable appointment emails').onChange(false);assert.deepEqual(changes.shift(),['integrations',{jobber:true,maps:true,verification:true,sms:false,email:false}]);
+    assert.equal(providerCalls,0);
+    assert.deepEqual(config.integrations,{jobber:true,maps:true,verification:true,sms:false});
+  } finally {if(previousConfirm===undefined)delete globalThis.confirm;else globalThis.confirm=previousConfirm;}
+});
+
+ test('saved policy information and disabled Maps history do not imply active readiness', () => {
+  assert.ok(source.includes("const verificationRequired = data.integrations?.verification?.provider === 'twilio' || c.requirePhoneVerification !== false"));
+  assert.match(source, /checked=\{verificationRequired\} disabled/);
+  assert.match(source, /Not required by the saved policy/);
+  assert.match(source, /enabled\('maps'\) && i\.maps/);
+  assert.match(source, /Recorded check history — not current enabled status/);
+  assert.match(source, /enabled\('maps'\) \? <RecordedHealth/);
+});
+
+test('confirmation email status is independent of OTP and admin send actions support either channel', async () => {
+  assert.match(source, /SendGrid appointment emails', false/);
+  assert.match(source, /not the verification-code template/);
+  assert.match(source, /i\.email\?\.configured/);
+  assert.match(source, /c\.integrations\?\.email === false/);
+  const detail = await readFile(new URL('../src/admin/AppointmentDetailModal.tsx', import.meta.url), 'utf8');
+  assert.match(detail, />Send confirmation<\/button>/);
+  assert.doesNotMatch(detail, /Resend confirmation|'Confirmation sent'/);
+  assert.match(detail, /not confirmed delivery/);
+  assert.match(detail, /failed_or_uncertain.*office review/);
+  assert.match(detail, /email already attempted is not resent automatically/);
+  assert.match(detail, /sms\?\.configured\) \|\| \(data\.integrations\?\.email\?\.enabled !== false && data\.integrations\?\.email\?\.configured/);
+  const create = await readFile(new URL('../src/admin/NewAppointmentModal.tsx', import.meta.url), 'utf8');
+  assert.match(create, /disabled=\{!smsReady && !emailReady\}/);
+  assert.doesNotMatch(create, /Email confirmations are not available/);
+});
+
+const healthyOperation = { status: 'healthy', stale: false, checkedAt: 2000, lastSuccessAt: 2000 };
+test('Maps partial recorded success distinguishes unused suggestions from successful routing and lookup', () => {
+  const html = render({configured:true,health:{status:'unknown',lastSuccessAt:2000,operations:{geocode:healthyOperation,routes:healthyOperation,places:{status:'unknown',checkedAt:null}}}});
+  assert.match(html,/Some recorded checks succeeded; other checks unverified\/stale/);
+  assert.match(html,/Address lookup:<\/span> last recorded check succeeded/);
+  assert.match(html,/Driving routes:<\/span> last recorded check succeeded/);
+  assert.match(html,/Address suggestions:<\/span> never checked; unverified/);
+  assert.doesNotMatch(html,/Configuration present · last recorded check succeeded/);
+});
+test('stale-only and all-unknown operation states never imply partial success', () => {
+  for (const operation of [{...healthyOperation,status:'unknown',stale:true},{...healthyOperation,fresh:false},{status:'unknown'}]) {
+    const html=render({configured:true,health:{status:'unknown',operations:{routes:operation}}});
+    assert.match(html,/Configuration present · unverified/);
+    assert.doesNotMatch(html,/Some recorded checks succeeded|Driving routes:<\/span> last recorded check succeeded/);
+  }
+});
+test('active failure takes precedence over successful operations and missing configuration never claims success', () => {
+  const health={status:'error',activeIssue:{at:2000,message:'Route unavailable'},operations:{geocode:healthyOperation,routes:{status:'error',activeIssue:{message:'Route unavailable'}},places:{status:'unknown'}}};
+  const html=render({configured:true,health});
+  assert.match(html,/active recorded failure/);assert.match(html,/Driving routes:<\/span> recorded failure/);
+  assert.doesNotMatch(html,/Some recorded checks succeeded/);
+  const missing=render({configured:false,health:{status:'unknown',operations:{routes:healthyOperation,places:{status:'unknown'}}}});
+  assert.match(missing,/Configuration missing/);assert.match(missing,/Driving routes:<\/span> configuration missing; unverified/);
+  assert.doesNotMatch(missing,/Some recorded checks succeeded|last recorded check succeeded/);
 });
