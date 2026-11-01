@@ -1,3 +1,4 @@
+import { DEFAULT_MESSAGE_TEMPLATES, validateMessageTemplates } from './message-templates.mjs';
 import {SERVICE_CATALOG,RETIRED_FAMILIES,effectiveFamily,lineForService,addOnLines} from './catalog.mjs';
 import {difficultyMinutes} from './airflow.mjs';
 import {COVERAGE_VERSION,COVERAGE_IN,COVERAGE_TRAVEL,validPoint,customCoverage} from './coverage.mjs';
@@ -34,6 +35,7 @@ export const DEFAULT_CONFIG = {
   // Route clustering: offer times next to jobs already booked nearby first.
   nearbyFirst: true,
   // LeadConnector confirmations.
+  messageTemplates: { ...DEFAULT_MESSAGE_TEMPLATES },
   smsConfirmations: true,
   emailConfirmations: true,
   // Optional internal owner alert, separate from customer consent and approvals.
@@ -139,6 +141,8 @@ export function bookingQuote(route,config=DEFAULT_CONFIG,ctx={}) {
 // Saved settings win, but catalog items added in a later release (like new add-ons) are filled in.
 export const withConfigDefaults = saved => {
  const c={...DEFAULT_CONFIG,...(saved||{})};
+ const templates=saved?.messageTemplates;
+ c.messageTemplates=templates===undefined?{...DEFAULT_MESSAGE_TEMPLATES}:templates&&typeof templates==='object'&&!Array.isArray(templates)?{...DEFAULT_MESSAGE_TEMPLATES,...templates}:templates;
  const gates=saved?.integrations;
  c.integrations=gates===undefined?{...DEFAULT_CONFIG.integrations}:gates&&typeof gates==='object'&&!Array.isArray(gates)?{...DEFAULT_CONFIG.integrations,...gates}:gates;
  // Settings saved before the office's coverage list switch to it once; later edits in Settings stand.
@@ -189,7 +193,7 @@ export function validateContact(data,{address=true}={}) {
  return errors;
 }
 export function validateConfig(c) {
- const errors=[];
+ const errors=[...validateMessageTemplates(c.messageTemplates)];
  if(!['gemini','openai'].includes(c.aiProvider))errors.push('Choose Gemini or OpenAI as the AI provider.');
  if(!c.integrations||typeof c.integrations!=='object'||Array.isArray(c.integrations)||Object.keys(c.integrations).some(k=>!['jobber','maps','verification','sms','email'].includes(k)))errors.push('Invalid integration switches.');
  for(const k of ['jobber','maps','verification','sms','email'])if(typeof c.integrations?.[k]!=='boolean')errors.push(`Invalid integration switch: ${k}.`);

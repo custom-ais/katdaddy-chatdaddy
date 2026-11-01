@@ -12,7 +12,7 @@ function harness() {
   };
   const appointment = { id: 'DVS-test', source: 'ai_bot', status: 'confirmed', customerName: 'Test Customer', package: 'Vent cleaning', scheduledAt: '2026-11-02T18:00:00Z' };
   const config = { bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100' };
-  const args = { store, appointment, config, provider: 'Twilio', clock: () => 1, sendSms: async (phone, text) => { assert.equal(records.get('owner-booking-sms:DVS-test').status, 'attempting'); calls.push({ phone, text }); return { messageId: 'SM-test' }; } };
+  const args = { store, appointment, config, provider: 'Twilio', clock: () => 1, sendSms: async (phone, text) => { assert.equal(records.get('owner-booking-sms:DVS-test').status, 'attempting'); calls.push({ phone, text }); return { messageId: 'SM-test', status: 'queued' }; } };
   return { args, records, calls, logs };
 }
 
@@ -76,7 +76,7 @@ import { harness as appHarness, contact, fakeTwilio } from './helpers.mjs';
 
 test('a normal confirmed booking sends one separate owner alert even without customer SMS consent', async t => {
   const calls = [];
-  const twilio = { ...fakeTwilio(), messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner' }; } };
+  const twilio = { ...fakeTwilio(), messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner', status: 'queued' }; } };
   const h = await appHarness(t, { config: { bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100' }, twilio });
   const r = await h.book('cleaning', { ...contact, smsConsent: false });
   assert.equal(r.status, 201);
@@ -90,7 +90,7 @@ test('a normal confirmed booking sends one separate owner alert even without cus
 
 test('uncertain Jobber appointment alerts only after office confirms it exists, never on resend', async t => {
   const calls = [];
-  const twilio = { ...fakeTwilio(), messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner' }; } };
+  const twilio = { ...fakeTwilio(), messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner', status: 'queued' }; } };
   const h = await appHarness(t, { config: { bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100' }, twilio });
   h.jobber.failNext = 'timeout';
   const booked = await h.book('cleaning');
@@ -109,7 +109,7 @@ test('uncertain Jobber appointment alerts only after office confirms it exists, 
 
 test('emergency booking owner alert waits for named approval and successful booking', async t => {
   const calls = [];
-  const twilio = { ...fakeTwilio(), messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner' }; } };
+  const twilio = { ...fakeTwilio(), messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner', status: 'queued' }; } };
   const h = await appHarness(t, { config: { emergencyLeadHours: 1, bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100', approver: { name: 'Office', phone: '6235559999', email: '' } }, twilio });
   const token = await h.prepare('emergency');
   const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
@@ -123,4 +123,15 @@ test('emergency booking owner alert waits for named approval and successful book
   assert.equal(result.data.result.status, 'booked');
   assert.equal(ownerCalls().length, 1);
   assert.equal(ownerCalls()[0].phone, '+16235550100');
+});
+
+test('malformed owner transport responses remain uncertain and never retry', async () => {
+  for (const response of [undefined, {}, {messageId:'SM-test'}, {status:'queued'}, {messageId:' ',status:'accepted'}, {messageId:'SM-test',status:'failed'}]) {
+    const h = harness(); let calls=0;
+    h.args.sendSms = async () => { calls++; return response; };
+    assert.equal((await notifyBookingOwner(h.args)).status,'failed_or_uncertain');
+    assert.equal((await notifyBookingOwner(h.args)).status,'already_attempted');
+    assert.equal(calls,1);
+    assert.equal(h.args.appointment.status,'confirmed');
+  }
 });

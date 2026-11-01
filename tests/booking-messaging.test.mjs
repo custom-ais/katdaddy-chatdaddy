@@ -17,7 +17,8 @@ for (const mode of ['unavailable', 'upsert-failed']) {
     assert.equal(twilio.calls.length, 1);
     assert.equal(twilio.calls[0].phone, '+16235551234');
     const [a] = await h.store.appointments();
-    assert.equal(a.notifications.sms, 'sent');
+    assert.equal(a.notifications.sms, 'accepted');
+    assert.equal(a.notifications.smsDelivery, 'not_confirmed');
     assert.equal(a.notifications.email, 'skipped');
     assert.equal(h.lc.calls.some(c => c[0] === 'sms'), false);
   });
@@ -44,6 +45,7 @@ test('Twilio SMS consent remains required; retired CRM and email are never calle
   await h.book('cleaning', { ...contact, smsConsent: false, email: 'test@example.com' });
   assert.equal(twilio.calls.length, 0);
   assert.deepEqual(h.lc.calls, []);
+  assert.equal((await h.store.appointments())[0].notifications.smsReason, 'no_consent');
 });
 
 test('ordinary SMS defaults to configured Twilio and email remains explicitly unavailable', async t => {

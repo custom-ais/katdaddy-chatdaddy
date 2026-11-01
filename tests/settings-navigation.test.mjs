@@ -9,7 +9,7 @@ const root=await readFile(new URL('../src/admin/AdminRoot.tsx',import.meta.url),
 const helpers=source.slice(source.indexOf('export const SETTINGS_PAGES'),source.indexOf('export function SettingsPage('));
 const exports={};new Function('require','exports',ts.transpileModule(helpers,{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText)(require,exports);
 test('all Settings sections have explicit deep links with safe default and browser history restoration',()=>{
- assert.deepEqual(exports.SETTINGS_PAGES.map(x=>x[0]),['connections','booking','schedule','services','coverage','business','answers','security']);
+ assert.deepEqual(exports.SETTINGS_PAGES.map(x=>x[0]),['connections','booking','schedule','services','coverage','business','answers','templates','security']);
  for(const [id] of exports.SETTINGS_PAGES) assert.equal(exports.settingsPageFromSearch(`?tab=settings&settings=${id}`),id);
  for(const value of ['', '?settings=unknown','?settings=__proto__']) assert.equal(exports.settingsPageFromSearch(value),'connections');
  assert.match(source,/history\.pushState\(null, '', `\$\{url\.pathname\}\$\{url\.search\}\$\{url\.hash\}`\)/);
@@ -28,7 +28,7 @@ test('inactive panels stay mounted and the shared save state remains outside the
  assert.match(source,/if \(techDirty\).*\/api\/admin\/technicians/);
  assert.match(source,/if \(dirty\).*\/api\/admin\/config/);
 });
-test('all original settings controls are retained in the eight visible subpages',()=>{
+test('all original settings controls are retained in the nine visible subpages',()=>{
  for(const title of ['Online booking','Owner booking alerts','Approvals','Route rules','Services and prices','Service area map','Hours and capacity','Office contact and visit prep','Add BOB to dryerventsquadaz.com']) assert.equal(source.split(`title="${title}"`).length-1,1,title);
  for(const child of ['Connections','Technicians','Answers','Password']) assert.equal((source.match(new RegExp(`<${child}(?: | />)`,'g'))||[]).length,1,child);
  assert.match(source,/nav aria-label="Settings sections" className="flex flex-wrap/);

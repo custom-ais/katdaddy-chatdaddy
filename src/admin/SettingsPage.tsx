@@ -1,3 +1,4 @@
+import { MessageTemplates } from './MessageTemplates';
 import { ClientHubSettings } from './ClientHubSettings';
 import { PhoneInput } from '../components/PhoneInput';
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
@@ -327,7 +328,7 @@ function SaveDock({ changed, busy, error, onSave, onDiscard }: { changed: string
 export const SETTINGS_PAGES = [
   ['connections', 'Connections'], ['booking', 'Booking & messages'], ['schedule', 'Scheduling & team'],
   ['services', 'Services & prices'], ['coverage', 'Service area'], ['business', 'Business & website'],
-  ['answers', 'Answers'], ['security', 'Security'],
+  ['answers', 'Answers'], ['templates', 'Templates'], ['security', 'Security'],
 ] as const;
 type SettingsPageId = typeof SETTINGS_PAGES[number][0];
 export function settingsPageFromSearch(search: string): SettingsPageId {
@@ -652,6 +653,10 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
 
       <div hidden={page !== 'answers'} className="space-y-6" data-settings-panel="answers">
             <Answers active={active && page === 'answers'} />
+      </div>
+
+      <div hidden={page !== 'templates'} className="space-y-6" data-settings-panel="templates">
+        <MessageTemplates config={c} integrations={data.integrations} onPatch={(patch) => { setC((current: any) => ({ ...current, ...patch })); setDirty(true); }} />
       </div>
 
       <div hidden={page !== 'security'} className="space-y-6" data-settings-panel="security">

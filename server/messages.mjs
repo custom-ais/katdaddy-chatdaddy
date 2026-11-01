@@ -1,3 +1,4 @@
+import { renderMessageTemplate, messageTemplateValues, CUSTOMER_SMS_FOOTER, MESSAGE_TEMPLATE_FIELDS } from '../shared/message-templates.mjs';
 // Customer confirmation copy (sent through explicitly configured transports).
 
 import { normalizeClientHubUrl } from "../shared/client-hub.mjs";
@@ -10,7 +11,12 @@ const prettyPhone = (e164) => {
   return d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : e164 || "";
 };
 
-export function confirmationSms(appt, config) {
+export function confirmationSms(appt, config, resolved = {}) {
+  const custom = config.messageTemplates?.confirmationSms;
+  if (custom?.trim()) {
+    const body = renderMessageTemplate(custom, messageTemplateValues(appt, config, resolved), { ...MESSAGE_TEMPLATE_FIELDS[0], maxRenderedLength: 1577 });
+    return body.trim() + ' ' + CUSTOMER_SMS_FOOTER;
+  }
   const first = String(appt.customerName || "").split(/\s+/)[0] || "there";
   const call = config.phone ? ` Need to change it? Call or text ${prettyPhone(config.phone)}.` : "";
   return (
@@ -58,7 +64,12 @@ ${config.phone ? `<p style="margin:12px 0 0">Need to change your visit? Call or 
     `${appt.address}, ${appt.city}, AZ ${appt.zip}\nReference: ${appt.id}\n\n${config.preparation}` +
     (config.phone ? `\n\nNeed to change your visit? Call or text ${prettyPhone(config.phone)}.` : "") +
     (hub ? `\n\nOpen Client Hub: ${hub}\nSign in to your service company’s Jobber Client Hub to view your appointment details.` : "");
-  return { subject, html, text };
+  const values = messageTemplateValues(appt, config, { clientHubUrl: hub });
+  const customSubject = config.messageTemplates?.confirmationEmailSubject;
+  const customBody = config.messageTemplates?.confirmationEmailBody;
+  const renderedSubject = customSubject?.trim() ? renderMessageTemplate(customSubject, values, MESSAGE_TEMPLATE_FIELDS[1]) : subject;
+  const renderedBody = customBody?.trim() ? renderMessageTemplate(customBody, values, MESSAGE_TEMPLATE_FIELDS[2]) : null;
+  return { subject: renderedSubject, html: renderedBody === null ? html : '<!doctype html><html><body><p>' + esc(renderedBody).replace(/\r?\n/g, '<br>') + '</p></body></html>', text: renderedBody === null ? text : renderedBody };
 }
 
 export const verificationSms = (code) =>
@@ -70,4 +81,13 @@ export function approvalRequestText(a, link) {
     `BOB approval needed (${a.id}): ${a.service} for ${String(a.customer.name || "").split(/\s+/)[0]} in ${a.customer.city} ${a.customer.zip}, ${when}. ` +
     `${a.reason}. Approve or decline in the BOB dashboard: ${link}`
   );
+}
+
+/** Editable owner copy remains separate from emergency approval and customer consent. */
+export function ownerBookingSms(appt, config) {
+  const custom = config.messageTemplates?.ownerBookingSms;
+  if (custom?.trim()) return renderMessageTemplate(custom, messageTemplateValues(appt, config), { ...MESSAGE_TEMPLATE_FIELDS[3], maxRenderedLength: 1600 });
+  const when = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Phoenix', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(appt.scheduledAt));
+  const clean = value => String(value || '').replace(/[\r\n\t]+/g, ' ').slice(0, 180);
+  return `ChatDaddy booked an appointment: ${clean(appt.customerName)} — ${clean(appt.package)}. ${when} Arizona time. Ref ${clean(appt.id)}. This booking is confirmed; no approval is needed.`;
 }
