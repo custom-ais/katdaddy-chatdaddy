@@ -1,5 +1,7 @@
 // Customer confirmation copy (sent through explicitly configured transports).
 
+import { normalizeClientHubUrl } from "../shared/client-hub.mjs";
+
 import { money, windowLabel } from "../shared/domain.mjs";
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -17,7 +19,10 @@ export function confirmationSms(appt, config) {
   );
 }
 
-export function confirmationEmail(appt, config) {
+export function confirmationEmail(appt, config, { clientHubUrl = "" } = {}) {
+  // Callers supply an account-resolved link, never a raw tenant setting.
+  let hub = "";
+  try { hub = normalizeClientHubUrl(clientHubUrl); } catch { /* Invalid links are omitted. */ }
   const first = String(appt.customerName || "").split(/\s+/)[0] || "there";
   const subject = `You're booked: ${appt.package} · ${windowLabel(appt.scheduledAt).split(" · ")[0]}`;
   const total = Math.round(appt.price * 100);
@@ -41,6 +46,7 @@ export function confirmationEmail(appt, config) {
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}
 <tr><td style="padding:10px 0;border-top:1px solid #e2e8f0;font-weight:700">Service total</td><td style="padding:10px 0;border-top:1px solid #e2e8f0;text-align:right;font-weight:700">${money(total)}</td></tr></table>
 ${appt.route !== "cleaning" ? `<p style="margin:10px 0 0;color:#9a3412;font-size:13px">Repairs and parts are quoted separately.</p>` : ""}
+${hub ? `<p style="margin:16px 0"><a href="${esc(hub)}" style="display:inline-block;padding:12px 18px;background:#0b63c7;color:#fff;border-radius:8px;text-decoration:none">Open Client Hub</a></p><p style="font-size:13px;color:#64748b">Sign in to your service company’s Jobber Client Hub to view your appointment details.</p>` : ""}
 <p style="margin:16px 0 0"><strong>Before we arrive:</strong> ${esc(config.preparation)}</p>
 ${config.phone ? `<p style="margin:12px 0 0">Need to change your visit? Call or text <a href="tel:${esc(config.phone)}" style="color:#0b63c7">${esc(prettyPhone(config.phone))}</a>.</p>` : ""}
 </td></tr>
@@ -50,7 +56,8 @@ ${config.phone ? `<p style="margin:12px 0 0">Need to change your visit? Call or 
     `Hi ${first}, you're booked with Dryer Vent Squad West Valley.\n` +
     `${appt.package} — ${money(total)}\n${windowLabel(appt.scheduledAt)}\n` +
     `${appt.address}, ${appt.city}, AZ ${appt.zip}\nReference: ${appt.id}\n\n${config.preparation}` +
-    (config.phone ? `\n\nNeed to change your visit? Call or text ${prettyPhone(config.phone)}.` : "");
+    (config.phone ? `\n\nNeed to change your visit? Call or text ${prettyPhone(config.phone)}.` : "") +
+    (hub ? `\n\nOpen Client Hub: ${hub}\nSign in to your service company’s Jobber Client Hub to view your appointment details.` : "");
   return { subject, html, text };
 }
 
