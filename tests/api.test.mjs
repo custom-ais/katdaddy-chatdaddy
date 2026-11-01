@@ -595,7 +595,8 @@ test("a Twilio failure never undoes a confirmed booking", async (t) => {
   assert.equal(r.status, 201);
   const [a] = await h.store.appointments();
   assert.equal(a.status, "confirmed");
-  assert.equal(a.notifications.sms, "failed");
+  assert.equal(a.notifications.sms, "failed_or_uncertain");
+  assert.equal(a.notifications.smsDelivery, "not_confirmed");
   assert.deepEqual(h.lc.calls, []);
 });
 

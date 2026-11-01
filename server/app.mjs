@@ -1,3 +1,4 @@
+import { deliverConfirmationSmsOnce } from './sms-notification.mjs';
 import { createClientHub } from './client-hub.mjs';
 import { sanitizeDiagnostic } from "./integration-status.mjs";
 // BOB HTTP API — Postgres-backed, serverless-friendly. Jobber is the master schedule,
@@ -93,7 +94,8 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     return deliverEmailOnce({ store, kind, id, to, message, clock,
       enabled: enabled(c, 'email'), configured: useSendGrid && Boolean(sendgrid?.configured),
       sendEmail: async ({ to: recipient, ...content }) => {
-        if (!emailReady(await store.config())) throw new Error('Appointment email is disabled or not configured.');
+        const latest=await store.config();
+        if (!emailReady(latest) || kind === 'appointment_confirmed' && latest.emailConfirmations !== true) throw new Error('Appointment email is disabled or not configured.');
         return sendgrid.sendEmail(recipient, content);
       },
     });
@@ -288,10 +290,13 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       return "This visit is not confirmed yet. Our team is finishing it in the schedule and will contact you — please don't book it again.";
     }
     const n = appt.notifications || {};
+    const accepted=[];
+    if(n.sms==='accepted')accepted.push('text');
+    if(n.email==='accepted')accepted.push('email');
+    if(accepted.length)return `Your confirmation ${accepted.join(' and ')} ${accepted.length>1?'were':'was'} accepted for delivery; arrival is not yet confirmed. Save your reference number.`;
     const parts = [];
     if (n.sms === "sent") parts.push("a confirmation text");
     if (n.email === "sent") parts.push("a confirmation email");
-    if (n.email === 'accepted') return `${parts.length ? `We sent ${parts.join(' and ')}. ` : ''}Your confirmation email was accepted for delivery; arrival is not yet confirmed. Save your reference number.`;
     if (parts.length) return `We sent ${parts.join(" and ")}. Keep your reference number handy.`;
     return "Your confirmation is shown here. Save it — a text or email has not been confirmed sent.";
   };
@@ -414,18 +419,25 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
   /** Confirmation transports never change booking success and report actual delivery state. */
   async function sendConfirmations(appt, c) {
     const result = { sms: 'skipped', email: 'skipped', at: clock() };
-    if (appt.phone && appt.smsConsent && c.smsConfirmations) {
-      if (!smsReady(await store.config())) result.smsReason = 'not_configured_or_disabled';
-      else result.sms = await sendSms(null, appt.phone, confirmationSms(appt, c)).then(async response => {
-        result.smsMessageId = response?.messageId || response?.id || null;
-        await store.log('notification.accepted', { appointmentId: appt.id, channel: 'sms', provider: 'Twilio', messageId: result.smsMessageId, delivery: 'not_confirmed' }).catch(() => {});
-        return 'sent';
-      }, async () => {
-        await store.log('notification.failed', { appointmentId: appt.id, channel: 'sms', provider: 'Twilio', error: 'Appointment text could not be sent.' }, { level: 'error' }).catch(() => {});
-        return 'failed';
-      });
-    }
-    if (appt.email && c.emailConfirmations && appt.status === 'confirmed') {
+    try { c=await store.config(); } catch { return {...result, ...(appt.notifications || {}), reason:'configuration_unavailable'}; }
+    try {
+      const current=await store.config();
+      const smsEligible=appt.status==='confirmed' && current.smsConfirmations===true && smsReady(current) && appt.smsConsent===true && Boolean(appt.phone) && !['sent','accepted','failed','failed_or_uncertain','rejected','attempting'].includes(appt.notifications?.sms);
+      const delivery=await deliverConfirmationSmsOnce({store,appointment:appt,enabled:current.smsConfirmations===true,configured:smsReady(current),message:smsEligible ? confirmationSms(appt,current) : '',clock,sendSms:async(phone,text)=>{
+        if((await store.config()).smsConfirmations!==true)throw new Error('Customer confirmation texts are disabled.');
+        return sendSms(null,phone,text);
+      }});
+      const state=delivery.status==='already_attempted'?delivery.prior||{status:'failed_or_uncertain'}:delivery;
+      result.sms=state.status;result.smsDelivery='not_confirmed';
+      if(state.messageId)result.smsMessageId=state.messageId;
+      if(state.reason)result.smsReason=state.reason;
+      if(delivery.status==='already_attempted')result.smsAlreadyAttempted=true;
+    }catch{result.sms='failed_or_uncertain';result.smsDelivery='not_confirmed';}
+    const priorEmail=appt.notifications?.email;
+    if(appt.status==='confirmed' && ['sent','accepted','failed','failed_or_uncertain','rejected','attempting'].includes(priorEmail)) {
+      result.email=priorEmail==='sent'?'accepted':priorEmail;result.emailDelivery='not_confirmed';result.emailAlreadyAttempted=true;
+      if(appt.notifications.emailMessageId)result.emailMessageId=appt.notifications.emailMessageId;
+    } else if (appt.email && c.emailConfirmations && appt.status === 'confirmed') {
       try { applyEmailResult(result, await deliverEmail('appointment_confirmed', appt.id, appt.email, confirmationEmail(appt, c, {clientHubUrl: emailReady(await store.config()) ? await clientHub.resolve(appt) : ''}))); }
       catch { result.email = 'failed_or_uncertain'; result.emailDelivery = 'not_confirmed'; }
     }
@@ -1340,7 +1352,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
             if (!smsReady(c) && !emailReady(c)) fail(409, 'Configure and enable an approved appointment messaging provider first.');
             a.notifications = await sendConfirmations(a, c);
             await store.updateAppointment(a);
-            await store.audit("appointment.confirmation_sent", id);
+            await store.audit("appointment.confirmation_requested", id);
             return send(200, await snapshot());
           }
           if (a.status !== "action_needed" || !a.jobberState) fail(409, "Only bookings waiting on a Jobber check can be resolved here.");

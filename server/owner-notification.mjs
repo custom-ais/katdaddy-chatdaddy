@@ -1,3 +1,4 @@
+import { ownerBookingSms } from './messages.mjs';
 import { normalizePhone } from '../shared/domain.mjs';
 
 /** At-most-once owner alert. The durable claim precedes the external request, so
@@ -19,13 +20,13 @@ export async function notifyBookingOwner({ store, appointment, config, sendSms, 
   } catch {
     return { status: 'failed', reason: 'claim_failed' }; // Never send without durable deduplication.
   }
-  const when = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Phoenix', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(appointment.scheduledAt));
-  const clean = value => String(value || '').replace(/[\r\n\t]+/g, ' ').slice(0, 180);
-  const text = `ChatDaddy booked an appointment: ${clean(appointment.customerName)} — ${clean(appointment.package)}. ${when} Arizona time. Ref ${clean(appointment.id)}. This booking is confirmed; no approval is needed.`;
   let result;
   try {
+    const text = ownerBookingSms(appointment, config);
     const response = await sendSms(phone, text);
-    result = { ...record, status: 'accepted', messageId: response?.messageId || response?.id || null, delivery: 'not_confirmed' };
+    const messageId = response?.messageId || response?.id;
+    if (typeof messageId !== 'string' || !messageId.trim() || !['accepted', 'queued', 'sending', 'sent', 'delivered'].includes(response?.status)) throw new Error('SMS acceptance could not be confirmed.');
+    result = { ...record, status: 'accepted', messageId, delivery: 'not_confirmed' };
   } catch {
     result = { ...record, status: 'failed_or_uncertain', delivery: 'not_confirmed', reason: 'provider_request_failed' };
   }
