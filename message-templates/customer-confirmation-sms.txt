@@ -1,0 +1,10 @@
+Hi {{customer_first_name}}, you're booked with {{company_name}}!
+
+{{service}}
+{{appointment_date}}, arriving from {{appointment_time}}
+{{service_address}}
+Ref {{booking_reference}} - Total {{total}}
+
+Before we arrive: {{preparation}}
+
+Need to reschedule? Call or text {{company_phone}}.

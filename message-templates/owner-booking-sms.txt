@@ -1,0 +1,5 @@
+New BOB booking (confirmed)
+{{customer_name}} - {{service}} - {{total}}
+{{appointment_date}}, {{appointment_time}}
+{{service_address}}
+Ref {{booking_reference}}
