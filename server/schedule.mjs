@@ -34,8 +34,10 @@ export function createScheduler({ store, jobber, geo }) {
       }
     }
     for (const a of await store.activeAppointments(from, to, ignoreAppointmentId)) {
-      // In Jobber mode, anything BOB put into Jobber is already on the Jobber board.
-      if (config.scheduleSource === "Jobber" && a.jobberVisitId) continue;
+      // Only a verified confirmed appointment observed on the current Jobber board
+      // can replace its local reservation. Uncertain/readback-mismatched visits
+      // must continue protecting the intended technician and interval.
+      if (config.scheduleSource === "Jobber" && a.status === "confirmed" && a.jobberVisitId && out.some(b => b.id === `j:${a.jobberVisitId}` && !b.allDay && b.start === a.start && b.end === a.end && b.techIds?.length === 1 && b.techIds[0] === a.tech)) continue;
       out.push({ id: `a:${a.id}`, kind: "appointment", start: a.start, end: a.end, allDay: false, techIds: [a.tech], address: a.address, location: a.location, overflow: Boolean(a.overflow) });
     }
     for (const h of await store.activeHolds(from, to, excludeSession)) {
@@ -54,12 +56,12 @@ export function createScheduler({ store, jobber, geo }) {
     return out;
   }
 
-  async function driveMap(list, point) {
+  async function driveMap(list, point, fresh) {
     const located = list.filter((b) => b.location);
     const minutes = await geo.driveMinutes([
       ...located.map((b) => ({ from: b.location, to: point })),
       ...located.map((b) => ({ from: point, to: b.location })),
-    ]);
+    ], { fresh });
     const map = new Map();
     located.forEach((b, i) => map.set(b.id, { toNew: minutes[i], fromNew: minutes[located.length + i] }));
     return map;
@@ -75,7 +77,7 @@ export function createScheduler({ store, jobber, geo }) {
     const from = date ? Date.parse(`${date}T00:00:00-07:00`) - 86_400_000 : now - 86_400_000;
     const to = date ? Date.parse(`${date}T00:00:00-07:00`) + 2 * 86_400_000 : now + (config.horizonDays + 2) * 86_400_000;
     const list = await blocks({ config, technicians, from, to, excludeSession, ignoreAppointmentId, fresh });
-    const drive = await driveMap(list, location);
+    const drive = await driveMap(list, location, fresh);
     const place = { location, zip, neighborhood };
     const found = openSlots({ config, technicians, blocks: list, drive, durationMins, now, date, place, ticketCents });
     return date ? found : orderSlots(found, { now, nearbyFirst: config.nearbyFirst, routeScoring: config.routeScoring !== false });
@@ -91,11 +93,11 @@ export function createScheduler({ store, jobber, geo }) {
     if (!match.length) return null;
     if (preferTech) {
       // openSlots returns the best tech per start; re-run for the preferred tech if it differs.
-      const preferred = technicians.find((t) => t.id === preferTech);
+      const preferred = technicians.find((t) => t.id === preferTech && config.activeTechnicianIds.includes(t.id) && t.status !== "off_duty");
       if (preferred && match[0].technicianId !== preferTech) {
         const only = await slots({
           config: { ...config, activeTechnicianIds: [preferTech] },
-          technicians, durationMins, leadHours, emergencyRequestedAt, location, zip, neighborhood, ticketCents, now, date, excludeSession, ignoreAppointmentId, fresh: false,
+          technicians, durationMins, leadHours, emergencyRequestedAt, location, zip, neighborhood, ticketCents, now, date, excludeSession, ignoreAppointmentId, fresh,
         });
         const mine = only.find((s) => s.start === start);
         if (mine) return mine;

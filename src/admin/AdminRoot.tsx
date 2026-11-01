@@ -77,25 +77,44 @@ function BotPreview() {
   );
 }
 
+export function adminTabFromSearch(search: string): Tab {
+  const p = new URLSearchParams(search);
+  if (p.get('approval')) return 'inbox';
+  if (p.get('jobber')) return 'settings';
+  const t = p.get('tab') as Tab;
+  return TABS.includes(t) ? t : 'appointments';
+}
+
 function Dashboard({ onSignedOut, focusApproval }: { onSignedOut: () => void; focusApproval: string | null }) {
   const { toasts, dismissToast, showToast } = useDashboard();
-  const initialTab = (() => {
-    const p = new URLSearchParams(location.search);
-    if (p.get('approval')) return 'inbox';
-    if (p.get('jobber')) return 'settings';
-    const t = p.get('tab') as Tab;
-    return TABS.includes(t) ? t : 'appointments';
-  })();
+  const initialTab = adminTabFromSearch(location.search);
   const [tab, setTab] = useState<Tab>(initialTab);
+  const [settingsMounted, setSettingsMounted] = useState(initialTab === 'settings');
+  useEffect(() => {
+    const restore = () => {
+      const next = adminTabFromSearch(location.search);
+      setTab(next);
+      if (next === 'settings') setSettingsMounted(true);
+    };
+    window.addEventListener('popstate', restore);
+    return () => window.removeEventListener('popstate', restore);
+  }, []);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     const p = new URLSearchParams(location.search), j = p.get('jobber');
     if (j === 'connected') showToast({ type: 'success', title: 'Jobber connected', description: 'BOB now reads the live calendar.' });
     if (j === 'failed') showToast({ type: 'error', title: "Jobber didn't connect", description: 'Check the Jobber app keys and redirect address in Vercel, then try again.' });
-    if (p.toString()) history.replaceState(null, '', '/admin');
+    if (j) { p.delete('jobber'); p.set('tab', 'settings'); history.replaceState(null, '', `/admin?${p.toString()}`); }
   }, [showToast]);
-  const choose = (t: Tab) => { setTab(t); window.scrollTo({ top: 0 }); };
+  const choose = (t: Tab) => {
+    if (t === tab) return;
+    const url = new URL(location.href);
+    url.searchParams.delete('approval'); url.searchParams.delete('jobber'); url.searchParams.set('tab', t);
+    history.pushState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    setTab(t); if (t === 'settings') setSettingsMounted(true);
+    window.scrollTo({ top: 0 });
+  };
   const signOut = async () => { try { await api('/api/admin/logout', { method: 'POST', body: {} }); } catch {} onSignedOut(); };
 
   return (
@@ -107,7 +126,7 @@ function Dashboard({ onSignedOut, focusApproval }: { onSignedOut: () => void; fo
         {tab === 'analytics' && <AnalyticsDashboard onNavigateToAppointments={() => choose('appointments')} />}
         {tab === 'activity' && <ActivityLogPage />}
         {tab === 'bot' && <BotPreview />}
-        {tab === 'settings' && <SettingsPage />}
+        {settingsMounted && <div hidden={tab !== 'settings'}><SettingsPage active={tab === 'settings'} /></div>}
       </main>
       {creating && <NewAppointmentModal onClose={() => setCreating(false)} />}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />

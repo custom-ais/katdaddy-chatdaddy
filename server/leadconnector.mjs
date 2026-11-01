@@ -4,6 +4,9 @@
 // Needs a sub-account Private Integration token with these scopes:
 //   contacts.write, contacts.readonly, conversations/message.write
 
+import { createHash } from "node:crypto";
+import { createIntegrationStatus } from "./integration-status.mjs";
+
 const BASE = "https://services.leadconnectorhq.com";
 
 export function splitName(full) {
@@ -22,7 +25,7 @@ export function tokenKind(token) {
   return "other";
 }
 
-export function createLeadConnector({ env = process.env, fetchImpl = fetch } = {}) {
+export function createLeadConnector({ env = process.env, fetchImpl = fetch, store = null, clock = Date.now } = {}) {
   const cfg = {
     token: cleanSecret(env.LC_PRIVATE_TOKEN),
     locationId: cleanSecret(env.LC_LOCATION_ID),
@@ -36,7 +39,13 @@ export function createLeadConnector({ env = process.env, fetchImpl = fetch } = {
   };
   const configured = Boolean(cfg.token && cfg.locationId);
 
+  const diagnostics = createIntegrationStatus({ store, provider: 'leadconnector',
+    revision: createHash('sha256').update(JSON.stringify(cfg)).digest('hex'), configured,
+    operations: ['contacts', 'sms', 'email', 'tags', 'notes'], legacyKey: 'diag:lc', clock });
+
   async function call(path, body, version) {
+    const operation = path === '/conversations/messages' ? (body.type === 'Email' ? 'email' : 'sms') : path.endsWith('/tags') ? 'tags' : path.endsWith('/notes') ? 'notes' : 'contacts';
+    try {
     const send = (v) =>
       fetchImpl(`${BASE}${path}`, {
         method: "POST",
@@ -55,7 +64,17 @@ export function createLeadConnector({ env = process.env, fetchImpl = fetch } = {
       const message = Array.isArray(json.message) ? json.message.join("; ") : json.message;
       throw new Error(`LeadConnector ${path} ${response.status}: ${message || "request failed"}`);
     }
+    if (path === "/contacts/upsert" && !json.contact?.id) throw new Error("LeadConnector upsert returned no contact id");
+    await diagnostics.recordSuccess(operation);
     return json;
+    } catch (error) {
+      // Store a provider-level diagnostic, not customer IDs or credentials.
+      const message = String(error?.message || 'Provider request failed')
+        .replace(path, operation).split(cfg.token || '__no_token__').join('[hidden]')
+        .split(cfg.locationId || '__no_location__').join('[location]');
+      await diagnostics.recordFailure(operation, message);
+      throw error;
+    }
   }
 
   /** Upsert by phone/email; tags are added separately because upsert replaces all tags. */
@@ -95,5 +114,5 @@ export function createLeadConnector({ env = process.env, fetchImpl = fetch } = {
   const addNote = (contactId, text) =>
     call(`/contacts/${contactId}/notes`, { body: text }, cfg.contactsVersion).catch((e) => console.warn("[lc] note:", e.message));
 
-  return { configured, cfg, tokenKind: tokenKind(cfg.token), upsertContact, sendSms, sendEmail, addNote };
+  return { configured, cfg, health: diagnostics.snapshot, tokenKind: tokenKind(cfg.token), upsertContact, sendSms, sendEmail, addNote };
 }

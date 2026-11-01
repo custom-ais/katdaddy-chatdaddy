@@ -1,3 +1,4 @@
+import { sanitizeDiagnostic } from "./integration-status.mjs";
 // BOB HTTP API — Postgres-backed, serverless-friendly. Jobber is the master schedule,
 // Selected providers carry verification and messages; LeadConnector retains CRM/email. Gemini reads
 // free-typed chat. Static files are served by the host (Vercel).
@@ -78,7 +79,7 @@ const VERIFIED_FOR = 6 * 3_600_000;
 const APPROVAL_WINDOW = 30 * 60_000;
 const FAQ_STATUSES = ["approved", "draft"];
 
-export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant = null, twilio = null, env = process.env, clock = () => Date.now() }) {
+export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant = null, twilio = null, integrationAccounts = null, env = process.env, clock = () => Date.now() }) {
   const useTwilioVerify = env.BOOKING_VERIFICATION_PROVIDER === 'twilio';
   const verifyService = createVerification({ store, twilio, clock, fail });
   const verificationOn = (c) => useTwilioVerify || textCodeOn(c);
@@ -193,13 +194,15 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     };
   };
 
+  const historicalIssue = issue => issue ? { at: issue.at, message: sanitizeDiagnostic(issue.message), ...(issue.path ? { path: sanitizeDiagnostic(issue.path) } : {}) } : null;
   const integrations = async () => ({
+    accounts: await integrationAccounts?.snapshot() || {},
     jobber: { appConfigured: jobber.appConfigured, connected: await jobber.connected() },
     verification: { provider: useTwilioVerify ? 'twilio' : 'leadconnector', configured: useTwilioVerify ? Boolean(twilio?.verifyConfigured) : lc.configured, channels: useTwilioVerify ? ['sms', 'email'] : ['sms'] },
     sms: { provider: useTwilioSms ? 'twilio' : 'leadconnector', configured: useTwilioSms ? Boolean(twilio?.messagingConfigured) : lc.configured },
-    leadConnector: { configured: lc.configured, tokenKind: lc.tokenKind || "", issue: (await store.kvGet("diag:lc").catch(() => null)) || null },
-    maps: { provider: geo.provider, issue: (await geo.lastIssue?.()) || null },
-    lastError: (await store.kvGet("diag:last-error").catch(() => null)) || null,
+    leadConnector: { configured: lc.configured, tokenKind: lc.tokenKind || "", health: await lc.health?.() || null, issue: historicalIssue(await store.kvGet("diag:lc").catch(() => null)) },
+    maps: { provider: geo.provider, health: await geo.health?.() || null, issue: historicalIssue(await geo.lastIssue?.()) },
+    lastError: historicalIssue(await store.kvGet("diag:last-error").catch(() => null)),
     assistant: { configured: Boolean(assistant?.configured), model: assistant?.model || "" },
     database: store.db.kind,
   });
@@ -292,7 +295,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
   });
 
   /** Geocode a service address and apply the area + travel-fee rules. */
-  async function locate(c, { address, city, zip }, { travelZone = false } = {}) {
+  async function locate(c, { address, city, zip }, { travelZone = false, fresh = false } = {}) {
     let g;
     try {
       g = await geo.geocode(`${address}, ${city}, AZ ${zip}`);
@@ -311,7 +314,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         if (c.serviceAreaMode === "radius") route = { miles: distanceMiles(base, g), minutes: null };
         else {
           if (!geo.roadRoutes) return { ok: false, reason: "routing_unavailable" };
-          [route] = await geo.roadRoutes([{ from: base, to: g }]);
+          [route] = await geo.roadRoutes([{ from: base, to: g }], { fresh });
         }
       } catch { return { ok: false, reason: "routing_unavailable" }; }
       if (!route) return { ok: false, reason: "routing_unavailable" };
@@ -326,15 +329,15 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     }
     let driveFromBaseMin = null;
     if (c.baseAddress) {
-      // The customer's address is known, so a failed drive-time check doesn't stop the booking;
-      // it is treated like no base address (no travel fee, no farthest-drive limit).
+      // A configured base constraint must never silently disappear on a routing outage.
       try {
         const base = await geo.geocode(c.baseAddress);
-        if (base) [driveFromBaseMin] = await geo.driveMinutes([{ from: base, to: g }]);
+        if (base) [driveFromBaseMin] = await geo.driveMinutes([{ from: base, to: g }], { fresh });
       } catch (error) {
         console.error("[geo] base address", error.message);
       }
     }
+    if (c.baseAddress && !Number.isFinite(driveFromBaseMin)) return { ok: false, reason: "routing_unavailable" };
     // A just-outside ZIP the customer accepted is beyond the usual drive limits by design.
     if (!travelZone && driveFromBaseMin != null && driveFromBaseMin > c.maxDriveFromBaseMin) return { ok: false, reason: "out_of_area", driveFromBaseMin };
     const fee = travelFeeFor(driveFromBaseMin, c);
@@ -350,6 +353,8 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
 
   /** Jobber: client + property + job + scheduled visit. Returns appointment.jobber details. */
   async function pushToJobber(appt, slot, notes) {
+    if (!slot.jobberUserId || !jobber.verifyAssignment) throw new Error("The selected technician needs a verified Jobber user mapping before booking.");
+    await jobber.verifyAssignment(slot.jobberUserId);
     const { firstName, lastName } = splitName(appt.customerName);
     const { clientId, propertyId } = await jobber.ensureClientAndProperty(
       { firstName, lastName, email: appt.email, phone: appt.phone, smsConsent: appt.smsConsent },
@@ -378,7 +383,8 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
       end: Date.parse(appt.scheduledAt) + appt.durationMins * 60_000,
       jobberUserId: slot.jobberUserId,
     });
-    return { clientId, propertyId, jobId: job.id, jobNumber: job.jobNumber, webUri: job.jobberWebUri, visitId: visit?.id || null };
+    if (!visit?.id) throw Object.assign(new Error("The scheduled Jobber visit could not be verified."), { jobberJob: job, uncertain: true });
+    return { clientId, propertyId, jobId: job.id, jobNumber: job.jobNumber, webUri: job.jobberWebUri, visitId: visit.id };
   }
 
   /** LeadConnector confirmations. Never throws; records what actually happened. */
@@ -455,7 +461,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     if (["driving_distance", "radius"].includes(c.serviceAreaMode)) {
       try {
         const base = validPoint(c.baseLocation) ? c.baseLocation : c.baseAddress ? await geo.geocode(c.baseAddress) : null;
-        const [route] = c.serviceAreaMode === "radius" && base ? [{ miles: distanceMiles(base, g) }] : base && geo.roadRoutes ? await geo.roadRoutes([{ from: base, to: g }]) : [];
+        const [route] = c.serviceAreaMode === "radius" && base ? [{ miles: distanceMiles(base, g) }] : base && geo.roadRoutes ? await geo.roadRoutes([{ from: base, to: g }], { fresh }) : [];
         if (!route) return { routingUnavailable: true };
         drivingMiles = route.miles;
       } catch { return { routingUnavailable: true }; }
@@ -553,6 +559,11 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     if (!(await store.lock(`slot:${day}`, 60))) fail(409, "Another booking for that day is finishing. Please try again in a moment.");
     let appt, pending = false;
     try {
+      if (c.baseAddress || ["driving_distance", "radius"].includes(c.serviceAreaMode)) {
+        const currentArea = await locate(c, data.contact, { travelZone: Boolean(data.travelZone), fresh: true });
+        if (!currentArea.ok) fail(409, "We could not reverify the current travel and service-area rules. Please ask the office to review this appointment.");
+        if (currentArea.travelFeeCents !== q.travelFeeCents) fail(409, "Travel details changed. Please review a fresh quote.");
+      }
       const slot = await scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, q), location: data.location, now: clock(), iso: new Date(hold.start).toISOString(), preferTech: hold.tech, excludeSession: token, fresh: true });
       if (!slot) fail(409, "That opening changed. Please select another time.", { code: "SLOT_GONE" });
       requireAllowedSlot(q, slot, c);
@@ -587,8 +598,8 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
             // and hand it to the office; never retry blind and never call it confirmed.
             appt.status = "action_needed";
             appt.jobberState = error.jobberJob ? (error.uncertain ? "visit_uncertain" : "visit_failed") : "uncertain";
-            appt.jobberError = String(error.message).slice(0, 300);
-            if (error.jobberJob) appt.jobber = { jobId: error.jobberJob.id, jobNumber: error.jobberJob.jobNumber, webUri: error.jobberJob.jobberWebUri, visitId: null };
+            appt.jobberError = sanitizeDiagnostic(error.message).slice(0, 300);
+            if (error.jobberJob) appt.jobber = { jobId: error.jobberJob.id, jobNumber: error.jobberJob.jobNumber, webUri: error.jobberJob.jobberWebUri, visitId: error.jobberVisit?.id || null };
             await store.updateAppointment(appt);
             await store.audit(`booking.jobber_${appt.jobberState}`, appt.id);
             pending = true;
@@ -1115,6 +1126,14 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
 
       if (pathname.startsWith("/api/admin/")) {
         const adminToken = await admin(req);
+        if (["GET", "POST"].includes(method) && pathname === "/api/admin/integration-accounts") {
+          if (method === "POST") {
+            await rate(req, "integration-accounts", 5, 60_000);
+            if (!integrationAccounts) fail(503, "Account identity lookup is unavailable.");
+            return send(200, await integrationAccounts.refresh());
+          }
+          return send(200, await integrationAccounts?.snapshot() || {});
+        }
         if (method === "POST" && pathname === "/api/admin/logout") {
           await store.removeAdmin(adminToken);
           res.setHeader("Set-Cookie", "bob_admin=; HttpOnly; SameSite=Lax; Path=/api/admin; Max-Age=0");
@@ -1321,11 +1340,25 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
               technicianName: slot.technicianName, notes: String(b.notes || "").slice(0, 4000), urgency: ["normal", "elevated", "high"].includes(b.urgency) ? b.urgency : "normal", source: "phone_dispatch",
               createdAt: new Date(clock()).toISOString(), revision: 1, scheduleSource: c.scheduleSource, jobber: null, smsConsent: b.smsConsent === true,
             };
-            if (jobberMode(c)) a.jobber = await pushToJobber(a, slot, b.notes);
+            a.status = jobberMode(c) ? "confirming" : "confirmed";
             await store.insertAppointment(a);
-            await store.audit("admin.booking.created", a.id);
-            await store.enqueue("booking.created", a, Boolean(webhookUrl));
-            if (b.sendConfirmation === true) {
+            if (jobberMode(c)) {
+              try { a.jobber = await pushToJobber(a, slot, b.notes); a.status = "confirmed"; }
+              catch (error) {
+                if (!error.jobberJob && !error.uncertain) {
+                  await store.retireAppointment(a, "failed");
+                  fail(502, "The office booking could not be created. No visit is confirmed.");
+                }
+                a.status = "action_needed";
+                a.jobberState = error.jobberJob ? "visit_uncertain" : "uncertain";
+                a.jobberError = sanitizeDiagnostic(error.message).slice(0, 300);
+                if (error.jobberJob) a.jobber = { jobId: error.jobberJob.id, jobNumber: error.jobberJob.jobNumber, webUri: error.jobberJob.jobberWebUri, visitId: error.jobberVisit?.id || null };
+              }
+              await store.updateAppointment(a);
+            }
+            await store.audit(a.status === "confirmed" ? "admin.booking.created" : "admin.booking.pending_review", a.id);
+            if (a.status === "confirmed") await store.enqueue("booking.created", a, Boolean(webhookUrl));
+            if (a.status === "confirmed" && b.sendConfirmation === true) {
               a.notifications = await confirmWithLeadConnector(a, c);
               await store.updateAppointment(a);
             }
@@ -1352,7 +1385,13 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
           if (b.outcome === "in_jobber") {
             const number = String(b.jobNumber || a.jobber?.jobNumber || "").trim();
             if (!/^\d{1,10}$/.test(number)) fail(400, "Enter the Jobber job number you found.");
-            a.jobber = { ...(a.jobber || {}), jobNumber: Number(number), visitId: a.jobber?.visitId || "confirmed-by-office" };
+            const visitId = a.jobber?.visitId || (typeof b.visitId === "string" ? b.visitId.trim() : "");
+            const tech = (await store.technicians()).find(t => t.id === a.technicianId);
+            if (!tech?.jobberUserId || !jobber.verifyScheduledVisit) fail(409, "A mapped technician and verified Jobber visit are required before this appointment can be confirmed.");
+            let verifiedVisit;
+            try { verifiedVisit = await jobber.verifyScheduledVisit({ visitId, jobNumber: Number(number), start: Date.parse(a.scheduledAt), end: Date.parse(a.scheduledAt) + a.durationMins * 60_000, jobberUserId: tech.jobberUserId }); if (!verifiedVisit?.id) throw new Error("Missing verified visit ID"); }
+            catch { fail(409, "Jobber has not verified this visit's time and technician. Keep it pending and correct the visit in Jobber."); }
+            a.jobber = { ...(a.jobber || {}), jobNumber: Number(number), visitId: verifiedVisit.id };
             a.jobberState = "resolved";
             a.status = "confirmed";
             a.revision++;
