@@ -11,7 +11,8 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "node --import ./scripts/test-no-network.mjs --test --test-concurrency=6 tests/*.test.mjs",
-    "db:schema": "node scripts/print-schema.mjs"
+    "db:schema": "node scripts/print-schema.mjs",
+    "test:browser": "vite build && node --test tests/browser/*.browser.mjs"
   },
   "dependencies": {
     "@fontsource-variable/atkinson-hyperlegible-next": "^5.3.0",
