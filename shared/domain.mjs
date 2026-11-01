@@ -36,6 +36,9 @@ export const DEFAULT_CONFIG = {
   // LeadConnector confirmations.
   smsConfirmations: true,
   emailConfirmations: true,
+  // Optional internal owner alert, separate from customer consent and approvals.
+  bookingOwnerSmsEnabled: false,
+  bookingOwnerSmsPhone: '',
   // Service catalog (packages, home versions, add-ons). Edited in admin → Services & prices.
   services: SERVICE_CATALOG,
   // Emergency Same-Day Clog Relief can be booked with less notice than regular visits.
@@ -158,7 +161,10 @@ export function isBookable(config) {
  return !!(config.bookingEnabled && config.scheduleAcknowledged && config.pricesAcknowledged && coverage && config.activeTechnicianIds.length);
 }
 export function normalizePhone(value) {
- const digits=String(value||'').replace(/\D/g,'');
+ const raw=String(value||'').trim();
+ if(!/^\+?[\d\s().-]+$/.test(raw))return null;
+ const digits=raw.replace(/\D/g,'');
+ if(raw.startsWith('+')&&!/^1\d{10}$/.test(digits))return null;
  return /^1?\d{10}$/.test(digits) ? `+1${digits.slice(-10)}` : null;
 }
 export function validateContact(data,{address=true}={}) {
@@ -186,7 +192,7 @@ export function validateConfig(c) {
  if(!Number.isInteger(c.travelZoneFeeCents)||c.travelZoneFeeCents<0||c.travelZoneFeeCents>50000)errors.push('The just-outside travel charge must be $0–$500.');
  if(!Array.isArray(c.blockedDates)||c.blockedDates.length>1000||c.blockedDates.some(d=>!/^\d{4}-\d{2}-\d{2}$/.test(d)||Number.isNaN(Date.parse(d))))errors.push('Invalid blocked dates.');
  if(!Array.isArray(c.activeTechnicianIds)||!c.activeTechnicianIds.every(id=>typeof id==='string'&&id.length<80))errors.push('Invalid technician selection.');
- for(const k of ['bookingEnabled','scheduleAcknowledged','pricesAcknowledged','nearbyFirst','smsConfirmations','emailConfirmations'])if(typeof c[k]!=='boolean')errors.push(`Invalid ${k}.`);
+ for(const k of ['bookingEnabled','scheduleAcknowledged','pricesAcknowledged','nearbyFirst','smsConfirmations','emailConfirmations','bookingOwnerSmsEnabled'])if(typeof c[k]!=='boolean')errors.push(`Invalid ${k}.`);
  if(!['Jobber','BOB'].includes(c.scheduleSource))errors.push('Choose Jobber or BOB as the schedule source.');
  if(!Number.isInteger(c.emergencyLeadHours)||c.emergencyLeadHours<0||c.emergencyLeadHours>48)errors.push('Emergency notice must be 0–48 hours.');
  if(!Array.isArray(c.services)||!c.services.length||c.services.length>80||c.services.some(x=>!x||typeof x.id!=='string'||typeof x.family!=='string'||typeof x.variant!=='string'||typeof x.name!=='string'||!x.name.trim()||x.name.length>150||typeof x.description!=='string'||x.description.length>800||!Number.isInteger(x.priceCents)||x.priceCents<0||x.priceCents>1000000||!Number.isInteger(x.minutes)||x.minutes<0||x.minutes>600||typeof x.active!=='boolean'))errors.push('Each service needs a name, price, and duration.');
@@ -200,6 +206,7 @@ export function validateConfig(c) {
  if(!Number.isInteger(c.maxDriveBetweenJobsMin)||c.maxDriveBetweenJobsMin<5||c.maxDriveBetweenJobsMin>120)errors.push('Max drive between jobs must be 5–120 minutes.');
  if(!Array.isArray(c.travelFeeTiers)||c.travelFeeTiers.length>10||c.travelFeeTiers.some(t=>!t||!Number.isInteger(t.upToMin)||t.upToMin<1||t.upToMin>240||!Number.isInteger(t.feeCents)||t.feeCents<0||t.feeCents>100000))errors.push('Each travel fee tier needs a drive time (minutes) and a fee.');
  for(const k of ['businessName','phone','email','preparation','cleaningProcess','assessmentProcess'])if(typeof c[k]!=='string'||c[k].length>3000)errors.push(`Invalid ${k}.`);
+ if(typeof c.bookingOwnerSmsPhone!=='string'||c.bookingOwnerSmsPhone.length>30||(c.bookingOwnerSmsPhone&&!normalizePhone(c.bookingOwnerSmsPhone))||(c.bookingOwnerSmsEnabled&&!normalizePhone(c.bookingOwnerSmsPhone)))errors.push('Enter a valid owner notification phone number before enabling booking alerts.');
  if(c.phone && !normalizePhone(c.phone)) errors.push('Enter a valid office phone number or leave it blank.');
  for(const k of ['requirePhoneVerification','aiAssistant','routeScoring'])if(typeof c[k]!=='boolean')errors.push(`Invalid ${k}.`);
  const families=new Set((c.services||[]).map(x=>x.family));

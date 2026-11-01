@@ -1,3 +1,4 @@
+import { PhoneInput } from '../components/PhoneInput';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bird, Bot, Building, Calendar, Check, CheckCircle, ChevronDown, ChevronRight, Clock,
@@ -216,7 +217,7 @@ const contactPrompt = (step: ContactStep, d: any, cfg?: any): string => {
   switch (step) {
     case 'name': return 'To reserve your appointment slot, what is your first and last name?';
     case 'email': return `${first ? `Thanks, ${first}. ` : ''}What is the best email address for your booking confirmation and receipt?`;
-    case 'phone': return `${d?.email ? 'Got it. ' : ''}What is your mobile phone number?${cfg?.phoneVerification === false ? '' : " We'll text a code to confirm it."}`;
+    case 'phone': return cfg?.verificationChannels?.includes('email') ? `${d?.email ? 'Got it. ' : ''}What is your callback phone number (mobile or landline)? You can verify by email instead of text.` : `${d?.email ? 'Got it. ' : ''}What is your mobile phone number?${cfg?.phoneVerification === false ? '' : " We'll text a code to confirm it."}`;
     case 'sms': return `Understood. Is it okay to send automated text updates and technician arrival notifications to ${d?.phone || 'this number'}? Not marketing. Message and data rates may apply; reply STOP anytime.`;
     case 'address': return 'Thank you. What is the street address for the service location? Include a unit number if there is one.';
     case 'city': return 'And the city?';
@@ -227,7 +228,7 @@ const contactPrompt = (step: ContactStep, d: any, cfg?: any): string => {
 };
 const INPUT_FOR: Partial<Record<ContactStep, { type: string; autoComplete: string; placeholder: string; inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'] }>> = {
   name: { type: 'text', autoComplete: 'name', placeholder: 'First and last name' },
-  phone: { type: 'tel', autoComplete: 'tel', placeholder: 'Mobile number', inputMode: 'tel' },
+  phone: { type: 'tel', autoComplete: 'tel', placeholder: 'Callback phone number', inputMode: 'tel' },
   email: { type: 'email', autoComplete: 'email', placeholder: 'Email address' },
   address: { type: 'text', autoComplete: 'street-address', placeholder: 'Street address' },
   city: { type: 'text', autoComplete: 'address-level2', placeholder: 'City' },
@@ -276,7 +277,7 @@ function RequestForm({ token, session, onDone }: { token: string; session: any; 
         <p className="text-sm text-slate-500">It goes straight to the Dryer Vent Squad office. It isn't a booking or a change to one — the team will call or email you.</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="text-xs font-bold text-slate-700">Full name<input className={input} required autoComplete="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
-          <label className="text-xs font-bold text-slate-700">Callback number<input className={input} required type="tel" autoComplete="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label>
+          <label className="text-xs font-bold text-slate-700">Callback number<PhoneInput className={input} required type="tel" autoComplete="tel" value={form.phone} onValueChange={(value) => setForm({ ...form, phone: value })} /></label>
           <label className="text-xs font-bold text-slate-700">Email (optional)<input className={input} type="email" autoComplete="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
           <label className="text-xs font-bold text-slate-700">Service ZIP (optional)<input className={input} autoComplete="postal-code" inputMode="numeric" maxLength={5} value={form.zip} onChange={(e) => setForm({ ...form, zip: e.target.value })} /></label>
         </div>
@@ -295,58 +296,68 @@ function RequestForm({ token, session, onDone }: { token: string; session: any; 
 function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { token: string; verification: any; onVerified: (s: any) => void; onEdit: () => void; onRequest: () => void }) {
   const notSent = verification?.available && !verification.sent && !verification.reused;
   const [code, setCode] = useState(''), [busy, setBusy] = useState(false), [info, setInfo] = useState<any>(verification), [now, setNow] = useState(Date.now());
-  // If the first text didn't go out, say so and let them resend right away.
-  const [error, setError] = useState(notSent && !verification.retryInSeconds ? "We couldn't send the code. Tap Resend code, or send the team a request." : '');
-  const [sentAt, setSentAt] = useState(notSent ? Date.now() - 30_000 + (verification.retryInSeconds || 0) * 1000 : Date.now());
+  const busyRef = useRef(false);
+  const [error, setError] = useState(notSent && !verification.chooseChannel && !verification.retryInSeconds ? "We couldn't send the code. Try again, or send the team a request." : '');
+  const [retryAt, setRetryAt] = useState(Date.now() + (typeof verification.retryInSeconds === 'number' ? verification.retryInSeconds * 1000 : notSent ? 0 : 30_000));
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
-  const wait = Math.max(0, 30 - Math.floor((now - sentAt) / 1000));
+  const wait = Math.max(0, Math.ceil((retryAt - now) / 1000));
+  const channels: string[] = info?.channels || verification?.channels || ['sms'];
+  const channel = info?.channel || 'sms';
+  const sent = Boolean(info?.sent || info?.reused);
+  const email = channel === 'email';
   if (!info?.available) {
     return (
       <Card>
-        <h3 className="font-extrabold text-slate-800 text-lg">We can't send a text code right now</h3>
-        <p className="text-sm text-slate-500 mt-1 mb-4">Online booking needs a quick phone check. Send the team a request and they'll get you on the schedule.</p>
+        <h3 className="font-extrabold text-slate-800 text-lg">We can't send a verification code right now</h3>
+        <p className="text-sm text-slate-500 mt-1 mb-4">Online booking needs a quick contact check. Send the team a request and they'll get you on the schedule.</p>
         <button className="w-full bg-gradient-to-r from-orange-500 to-orange-600 text-white font-extrabold py-3.5 rounded-2xl" onClick={onRequest}>Send a booking request</button>
       </Card>
     );
   }
   const check = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (busy || code.replace(/\D/g, '').length !== 6) return;
-    setBusy(true); setError('');
+    if (busyRef.current || !sent || code.replace(/\D/g, '').length !== 6) return;
+    busyRef.current = true; setBusy(true); setError('');
     try {
       const r = await api('/api/verify/check', { method: 'POST', token, body: { code } });
       onVerified(r.session);
-    } catch (err) { setError((err as Error).message); setCode(''); } finally { setBusy(false); }
+    } catch (err) { setError((err as Error).message); setCode(''); } finally { busyRef.current = false; setBusy(false); }
   };
-  const resend = async () => {
-    if (busy || wait > 0) return;
-    setBusy(true); setError('');
+  const sendCode = async (nextChannel = channel) => {
+    if (busyRef.current || Date.now() < retryAt) return;
+    busyRef.current = true; setBusy(true); setError(''); setCode('');
     try {
-      const r = await api('/api/verify/send', { method: 'POST', token, body: {} });
-      setInfo(r.verification); setSentAt(Date.now());
+      const r = await api('/api/verify/send', { method: 'POST', token, body: { channel: nextChannel } });
+      setInfo({ ...r.verification, channels: r.verification.channels || channels });
+      const delay = r.verification.retryInSeconds || (r.verification.sent ? 30 : 0);
+      setRetryAt(Date.now() + delay * 1000); setNow(Date.now());
       if (!r.verification.sent && r.verification.retryInSeconds) setError(`You can request another code in ${r.verification.retryInSeconds} seconds.`);
       else if (!r.verification.sent) setError("We couldn't send the code. Try again, or send the team a request.");
-    } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
+    } catch (err) { setError((err as Error).message); } finally { busyRef.current = false; setBusy(false); }
   };
   return (
     <Card>
-      <h3 className="font-extrabold text-slate-800 text-lg flex items-center gap-2.5"><ShieldCheck size={22} className="text-orange-500" />Confirm your phone</h3>
-      <p className="text-sm text-slate-500 mt-1">{info.sent || info.reused ? `We texted a 6-digit code to ${info.to}.` : `Send a code to ${info.to}.`} It expires in 10 minutes.</p>
-      <form onSubmit={check} className="mt-4 flex gap-2">
+      <h3 className="font-extrabold text-slate-800 text-lg flex items-center gap-2.5"><ShieldCheck size={22} className="text-orange-500" />{sent ? `Confirm your ${email ? 'email' : 'phone'}` : 'Choose how to receive your code'}</h3>
+      <p className="text-sm text-slate-500 mt-1">{sent ? `We ${email ? 'emailed' : 'texted'} a 6-digit code to ${info.to}. ${info.expiresAt ? `It expires at ${new Date(info.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : 'Enter it within 10 minutes.'}` : channels.includes('email') ? 'Choose text or email to continue booking. A landline cannot receive a text code.' : 'Send a text verification code to continue booking. A landline cannot receive a text code. Use a mobile number, or send the team a booking request.'}</p>
+      {(!sent || channels.length > 1) && <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Verification delivery method">
+        {channels.map((c) => <button key={c} type="button" disabled={busy || wait > 0} onClick={() => sendCode(c)} className="px-4 py-2 rounded-xl border border-orange-200 font-bold text-orange-700 bg-orange-50 disabled:opacity-50">{sent && c === channel ? 'Resend' : 'Send'} code by {c === 'email' ? 'email' : 'text'}</button>)}
+      </div>}
+      {sent && <form onSubmit={check} className="mt-4 flex gap-2">
         <input
-          aria-label="Verification code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code}
+          aria-label="Verification code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} disabled={busy}
           onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
           className="flex-1 min-w-0 text-center tracking-[0.5em] text-2xl font-black text-slate-900 border-2 border-slate-200 focus:border-orange-500 rounded-2xl py-3 outline-none"
           placeholder="••••••"
         />
         <button className="px-5 bg-gradient-to-r from-orange-500 to-orange-600 text-white font-extrabold rounded-2xl disabled:opacity-50" disabled={busy || code.length !== 6}>{busy ? <Loader2 className="animate-spin" size={20} /> : 'Verify'}</button>
-      </form>
+      </form>}
       {error && <div role="alert" className="mt-3 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">{error}</div>}
-      <div className="mt-4 flex items-center justify-between text-sm">
-        <button type="button" className="font-bold text-orange-600 disabled:text-slate-400" onClick={resend} disabled={busy || wait > 0}>{wait > 0 ? `Resend code in ${wait}s` : 'Resend code'}</button>
-        <button type="button" className="font-bold text-slate-500 hover:text-slate-800" onClick={onEdit}>Wrong number?</button>
+      <div className="mt-4 flex items-center justify-between text-sm gap-3">
+        {sent && channels.length === 1 ? <button type="button" className="font-bold text-orange-600 disabled:text-slate-400" onClick={() => sendCode()} disabled={busy || wait > 0}>{wait > 0 ? `Resend code in ${wait}s` : 'Resend code'}</button> : <span className="text-slate-500" aria-live="polite">{wait > 0 ? `Another code in ${wait}s` : ''}</span>}
+        <button type="button" className="font-bold text-slate-500 hover:text-slate-800 disabled:opacity-50" disabled={busy} onClick={onEdit}>Edit contact details</button>
       </div>
-      <p className="mt-3 text-xs text-slate-400">This only proves the phone is yours for this booking. Enter the code here, not in the chat.</p>
+      <button type="button" className="mt-3 text-sm font-bold text-slate-500 disabled:opacity-50" disabled={busy} onClick={onRequest}>Need help? Send a booking request</button>
+      <p className="mt-3 text-xs text-slate-400">{email ? 'This verifies only your email, not your phone.' : 'This verifies your contact method for this booking.'} It does not opt you into appointment texts. Enter the code here, not in the chat.</p>
     </Card>
   );
 }
@@ -619,7 +630,18 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       else if (s.stage === 'approval' && s.approvalId) {
         try { const a = await api('/api/approvals/current', { token: r.token }); if (a.receipt) { setReceipt(a.receipt); setPending(Boolean(a.pending)); } else if (a.approval.status === 'pending') { setApproval(a.approval); setAction('approval'); } else setAction('request'); } catch {}
       } else if (s.stage === 'slots') setAction('slots');
-      else if (s.stage === 'verify') { setAction('verify'); setVerification({ available: true, sent: false, to: 'your phone' }); }
+      else if (s.stage === 'verify') {
+        setAction('verify');
+        if (r.config?.verificationChannels?.includes('email')) {
+          const channels = r.config.verificationChannels.filter((ch: string) => ch === 'sms' ? !!s.contact?.phone : ch === 'email' && !!s.contact?.email);
+          const v = s.verification;
+          const destination = v?.channel === 'email' ? String(s.contact?.email || '').trim().toLowerCase() : s.contact?.phone;
+          const active = v?.provider === 'twilio' && channels.includes(v.channel) && v.to === destination && v.expires > Date.now();
+          const masked = active ? v.channel === 'email' ? `${String(v.to).slice(0, 1)}•••@${String(v.to).split('@')[1] || 'email'}` : `(•••) •••-${String(v.to).replace(/\D/g, '').slice(-4)}` : '';
+          const retryInSeconds = Math.max(0, Math.ceil(((s.verifyLastAttempt || 0) + 30_000 - Date.now()) / 1000));
+          setVerification({ available: true, required: true, sent: Boolean(active), reused: Boolean(active), chooseChannel: !active, channels, channel: active ? v.channel : null, to: masked, expiresAt: active ? v.expires : undefined, retryInSeconds });
+        } else setVerification({ available: true, sent: false, to: 'your phone' });
+      }
       else if (s.stage === 'contact') { setAction('contact'); startContact(s); }
       else if (s.stage === 'review') setAction('request');
       setReady(true);
@@ -836,7 +858,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       setPicked([]);
       return nextContact('notes', d);
     } else {
-      if (step === 'phone' && value.replace(/\D/g, '').length < 10) { say('user', value); say('model', 'That number looks short. Please enter a 10-digit mobile number.'); return; }
+      if (step === 'phone' && value.replace(/\D/g, '').length < 10) { say('user', value); say('model', 'That number looks short. Please enter a 10-digit callback number.'); return; }
       if (step === 'email' && value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) { say('user', value); say('model', "That email doesn't look right. Enter it again, or choose Skip."); return; }
       if (step === 'address' && !/^\d+\s+\S/.test(value)) { say('user', value); say('model', 'Please include the house number and street, like “15420 W Bell Rd”.'); return; }
       if (step === 'name' && value.length < 2) return;
@@ -907,6 +929,8 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
           <button onClick={restart} className="text-xs font-bold text-slate-300 hover:text-white px-3 py-1.5 rounded-xl bg-slate-700/50 hover:bg-slate-700 flex items-center gap-1.5" aria-label="Start over"><RotateCcw size={13} /><span className="hidden sm:inline">Reset</span></button>
         </div>
       </div>
+
+      {config?.preview && <div role="status" className="px-4 py-2 text-xs font-semibold bg-amber-100 text-amber-950">Read-only preview — no bookings, messages, verification codes, or live integrations. Production is unchanged.</div>}
 
       {faqOpen && (
         <div className="bg-slate-800 border-b border-slate-700 p-4 max-h-64 overflow-y-auto z-20 space-y-2 animate-in">
@@ -1014,7 +1038,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
             )}
 
             <div className="pl-9 sm:pl-10 space-y-4">
-              {!receipt && !requestId && action === 'verify' && verification && <VerifyPhone token={token} verification={verification} onVerified={(s) => { setSession(s); setVerification(null); setAction('slots'); say('model', 'Thanks — your phone is confirmed. Here are the soonest openings for the full visit.'); }} onEdit={editDetails} onRequest={() => setAction('request')} />}
+              {!receipt && !requestId && action === 'verify' && verification && <VerifyPhone token={token} verification={verification} onVerified={(s) => { setSession(s); setVerification(null); setAction('slots'); say('model', `Thanks — your ${s.verifiedContact?.channel === 'email' ? 'email' : 'phone'} is confirmed. Here are the soonest openings for the full visit.`); }} onEdit={editDetails} onRequest={() => setAction('request')} />}
               {!receipt && !requestId && action === 'slots' && <SlotPicker token={token} session={session} config={config} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
               {!receipt && !requestId && action === 'approval' && approval && <ApprovalWait token={token} initial={approval} onBooked={onApprovalBooked} onEnded={onApprovalEnded} />}
               {!receipt && !requestId && action === 'request' && <RequestForm token={token} session={session} onDone={(id) => { setRequestId(id); setAction(''); setOptions([]); }} />}
@@ -1061,9 +1085,10 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
               <p className="px-4 py-1.5 border-t border-slate-100 text-[10px] text-slate-400 text-right">Google Maps</p>
             </div>
           )}
-          <input
+          <PhoneInput
+            formatPhone={contactStep === 'phone'}
             ref={inputRef}
-            aria-label={suggestOn ? 'Street address' : 'Message BOB'} maxLength={2000} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onInputKey}
+            aria-label={suggestOn ? 'Street address' : 'Message BOB'} maxLength={2000} value={text} onValueChange={setText} onKeyDown={onInputKey}
             {...(suggestOn ? { role: 'combobox', 'aria-autocomplete': 'list' as const, 'aria-expanded': addrItems.length > 0, 'aria-controls': 'bob-address-options', 'aria-activedescendant': addrActive >= 0 ? `bob-address-${addrActive}` : undefined } : {})}
             type={inputHints?.type || 'text'} autoComplete={suggestOn ? 'off' : inputHints?.autoComplete || 'off'} inputMode={inputHints?.inputMode} enterKeyHint="send"
             disabled={!ready || busy || addrLoading || !!receipt || !!requestId || contactStep === 'sms' || contactStep === 'addons'}

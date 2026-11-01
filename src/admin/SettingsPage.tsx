@@ -1,7 +1,8 @@
+import { PhoneInput } from '../components/PhoneInput';
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Technician } from './DashboardContext';
-import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, MapPin, Plus, Route, Save, ShieldCheck, Tag, Trash2, Users } from 'lucide-react';
+import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, MapPin, MessageSquare, Plus, Route, Save, ShieldCheck, Tag, Trash2, Users } from 'lucide-react';
 import { api, saveText } from '../lib/api';
 import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Modal, Section, Toggle, inputClass, primaryButton, secondaryButton, subtleButton } from './ui';
@@ -70,9 +71,11 @@ function Connections() {
       i.jobber?.connected ? 'Reading the live calendar and creating scheduled jobs with visits.' : i.jobber?.appConfigured ? 'Not connected yet. Online booking stays off until it is.' : 'Add JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET and JOBBER_REDIRECT_URI in Vercel first.',
       i.jobber?.appConfigured && (i.jobber?.connected ? <button className={subtleButton} onClick={disconnect} disabled={busy}>Disconnect</button> : <a className={primaryButton} href="/api/admin/jobber/connect">Connect Jobber</a>)],
     ['LeadConnector', !!i.leadConnector?.configured && !i.leadConnector?.issue,
-      <>{i.leadConnector?.configured ? 'Sends verification codes, confirmations and approval texts, and saves contacts and requests.' : 'Add LC_PRIVATE_TOKEN and LC_LOCATION_ID in Vercel. Phone verification needs it, so online booking waits for it.'}
+      <>{i.leadConnector?.configured ? 'Saves CRM contacts and requests, and sends confirmation emails. Texts and verification codes use the selected providers.' : 'LeadConnector is not configured. CRM sync and confirmation emails need its server-side connection; legacy verification and texting also depend on it.'}
         {i.leadConnector?.configured && ['jwt', 'other'].includes(i.leadConnector?.tokenKind) && <span className="block mt-1 font-semibold text-amber-800">LC_PRIVATE_TOKEN doesn't look like a Private Integration token (those start with “pit-”).{i.leadConnector.tokenKind === 'jwt' ? ' It looks like an older API key or app token.' : ''} Copy the token from the sub-account's Settings → Private Integrations.</span>}
         {i.leadConnector?.issue && <span className="block mt-1 font-semibold text-amber-800">{when(i.leadConnector.issue.at)}: {i.leadConnector.issue.message}</span>}</>],
+    ...(i.verification?.provider === 'twilio' ? [['Twilio Verify', !!i.verification.configured, i.verification.configured ? 'Selected for booking codes by text or email. Email verification does not verify a phone. Configuration is present; delivery still needs a controlled test.' : 'Selected but not configured. Online booking waits for the server-side Verify connection. Do not paste credentials here.'] as [string, boolean, React.ReactNode]] : []),
+    ...(i.sms?.provider === 'twilio' ? [['Twilio appointment texts', !!i.sms.configured, i.sms.configured ? 'Selected sender configuration is present. Customer texts require consent; company approval texts are for emergency same-day requests only. Delivery is not yet established by this status.' : 'Selected but not ready. An approved sender and server-side messaging configuration are required. Verify does not send booking confirmations.'] as [string, boolean, React.ReactNode]] : []),
     ['Smart chat', !!i.assistant?.configured, i.assistant?.configured ? `Gemini (${i.assistant.model}) reads typed messages. It can't set prices or book — BOB's rules do that.` : 'Add GEMINI_API_KEY in Vercel. Until then BOB uses buttons and keyword matching.'],
     ['Maps', i.maps?.provider === 'google' && !i.maps?.issue,
       <>{i.maps?.provider === 'google' ? 'Google finds addresses and drive times enforce the drive-time rules. If Google refuses, the free Census lookup is used.' : 'Free Census address lookup with straight-line drive estimates. Add GOOGLE_MAPS_API_KEY for real drive times.'}
@@ -113,7 +116,7 @@ function Technicians({ techs, onChange }: { techs: Technician[]; onChange: (next
               <Field label="Color"><input type="color" className="h-[42px] w-14 rounded-xl border border-slate-200 bg-white p-1" value={t.color} onChange={(e) => edit(i, { color: e.target.value })} /></Field>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Field label="Phone"><input className={inputClass} type="tel" value={t.phone} onChange={(e) => edit(i, { phone: e.target.value })} /></Field>
+              <Field label="Phone"><PhoneInput className={inputClass} type="tel" value={t.phone} onValueChange={(value) => edit(i, { phone: value })} /></Field>
               <Field label="Truck or van"><input className={inputClass} value={t.vehicle || ''} onChange={(e) => edit(i, { vehicle: e.target.value })} placeholder="Van 2" /></Field>
               <Field label="Home area"><input className={inputClass} value={t.zone} onChange={(e) => edit(i, { zone: e.target.value })} /></Field>
               <Field label="Status">
@@ -300,13 +303,15 @@ export function SettingsPage() {
     try { setCheck(await api('/api/admin/geo/check', { method: 'POST', body: { address } })); } catch (e) { setCheck({ error: (e as Error).message }); }
   };
   const embed = `<script src="${location.origin}/embed.js" defer></script>`;
+  const twilioVerify = data.integrations?.verification?.provider === 'twilio';
+  const verificationReady = twilioVerify ? !!data.integrations?.verification?.configured : !(c.requirePhoneVerification && c.smsConfirmations) || !!data.integrations?.leadConnector?.configured;
   const readiness = [
     [c.scheduleAcknowledged, 'Schedule source confirmed'],
     [c.pricesAcknowledged, 'Prices approved'],
     [['driving_distance', 'radius'].includes(c.serviceAreaMode) ? Boolean(c.baseAddress.trim() || c.baseLocation) : c.serviceZips.length > 0, 'Service area configured'],
     [c.activeTechnicianIds.length > 0, 'A technician takes bookings'],
     [c.scheduleSource !== 'Jobber' || data.integrations?.jobber?.connected, 'Jobber connected'],
-    [!(c.requirePhoneVerification && c.smsConfirmations) || data.integrations?.leadConnector?.configured, 'Phone verification can send codes'],
+    [verificationReady, 'Selected verification provider configured'],
   ] as [boolean, string][];
 
   return (
@@ -330,10 +335,10 @@ export function SettingsPage() {
             </Field>
             <Toggle checked={c.scheduleAcknowledged} onChange={(v) => update('scheduleAcknowledged', v)} label="The schedule source above is accurate and kept up to date" />
             <Toggle checked={c.bookingEnabled} onChange={(v) => update('bookingEnabled', v)} label="Let customers book visits online" detail="When off, BOB still answers questions and takes callback requests." />
-            <Toggle checked={c.requirePhoneVerification && c.smsConfirmations} disabled={!c.smsConfirmations} onChange={(v) => update('requirePhoneVerification', v)} label="Text a code to verify the customer's phone before booking" detail={c.smsConfirmations ? 'Rulebook requirement. Sent through LeadConnector.' : 'Off while text confirmations are off: BOB sends no texts to customers.'} />
+            <Toggle checked={twilioVerify || (c.requirePhoneVerification && c.smsConfirmations)} disabled={twilioVerify || !c.smsConfirmations} onChange={(v) => update('requirePhoneVerification', v)} label={twilioVerify ? 'Verify by text or email before booking' : 'Legacy: text a code before booking'} detail={twilioVerify ? 'Twilio Verify remains required independently of appointment text settings. The customer chooses text or email; this legacy switch cannot disable it.' : c.smsConfirmations ? 'Legacy verification uses LeadConnector.' : 'Legacy phone verification is off while text confirmations are off.'} />
             <Toggle checked={c.aiAssistant} onChange={(v) => update('aiAssistant', v)} label="Smart chat (Gemini) reads typed messages" detail="Off = buttons and keyword matching only. Prices and booking never depend on it." />
             <div className="flex flex-wrap gap-x-6">
-              <Toggle checked={c.smsConfirmations} onChange={(v) => update('smsConfirmations', v)} label="Text confirmations" detail="Only to customers who agree to texts. Off: BOB sends no texts to customers (no phone code, no confirmation text, no texting question)." />
+              <Toggle checked={c.smsConfirmations} onChange={(v) => update('smsConfirmations', v)} label="Text confirmations" detail={twilioVerify ? 'Only to customers who agree to appointment texts. Off disables confirmations and the consent question, not the customer-requested verification code.' : 'Only to customers who agree to texts. Off also disables legacy phone codes and the texting question.'} />
               <Toggle checked={c.emailConfirmations} onChange={(v) => update('emailConfirmations', v)} label="Email confirmations" />
             </div>
           </div>
@@ -343,7 +348,18 @@ export function SettingsPage() {
         </div>
       </Section>
 
-      <Section icon={<ShieldCheck size={18} />} title="Approvals" description="These services wait for a named person's yes before they're booked. The customer's time is held for up to 30 minutes, and 5 PM overflow visits always need approval.">
+      <Section icon={<MessageSquare size={18} />} title="Owner booking alerts" description="Optional texts after ChatDaddy successfully confirms an appointment. These are separate from emergency same-day approval requests and do not hold up a booking.">
+        <Toggle checked={c.bookingOwnerSmsEnabled === true} onChange={(v) => update('bookingOwnerSmsEnabled', v)} label="Text me when an appointment is booked" detail="Off by default. Requires the recipient number below and a configured, approved texting sender. Saving this setting does not send a test text." />
+        <div className="max-w-md">
+          <Field label="Your mobile number for booking alerts" hint="Required when enabled. Enter the number that should receive these alerts; no approver or customer number is used automatically.">
+            <PhoneInput className={inputClass} type="tel" inputMode="tel" autoComplete="off" placeholder="Recipient mobile number" value={c.bookingOwnerSmsPhone || ''} onValueChange={(value) => update('bookingOwnerSmsPhone', value)} />
+          </Field>
+        </div>
+        {c.bookingOwnerSmsEnabled === true && !String(c.bookingOwnerSmsPhone || '').trim() && <p role="status" className="text-sm font-semibold text-amber-800">Enter your recipient mobile number before saving this option.</p>}
+        {c.bookingOwnerSmsEnabled === true && !data.integrations?.sms?.configured && <p role="status" className="text-sm font-semibold text-amber-800">The selected texting provider is not ready. Alerts cannot be sent until its sender is configured.</p>}
+      </Section>
+
+      <Section icon={<ShieldCheck size={18} />} title="Approvals" description="Only emergency same-day visits use online approval and company approval texts. The time is held for up to 30 minutes. Other configured approval-only services and unsafe overflow exceptions remain office-only; these selections do not bypass those safeguards.">
         <div className="flex flex-wrap gap-x-6">
           {families.map((f) => (
             <Toggle key={f} checked={c.approvalServices.includes(f)} label={(PACKAGES as any)[f].short}
@@ -352,7 +368,7 @@ export function SettingsPage() {
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Field label="Approver name"><input className={inputClass} value={c.approver?.name || ''} onChange={(e) => nested('approver', { name: e.target.value })} /></Field>
-          <Field label="Approver mobile" hint="Gets a text with the details and a link."><input className={inputClass} type="tel" value={c.approver?.phone || ''} onChange={(e) => nested('approver', { phone: e.target.value })} /></Field>
+          <Field label="Approver mobile" hint="Emergency same-day requests only: details and a review link."><PhoneInput className={inputClass} type="tel" value={c.approver?.phone || ''} onValueChange={(value) => nested('approver', { phone: value })} /></Field>
           <Field label="Approver email"><input className={inputClass} type="email" value={c.approver?.email || ''} onChange={(e) => nested('approver', { email: e.target.value })} /></Field>
         </div>
       </Section>
@@ -502,7 +518,7 @@ export function SettingsPage() {
 
       <Section icon={<Building2 size={18} />} title="Office contact and visit prep">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Office phone" hint="Shown in confirmations and when online booking can't help."><input className={inputClass} type="tel" value={c.phone} onChange={(e) => update('phone', e.target.value)} /></Field>
+          <Field label="Office phone" hint="Shown in confirmations and when online booking can't help."><PhoneInput className={inputClass} type="tel" value={c.phone} onValueChange={(value) => update('phone', value)} /></Field>
           <Field label="Office email"><input className={inputClass} type="email" value={c.email} onChange={(e) => update('email', e.target.value)} /></Field>
         </div>
         <Field label="What customers should do before the visit"><textarea rows={3} className={inputClass} value={c.preparation} onChange={(e) => update('preparation', e.target.value)} /></Field>

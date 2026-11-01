@@ -3,7 +3,7 @@ import { emergencySameDayEligible, localDay, requestedVisit } from "./activity.m
 import { normalizePhone } from "../shared/domain.mjs";
 
 /** Ask the office about availability early; this never books or reserves an appointment. */
-export async function captureAvailabilityRequest({ store, lc, config, data, message, session, now, origin, log }) {
+export async function captureAvailabilityRequest({ store, lc, sendStaffSms = null, config, data, message, session, now, origin, log }) {
   const emergency = data.intent === "emergency" || data.package === "emergency";
   // Older conversations did not have a dedicated preferred-time field.
   const earlier = data.requestedVisit || (data.history || []).filter((entry) => entry.role === "user").reduce((value, entry) => requestedVisit(entry.text, value, now), {});
@@ -13,8 +13,8 @@ export async function captureAvailabilityRequest({ store, lc, config, data, mess
   data.requestedVisit = preference;
   if (data.safety || data.stage === "emergency" || !preference.date) return "";
   const sameDay = preference.date === localDay(now);
-  const explicitCheck = Boolean(preference.time) && /\b(today|available|availability|appointment|come|book|schedule|tech)\b/i.test(message);
-  if (!sameDay || (!emergency && !explicitCheck)) return "";
+  // Ordinary bookings never create company approval/availability texts.
+  if (!emergency || !sameDay) return "";
   if (emergency && !emergencySameDayEligible(data.emergencyRequestedAt, preference.date)) {
     if (data.emergencyCutoffShown) return "";
     data.emergencyCutoffShown = true;
@@ -45,12 +45,12 @@ export async function captureAvailabilityRequest({ store, lc, config, data, mess
     const phone = normalizePhone(approver.phone);
     const recipient = approver.name || "the team";
     try {
-      if (!lc.configured || !phone) throw new Error(!lc.configured ? "LeadConnector messaging is not configured." : "No staff availability phone is configured. Add the approver or Ryan's phone in settings.");
-      const contactId = await lc.upsertContact({ name: recipient, phone, tags: ["bob-approver"] });
+      if ((!sendStaffSms && !lc.configured) || !phone) throw new Error(!lc.configured ? "LeadConnector messaging is not configured." : "No staff availability phone is configured. Add the approver or Ryan's phone in settings.");
+      const contactId = !sendStaffSms ? await lc.upsertContact({ name: recipient, phone, tags: ["bob-approver"] }) : null;
       const text = `BOB availability check: ${recipient}, is a technician available for ${requested}? ${emergency ? "Emergency request received before 2 p.m. " : ""}${address}. This is an availability inquiry; confirm the booking separately. Review: ${origin}/admin?tab=inbox`;
       // Customer confirmation preferences do not disable internal staff notifications.
-      const response = await lc.sendSms(contactId, text);
-      request.notification = { status: "accepted", provider: "LeadConnector", recipient, to: `•••${phone.slice(-4)}`, messageId: response?.messageId || response?.id || null, at: now };
+      const response = sendStaffSms ? await sendStaffSms({ phone, text }) : await lc.sendSms(contactId, text);
+      request.notification = { status: "accepted", provider: sendStaffSms ? "Twilio" : "LeadConnector", recipient, to: `•••${phone.slice(-4)}`, messageId: response?.messageId || response?.id || null, at: now };
       await log("notification.accepted", { requestId: request.id, ...request.notification, delivery: "Delivery is not yet confirmed" });
     } catch (error) {
       request.notification = { status: "failed", recipient, error: String(error.message).slice(0, 500), at: now };
