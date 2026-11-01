@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 // Jobber GraphQL integration for BOB the Booking Bot (Jobber app: "BOB the Booking Bot").
 //
 // - OAuth: tokens live in BOB's database. Refresh tokens ROTATE (each refresh returns a
@@ -108,13 +108,17 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
 
   async function exchangeCode(code) {
     const tokens = await postToken({ grant_type: "authorization_code", code, redirect_uri: cfg.redirectUri });
+    await store.kvSet("client-hub:connection-epoch", randomUUID());
     await tokenStore.save(tokens);
     return tokens;
   }
 
   const loadTokens = () => tokenStore.load();
   const connected = async () => appConfigured && Boolean((await loadTokens())?.refreshToken);
-  const disconnect = () => tokenStore.clear();
+  const disconnect = async () => {
+    await store.kvSet("client-hub:connection-epoch", randomUUID());
+    await tokenStore.clear();
+  };
 
   async function refresh(current) {
     for (let attempt = 0; attempt < 10; attempt++) {

@@ -1,3 +1,4 @@
+import { createClientHub } from './client-hub.mjs';
 import { sanitizeDiagnostic } from "./integration-status.mjs";
 // BOB HTTP API — Postgres-backed, serverless-friendly. Jobber is the master schedule,
 // Explicitly selected providers carry verification and messages; the selected AI reads
@@ -74,6 +75,7 @@ const APPROVAL_WINDOW = 30 * 60_000;
 const FAQ_STATUSES = ["approved", "draft"];
 
 export function createBobHandler({ store, jobber, geo, scheduler, assistant = null, twilio = null, sendgrid = null, integrationAccounts = null, env = process.env, clock = () => Date.now() }) {
+  const clientHub = createClientHub({store,jobber,clock});
   const useTwilioVerify = env.BOOKING_VERIFICATION_PROVIDER === 'twilio';
   const verifyService = createVerification({ store, twilio, clock, fail });
   const verificationOn = (c) => useTwilioVerify || c.requirePhoneVerification !== false;
@@ -212,6 +214,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     const c = await store.config(), ai = selectedAssistant(c);
     return {
       accounts: await integrationAccounts?.snapshot() || {},
+      clientHub: await clientHub.snapshot(),
       jobber: { enabled: enabled(c, 'jobber'), appConfigured: jobber.appConfigured, connected: enabled(c, 'jobber') && await jobber.connected() },
       verification: { enabled: enabled(c, 'verification'), provider: useTwilioVerify ? 'twilio' : 'none', configured: useTwilioVerify && Boolean(twilio?.verifyConfigured), channels: useTwilioVerify ? ['sms', 'email'] : [] },
       sms: { enabled: enabled(c, 'sms'), provider: useTwilioSms ? 'twilio' : 'none', configured: useTwilioSms && Boolean(twilio?.messagingConfigured) },
@@ -372,6 +375,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
   /** Jobber: client + property + job + scheduled visit. Returns appointment.jobber details. */
   async function pushToJobber(appt, slot, notes) {
     if (!slot.jobberUserId || !jobber.verifyAssignment) throw new Error("The selected technician needs a verified Jobber user mapping before booking.");
+    const hubAccountBefore = await clientHub.capture();
     await jobber.verifyAssignment(slot.jobberUserId);
     const { firstName, lastName } = splitName(appt.customerName);
     const { clientId, propertyId } = await jobber.ensureClientAndProperty(
@@ -402,7 +406,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       jobberUserId: slot.jobberUserId,
     });
     if (!visit?.id) throw Object.assign(new Error("The scheduled Jobber visit could not be verified."), { jobberJob: job, uncertain: true });
-    return { clientId, propertyId, jobId: job.id, jobNumber: job.jobNumber, webUri: job.jobberWebUri, visitId: visit.id };
+    const hubAccountAfter = hubAccountBefore ? await clientHub.capture() : null;
+    const hubBinding = hubAccountAfter && hubAccountAfter.id === hubAccountBefore.id && hubAccountAfter.epoch === hubAccountBefore.epoch ? { accountId: hubAccountAfter.id, clientHubEpoch: hubAccountAfter.epoch } : {};
+    return { clientId, propertyId, jobId: job.id, jobNumber: job.jobNumber, webUri: job.jobberWebUri, visitId: visit.id, ...hubBinding };
   }
 
   /** Confirmation transports never change booking success and report actual delivery state. */
@@ -420,7 +426,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       });
     }
     if (appt.email && c.emailConfirmations && appt.status === 'confirmed') {
-      try { applyEmailResult(result, await deliverEmail('appointment_confirmed', appt.id, appt.email, confirmationEmail(appt, c))); }
+      try { applyEmailResult(result, await deliverEmail('appointment_confirmed', appt.id, appt.email, confirmationEmail(appt, c, {clientHubUrl: emailReady(await store.config()) ? await clientHub.resolve(appt) : ''}))); }
       catch { result.email = 'failed_or_uncertain'; result.emailDelivery = 'not_confirmed'; }
     }
     return result;
@@ -1017,6 +1023,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         let result = "failed";
         if (ok) {
           try {
+            await clientHub.invalidate();
             await jobber.exchangeCode(code);
             await store.audit("jobber.connected", "jobber");
             result = "connected";
@@ -1109,6 +1116,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           return res.end();
         }
         if (method === "POST" && pathname === "/api/admin/jobber/disconnect") {
+          await clientHub.invalidate();
           await jobber.disconnect();
           await store.audit("jobber.disconnected", "jobber");
           return send(200, await snapshot());
@@ -1126,6 +1134,18 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           const zip = (String(b.address || "").match(/\b(\d{5})\b/) || [])[1] || "";
           const where = await locate(c, { address: parts[0] || "", city: parts[1] || "", zip });
           return send(200, { ...where, zipApproved: c.serviceZips.includes(zip), area: where.area || areaFor(zip, c), territory: where.territory || territoryFor(zip) });
+        }
+
+        if (method === 'POST' && pathname === '/api/admin/jobber/client-hub/identity') {
+          try { return send(200, await clientHub.challenge()); }
+          catch { fail(409, 'The connected Jobber account could not be verified.'); }
+        }
+        if (method === 'POST' && pathname === '/api/admin/jobber/client-hub') {
+          const body=await readBody(req);
+          try { await clientHub.save(body); }
+          catch(error) { fail(error.status === 409 ? 409 : 400, error.status === 409 ? 'Verify the connected Jobber account again before saving its Client Hub link.' : 'The Client Hub link could not be saved. Check the public share-login URL and verify the account again.'); }
+          await store.audit('client_hub.updated', 'jobber');
+          return send(200, await snapshot());
         }
 
         if (method === "PATCH" && pathname === "/api/admin/config") {

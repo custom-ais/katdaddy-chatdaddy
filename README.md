@@ -24,3 +24,11 @@ npm test
 Vite build to `dist/`, one function at `api/bob.mjs`. Copy `.env.example` for the variables to set.
 The database is the `bob` schema in Supabase (apply with `npm run db:schema`, which prints the SQL), reached with `NEXT_PUBLIC_SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`. Jobber tokens are stored in `public.chatdaddy_jobber_tokens` (`supabase/chatdaddy_jobber_tokens.sql`).
 Jobber redirect URI: `<app url>/api/jobber/callback`.
+
+### Optional Jobber Client Hub link
+
+In Settings → Connections, the Client Hub setting accepts only the public company login link copied from **the connected company's Jobber Settings → Client hub**. Confirm that the displayed Jobber company is the company whose link you copied. Jobber account identity can be verified through OAuth; ownership of a manually supplied Hub URL is **not** independently verified by the API.
+
+The link is optional and blank by default. When safely bound to the same connected account as a newly booked appointment, it appears as an **Open Client Hub** button and plain-text URL in the booking-confirmation email. It is not included in four-digit verification messages or SMS confirmations. It is a login page, not a personalized authentication token or an appointment-verification action.
+
+Disconnecting or changing the Jobber connection disables the binding until an administrator reconfirms it; ordinary OAuth token refreshes do not. If account identity cannot be checked, or a historical appointment lacks the verified account binding, the email is sent without the link. Invalid links, personal login tokens and arbitrary query parameters are rejected. No emails are resent merely by editing this setting.

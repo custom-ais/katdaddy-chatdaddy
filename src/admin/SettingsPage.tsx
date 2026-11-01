@@ -1,3 +1,4 @@
+import { ClientHubSettings } from './ClientHubSettings';
 import { PhoneInput } from '../components/PhoneInput';
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -425,6 +426,7 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
       </div>
       <div hidden={page !== 'connections'} className="space-y-6" data-settings-panel="connections">
             <Connections config={c} onChange={update} />
+            <ClientHubSettings />
       </div>
 
       <div hidden={page !== 'booking'} className="space-y-6" data-settings-panel="booking">
