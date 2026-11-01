@@ -58,9 +58,41 @@ function Dot({ ok }: { ok: boolean }) {
 
 const when = (ms: number) => new Date(ms).toLocaleString('en-US', { timeZone: 'America/Phoenix', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
+/** Historical diagnostics never imply a current failure or a successful connection. */
+function RecordedHealth({ configured, health, legacyIssue }: { configured: boolean; health?: any; legacyIssue?: any }) {
+  const checked = Number.isFinite(health?.checkedAt) && health.checkedAt > 0;
+  const success = Number.isFinite(health?.lastSuccessAt) && health.lastSuccessAt > 0;
+  const active = health?.status === 'error' ? health.activeIssue : null;
+  const history = [...(Array.isArray(health?.history) ? health.history : []), health?.lastIssue, legacyIssue]
+    .filter((entry, index, all) => entry?.message && !(active && entry.at === active.at && entry.message === active.message) && all.findIndex((other) => other?.at === entry.at && other?.message === entry.message) === index);
+  return <div className="mt-2 space-y-1">
+    <p className="font-semibold text-slate-700">{!configured ? 'Configuration missing' : health?.status === 'healthy' && success ? 'Configuration present · last recorded check succeeded' : health?.status === 'error' && active ? 'Configuration present · active recorded failure' : 'Configuration present · unverified'}</p>
+    <p>Last checked: {checked ? when(health.checkedAt) : 'not yet recorded'}.{success ? ` Last success: ${when(health.lastSuccessAt)}.` : ''} This is recorded status, not a live connection test.</p>
+    {active && <p className="font-semibold text-amber-800">Active failure{Number.isFinite(active.at) ? ` (${when(active.at)})` : ''}: {active.message}</p>}
+    {history.length > 0 && <details className="pt-1 text-slate-500">
+      <summary className="cursor-pointer font-semibold">Previous errors ({history.length}) — history only</summary>
+      <ul className="mt-1 space-y-1">{history.map((entry, index) => <li key={`${entry.at}-${index}`}>{Number.isFinite(entry.at) ? `${when(entry.at)}: ` : ''}{entry.message}</li>)}</ul>
+    </details>}
+  </div>;
+}
+
+function AccountIdentity({ account }: { account?: { status?: string; displayName?: string; checkedAt?: number } }) {
+  const name = typeof account?.displayName === 'string' ? account.displayName : '';
+  return <p className="mt-2 text-xs text-slate-600">{account?.status === 'verified' && name ? <>Verified account: <span className="font-semibold">{name}</span></> : 'Account identity not verified'}{Number.isFinite(account?.checkedAt) ? ` · checked ${when(account!.checkedAt!)}` : ''}</p>;
+}
+
 function Connections() {
-  const { data, mutate, showToast } = useDashboard();
+  const { data, mutate, showToast, refresh, loading } = useDashboard();
   const i = data.integrations || {};
+  const accounts: Record<string, any> = { Jobber: i.accounts?.jobber, LeadConnector: i.accounts?.leadConnector, 'Twilio Verify': i.accounts?.twilio, 'Twilio appointment texts': i.accounts?.twilio };
+  const [accountsBusy, setAccountsBusy] = useState(false), [accountsError, setAccountsError] = useState('');
+  const refreshAccounts = async () => {
+    if (accountsBusy) return;
+    setAccountsBusy(true); setAccountsError('');
+    try { await api('/api/admin/integration-accounts', { method: 'POST', body: {} }); await refresh(); }
+    catch (error) { setAccountsError((error as Error).message); }
+    finally { setAccountsBusy(false); }
+  };
   const [busy, setBusy] = useState(false);
   const disconnect = async () => {
     if (!confirm('Disconnect Jobber? Online booking pauses until you reconnect.')) return;
@@ -71,25 +103,30 @@ function Connections() {
     ['Jobber', !!i.jobber?.connected,
       i.jobber?.connected ? 'Reading the live calendar and creating scheduled jobs with visits.' : i.jobber?.appConfigured ? 'Not connected yet. Online booking stays off until it is.' : 'Add JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET and JOBBER_REDIRECT_URI in Vercel first.',
       i.jobber?.appConfigured && (i.jobber?.connected ? <button className={subtleButton} onClick={disconnect} disabled={busy}>Disconnect</button> : <a className={primaryButton} href="/api/admin/jobber/connect">Connect Jobber</a>)],
-    ['LeadConnector', !!i.leadConnector?.configured && !i.leadConnector?.issue,
+    ['LeadConnector', !!i.leadConnector?.configured && i.leadConnector?.health?.status === 'healthy' && Number.isFinite(i.leadConnector?.health?.lastSuccessAt) && i.leadConnector.health.lastSuccessAt > 0,
       <>{i.leadConnector?.configured ? 'Saves CRM contacts and requests, and sends confirmation emails. Texts and verification codes use the selected providers.' : 'LeadConnector is not configured. CRM sync and confirmation emails need its server-side connection; legacy verification and texting also depend on it.'}
-        {i.leadConnector?.configured && ['jwt', 'other'].includes(i.leadConnector?.tokenKind) && <span className="block mt-1 font-semibold text-amber-800">LC_PRIVATE_TOKEN doesn't look like a Private Integration token (those start with “pit-”).{i.leadConnector.tokenKind === 'jwt' ? ' It looks like an older API key or app token.' : ''} Copy the token from the sub-account's Settings → Private Integrations.</span>}
-        {i.leadConnector?.issue && <span className="block mt-1 font-semibold text-amber-800">{when(i.leadConnector.issue.at)}: {i.leadConnector.issue.message}</span>}</>],
+        {i.leadConnector?.configured && ['jwt', 'other'].includes(i.leadConnector?.tokenKind) && <span className="block mt-1 font-semibold text-amber-800">Configuration warning (not a confirmed authentication failure): LC_PRIVATE_TOKEN doesn't look like a Private Integration token (those start with “pit-”).{i.leadConnector.tokenKind === 'jwt' ? ' It looks like an older API key or app token.' : ''} Copy the token from the sub-account's Settings → Private Integrations.</span>}
+        <RecordedHealth configured={!!i.leadConnector?.configured} health={i.leadConnector?.health} legacyIssue={i.leadConnector?.issue} /></>],
     ...(i.verification?.provider === 'twilio' ? [['Twilio Verify', !!i.verification.configured, i.verification.configured ? 'Selected for booking codes by text or email. Email verification does not verify a phone. Configuration is present; delivery still needs a controlled test.' : 'Selected but not configured. Online booking waits for the server-side Verify connection. Do not paste credentials here.'] as [string, boolean, React.ReactNode]] : []),
     ...(i.sms?.provider === 'twilio' ? [['Twilio appointment texts', !!i.sms.configured, i.sms.configured ? 'Selected sender configuration is present. Customer texts require consent; company approval texts are for emergency same-day requests only. Delivery is not yet established by this status.' : 'Selected but not ready. An approved sender and server-side messaging configuration are required. Verify does not send booking confirmations.'] as [string, boolean, React.ReactNode]] : []),
     ['Smart chat', !!i.assistant?.configured, i.assistant?.configured ? `Gemini (${i.assistant.model}) reads typed messages. It can't set prices or book — BOB's rules do that.` : 'Add GEMINI_API_KEY in Vercel. Until then BOB uses buttons and keyword matching.'],
-    ['Maps', i.maps?.provider === 'google' && !i.maps?.issue,
-      <>{i.maps?.provider === 'google' ? 'Google finds addresses and drive times enforce the drive-time rules. If Google refuses, the free Census lookup is used.' : 'Free Census address lookup with straight-line drive estimates. Add GOOGLE_MAPS_API_KEY for real drive times.'}
-        {i.maps?.issue && <span className="block mt-1 font-semibold text-amber-800">Google lookup failed {when(i.maps.issue.at)}: {i.maps.issue.message}</span>}</>],
+    ['Maps', i.maps?.provider === 'google' && i.maps?.health?.status === 'healthy' && Number.isFinite(i.maps?.health?.lastSuccessAt) && i.maps.health.lastSuccessAt > 0,
+      <>{i.maps?.provider === 'google' ? 'Google configuration is present for address and driving-route lookups. Driving-distance coverage stays unverified if road routing fails.' : 'Census address lookup only. Measured driving routes are unavailable; automatic bookings that need a travel check stay blocked. Add GOOGLE_MAPS_API_KEY for measured driving routes.'}
+        <RecordedHealth configured={i.maps?.provider === 'google'} health={i.maps?.health} legacyIssue={i.maps?.issue} /></>],
     ['Database', !!i.database, i.database === 'supabase-rest' ? 'Supabase (ChatDaddy project), through the service key.' : i.database === 'postgres' ? 'Postgres connection string.' : 'Local test database — data is not kept.'],
-    ...(i.lastError ? [['Last server error', false, <span className="text-rose-800">{when(i.lastError.at)} on {i.lastError.path}: {i.lastError.message}</span>] as [string, boolean, React.ReactNode]] : []),
+    ...(i.lastError ? [['Server error history', false, <details><summary className="cursor-pointer">Previous server error — not a current health check</summary><p>{when(i.lastError.at)} on {i.lastError.path}: {i.lastError.message}</p></details>] as [string, boolean, React.ReactNode]] : []),
   ];
   return (
-    <Section icon={<Link2 size={18} />} title="Connections" description="Keys live in Vercel environment variables. Nothing secret is shown here.">
+    <Section icon={<Link2 size={18} />} title="Connections" description="Keys live in Vercel environment variables. Refresh reloads recorded status only; it does not run external provider checks." action={<button type="button" className={subtleButton} disabled={busy || loading} onClick={() => void refresh()}>{loading ? 'Refreshing recorded status…' : 'Refresh recorded status'}</button>}>
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" className={subtleButton} disabled={accountsBusy || busy} onClick={() => void refreshAccounts()}>{accountsBusy ? 'Loading account names…' : 'Refresh account names'}</button>
+        <p className="text-xs text-slate-500">Reads account names only. Does not send messages or test routing. Google and Gemini account identity is not verified here.</p>
+      </div>
+      {accountsError && <ErrorNote>{accountsError}</ErrorNote>}
       <div className="divide-y divide-slate-100">
         {rows.map(([name, ok, detail, action]) => (
           <div key={name} className="flex items-start justify-between gap-3 py-3">
-            <div className="flex items-start gap-3"><Dot ok={ok} /><div><p className="text-sm font-extrabold text-slate-900">{name}</p><div className="text-xs text-slate-500 leading-snug max-w-xl">{detail}</div></div></div>
+            <div className="flex items-start gap-3"><Dot ok={ok} /><div><p className="text-sm font-extrabold text-slate-900">{name}</p><div className="text-xs text-slate-500 leading-snug max-w-xl">{detail}{name !== 'Server error history' && <AccountIdentity account={accounts[name]} />}</div></div></div>
             {action}
           </div>
         ))}
@@ -143,7 +180,7 @@ function Technicians({ techs, onChange }: { techs: Technician[]; onChange: (next
   );
 }
 
-function Answers() {
+function Answers({ active = true }: { active?: boolean }) {
   const { data, mutate, showToast } = useDashboard();
   const [editing, setEditing] = useState<any>(null);
   const [filter, setFilter] = useState<'all' | 'draft'>('all');
@@ -192,7 +229,7 @@ function Answers() {
         ))}
       </div>
       {error && !editing && <ErrorNote>{error}</ErrorNote>}
-      {editing && (
+      {editing && active && (
         <Modal title={faqs.some((f) => f.id === editing.id) ? 'Edit answer' : 'New answer'} onClose={() => setEditing(null)}>
           <form className="space-y-4" onSubmit={save}>
             <Field label="Question"><input className={inputClass} required value={editing.question} onChange={(e) => setEditing({ ...editing, question: e.target.value })} /></Field>
@@ -264,7 +301,32 @@ function SaveDock({ changed, busy, error, onSave, onDiscard }: { changed: string
   );
 }
 
-export function SettingsPage() {
+export const SETTINGS_PAGES = [
+  ['connections', 'Connections'], ['booking', 'Booking & messages'], ['schedule', 'Scheduling & team'],
+  ['services', 'Services & prices'], ['coverage', 'Service area'], ['business', 'Business & website'],
+  ['answers', 'Answers'], ['security', 'Security'],
+] as const;
+type SettingsPageId = typeof SETTINGS_PAGES[number][0];
+export function settingsPageFromSearch(search: string): SettingsPageId {
+  const value = new URLSearchParams(search).get('settings');
+  return SETTINGS_PAGES.some(([id]) => id === value) ? value as SettingsPageId : 'connections';
+}
+
+export function SettingsPage({ active = true }: { active?: boolean }) {
+  const [page, setPage] = useState<SettingsPageId>(() => settingsPageFromSearch(location.search));
+  const heading = React.useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    const restore = () => setPage(settingsPageFromSearch(location.search));
+    window.addEventListener('popstate', restore);
+    return () => window.removeEventListener('popstate', restore);
+  }, []);
+  const navigate = (next: SettingsPageId) => {
+    if (next === page) return;
+    const url = new URL(location.href);
+    url.searchParams.set('tab', 'settings'); url.searchParams.set('settings', next);
+    history.pushState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    setPage(next); heading.current?.focus(); window.scrollTo({ top: 0 });
+  };
   const { data, mutate } = useDashboard();
   const [c, setC] = useState<any>(() => structuredClone(data.config));
   const [dirty, setDirty] = useState(false);
@@ -272,6 +334,12 @@ export function SettingsPage() {
   const [text, setText] = useState(() => ({ zips: data.config.serviceZips.join(', '), travel: (data.config.travelZips || []).join(', '), blocked: data.config.blockedDates.join(', '), weekday: data.config.weekdayStarts.join(', '), saturday: data.config.saturdayStarts.join(', ') }));
   const [address, setAddress] = useState(''), [check, setCheck] = useState<any>(null);
   const [techs, setTechs] = useState<Technician[]>(data.technicians), [techDirty, setTechDirty] = useState(false);
+  useEffect(() => {
+    if (!dirty && !techDirty) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirty, techDirty]);
   useEffect(() => { if (!techDirty) setTechs(data.technicians); }, [data.technicians, techDirty]);
   useEffect(() => {
     if (dirty) return;
@@ -326,9 +394,19 @@ export function SettingsPage() {
         <a className={secondaryButton} href="/api/admin/export"><Download size={15} />Download backup</a>
       </div>
 
-      <Connections />
+      <nav aria-label="Settings sections" className="flex flex-wrap gap-2 rounded-2xl border border-slate-200 bg-white p-3">
+        {SETTINGS_PAGES.map(([id, label]) => <button key={id} type="button" aria-current={page === id ? 'page' : undefined} onClick={() => navigate(id)} className={`rounded-xl px-3 py-2 text-sm font-bold transition-colors ${page === id ? 'bg-orange-500 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>{label}</button>)}
+      </nav>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 ref={heading} tabIndex={-1} className="text-lg font-extrabold text-slate-800 outline-none">{SETTINGS_PAGES.find(([id]) => id === page)?.[1]}</h3>
+        {changed.length > 0 && <p role="status" className="text-sm font-semibold text-amber-800">Unsaved {changed.join(' and ')} — kept as you switch sections.</p>}
+      </div>
+      <div hidden={page !== 'connections'} className="space-y-6" data-settings-panel="connections">
+            <Connections />
+      </div>
 
-      <Section icon={<CalendarClock size={18} />} title="Online booking" description="Customers can only confirm a visit when everything on the right is in place."
+      <div hidden={page !== 'booking'} className="space-y-6" data-settings-panel="booking">
+            <Section icon={<CalendarClock size={18} />} title="Online booking" description="Customers can only confirm a visit when everything on the right is in place."
         action={<span className={`text-xs font-black px-3 py-1 rounded-full border ${c.bookingEnabled ? 'bg-emerald-50 text-emerald-800 border-emerald-300' : 'bg-slate-100 text-slate-600 border-slate-300'}`}>{c.bookingEnabled ? 'Online booking on' : 'Online booking off'}</span>}>
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-6">
           <div>
@@ -353,7 +431,7 @@ export function SettingsPage() {
         </div>
       </Section>
 
-      <Section icon={<MessageSquare size={18} />} title="Owner booking alerts" description="Optional texts after ChatDaddy successfully confirms an appointment. These are separate from emergency same-day approval requests and do not hold up a booking.">
+            <Section icon={<MessageSquare size={18} />} title="Owner booking alerts" description="Optional texts after ChatDaddy successfully confirms an appointment. These are separate from emergency same-day approval requests and do not hold up a booking.">
         <Toggle checked={c.bookingOwnerSmsEnabled === true} onChange={(v) => update('bookingOwnerSmsEnabled', v)} label="Text me when an appointment is booked" detail="Off by default. Requires the recipient number below and a configured, approved texting sender. Saving this setting does not send a test text." />
         <div className="max-w-md">
           <Field label="Your mobile number for booking alerts" hint="Required when enabled. Enter the number that should receive these alerts; no approver or customer number is used automatically.">
@@ -364,7 +442,7 @@ export function SettingsPage() {
         {c.bookingOwnerSmsEnabled === true && !data.integrations?.sms?.configured && <p role="status" className="text-sm font-semibold text-amber-800">The selected texting provider is not ready. Alerts cannot be sent until its sender is configured.</p>}
       </Section>
 
-      <Section icon={<ShieldCheck size={18} />} title="Approvals" description="Only emergency same-day visits use online approval and company approval texts. The time is held for up to 30 minutes. Other configured approval-only services and unsafe overflow exceptions remain office-only; these selections do not bypass those safeguards.">
+            <Section icon={<ShieldCheck size={18} />} title="Approvals" description="Only emergency same-day visits use online approval and company approval texts. The time is held for up to 30 minutes. Other configured approval-only services and unsafe overflow exceptions remain office-only; these selections do not bypass those safeguards.">
         <div className="flex flex-wrap gap-x-6">
           {families.map((f) => (
             <Toggle key={f} checked={c.approvalServices.includes(f)} label={(PACKAGES as any)[f].short}
@@ -377,8 +455,10 @@ export function SettingsPage() {
           <Field label="Approver email"><input className={inputClass} type="email" value={c.approver?.email || ''} onChange={(e) => nested('approver', { email: e.target.value })} /></Field>
         </div>
       </Section>
+      </div>
 
-      <Section icon={<Route size={18} />} title="Route rules" description="From the scheduling workbook. Same-day and 5 PM overflow start off; turn them on when the crew is ready.">
+      <div hidden={page !== 'schedule'} className="space-y-6" data-settings-panel="schedule">
+            <Section icon={<Route size={18} />} title="Route rules" description="From the scheduling workbook. Same-day and 5 PM overflow start off; turn them on when the crew is ready.">
         <Toggle checked={c.routeScoring} onChange={(v) => update('routeScoring', v)} label="Rank open times by route fit" detail="Same micro-zone and short hops first; an isolated stop or a third zone in a day ranks lower." />
         <Toggle checked={c.nearbyFirst} onChange={(v) => update('nearbyFirst', v)} label="Offer times next to jobs already booked nearby first" />
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -413,7 +493,32 @@ export function SettingsPage() {
         <div className="max-w-xs"><Dollars label="Daily revenue target per tech" value={c.dailyRevenueTargetCents} onChange={(n) => update('dailyRevenueTargetCents', n)} hint="Shown on the dashboard only. Never affects booking." /></div>
       </Section>
 
-      <Section icon={<Tag size={18} />} title="Services and prices" description="BOB picks the 1-story, 2-story or upstairs version from the customer's answers and adds the Gas Appliance Safety Procedure for gas dryers on cleanings. Names match your Jobber products.">
+            <Section icon={<CalendarClock size={18} />} title="Hours and capacity" description="Arizona time. Jobber's calendar still decides which of these times are actually open.">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Field label="Mon–Fri start times" hint="24-hour, comma separated"><input className={inputClass} value={text.weekday} onChange={(e) => { setText({ ...text, weekday: e.target.value }); update('weekdayStarts', list(e.target.value)); }} /></Field>
+          <Field label="Mon–Fri close"><input className={inputClass} type="time" value={c.weekdayClose} onChange={(e) => update('weekdayClose', e.target.value)} /></Field>
+          <Field label="Saturday start times"><input className={inputClass} value={text.saturday} onChange={(e) => { setText({ ...text, saturday: e.target.value }); update('saturdayStarts', list(e.target.value)); }} /></Field>
+          <Field label="Saturday close"><input className={inputClass} type="time" value={c.saturdayClose} onChange={(e) => update('saturdayClose', e.target.value)} /></Field>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <Num label="Most jobs per day" value={c.maxJobsPerDay} onChange={(n) => update('maxJobsPerDay', n)} />
+          <Num label="Booking notice" suffix="hours" value={c.leadHours} onChange={(n) => update('leadHours', n)} />
+          <Num label="Book up to" suffix="days ahead" value={c.horizonDays} onChange={(n) => update('horizonDays', n)} />
+        </div>
+        <div>
+          <p className="text-xs font-bold text-slate-700">Technicians taking online bookings</p>
+          <div className="flex flex-wrap gap-x-6">
+            {data.technicians.map((t) => <Toggle key={t.id} checked={c.activeTechnicianIds.includes(t.id)} label={t.name} onChange={(v) => update('activeTechnicianIds', v ? [...c.activeTechnicianIds, t.id] : c.activeTechnicianIds.filter((id: string) => id !== t.id))} />)}
+          </div>
+        </div>
+        <Field label="Closed dates" hint="YYYY-MM-DD, comma separated"><textarea rows={2} className={inputClass} value={text.blocked} onChange={(e) => { setText({ ...text, blocked: e.target.value }); update('blockedDates', list(e.target.value)); }} /></Field>
+      </Section>
+
+            <Technicians techs={techs} onChange={(next) => { setTechs(next); setTechDirty(true); }} />
+      </div>
+
+      <div hidden={page !== 'services'} className="space-y-6" data-settings-panel="services">
+            <Section icon={<Tag size={18} />} title="Services and prices" description="BOB picks the 1-story, 2-story or upstairs version from the customer's answers and adds the Gas Appliance Safety Procedure for gas dryers on cleanings. Names match your Jobber products.">
         {categories.map((cat) => (
           <div key={cat} className="overflow-x-auto">
             <table className="w-full text-sm min-w-[560px]">
@@ -444,8 +549,10 @@ export function SettingsPage() {
           <Field label="How BOB describes an assessment"><textarea rows={3} className={inputClass} value={c.assessmentProcess} onChange={(e) => update('assessmentProcess', e.target.value)} /></Field>
         </div>
       </Section>
+      </div>
 
-      <Section icon={<MapPin size={18} />} title="Service area map" description="Move the base point, adjust distance limits, and draw included or excluded areas. Every customer address is checked against your saved map rules.">
+      <div hidden={page !== 'coverage'} className="space-y-6" data-settings-panel="coverage">
+            <Section icon={<MapPin size={18} />} title="Service area map" description="Move the base point, adjust distance limits, and draw included or excluded areas. Every customer address is checked against your saved map rules.">
         <Field label="Coverage method" hint="Save settings to activate a changed coverage method."><select className={inputClass} value={c.serviceAreaMode} onChange={(e) => update('serviceAreaMode', e.target.value)}><option value="driving_distance">Driving distance from base</option><option value="radius">Radius from base</option><option value="zip">Existing ZIP-code coverage</option></select></Field>
         <Suspense fallback={<p className="text-sm text-slate-500">Loading service area map…</p>}><ServiceAreaMap config={c} onChange={update} /></Suspense>
         {c.serviceAreaMode === 'zip' && <details className="rounded-xl border border-slate-200 p-4"><summary className="font-bold text-sm text-slate-700 cursor-pointer">Existing ZIP-code coverage settings</summary><div className="space-y-4 mt-4">
@@ -499,29 +606,10 @@ export function SettingsPage() {
         {['driving_distance', 'radius'].includes(c.serviceAreaMode) && <div className="grid sm:grid-cols-2 gap-3"><Num label="Drive between jobs under" suffix="min" value={c.maxDriveBetweenJobsMin} onChange={(n) => update('maxDriveBetweenJobsMin', n)} /><Num label="Minimum gap between jobs" suffix="min" value={c.bufferMinutes} onChange={(n) => update('bufferMinutes', n)} /></div>}
         <p className="text-sm font-semibold text-slate-700">Same-day emergency requests must be received before 2 p.m. Arizona time. Technician availability and final booking approval are required.</p>
       </Section>
+      </div>
 
-      <Section icon={<CalendarClock size={18} />} title="Hours and capacity" description="Arizona time. Jobber's calendar still decides which of these times are actually open.">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Mon–Fri start times" hint="24-hour, comma separated"><input className={inputClass} value={text.weekday} onChange={(e) => { setText({ ...text, weekday: e.target.value }); update('weekdayStarts', list(e.target.value)); }} /></Field>
-          <Field label="Mon–Fri close"><input className={inputClass} type="time" value={c.weekdayClose} onChange={(e) => update('weekdayClose', e.target.value)} /></Field>
-          <Field label="Saturday start times"><input className={inputClass} value={text.saturday} onChange={(e) => { setText({ ...text, saturday: e.target.value }); update('saturdayStarts', list(e.target.value)); }} /></Field>
-          <Field label="Saturday close"><input className={inputClass} type="time" value={c.saturdayClose} onChange={(e) => update('saturdayClose', e.target.value)} /></Field>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <Num label="Most jobs per day" value={c.maxJobsPerDay} onChange={(n) => update('maxJobsPerDay', n)} />
-          <Num label="Booking notice" suffix="hours" value={c.leadHours} onChange={(n) => update('leadHours', n)} />
-          <Num label="Book up to" suffix="days ahead" value={c.horizonDays} onChange={(n) => update('horizonDays', n)} />
-        </div>
-        <div>
-          <p className="text-xs font-bold text-slate-700">Technicians taking online bookings</p>
-          <div className="flex flex-wrap gap-x-6">
-            {data.technicians.map((t) => <Toggle key={t.id} checked={c.activeTechnicianIds.includes(t.id)} label={t.name} onChange={(v) => update('activeTechnicianIds', v ? [...c.activeTechnicianIds, t.id] : c.activeTechnicianIds.filter((id: string) => id !== t.id))} />)}
-          </div>
-        </div>
-        <Field label="Closed dates" hint="YYYY-MM-DD, comma separated"><textarea rows={2} className={inputClass} value={text.blocked} onChange={(e) => { setText({ ...text, blocked: e.target.value }); update('blockedDates', list(e.target.value)); }} /></Field>
-      </Section>
-
-      <Section icon={<Building2 size={18} />} title="Office contact and visit prep">
+      <div hidden={page !== 'business'} className="space-y-6" data-settings-panel="business">
+            <Section icon={<Building2 size={18} />} title="Office contact and visit prep">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Office phone" hint="Shown in confirmations and when online booking can't help."><PhoneInput className={inputClass} type="tel" value={c.phone} onValueChange={(value) => update('phone', value)} /></Field>
           <Field label="Office email"><input className={inputClass} type="email" value={c.email} onChange={(e) => update('email', e.target.value)} /></Field>
@@ -529,20 +617,24 @@ export function SettingsPage() {
         <Field label="What customers should do before the visit"><textarea rows={3} className={inputClass} value={c.preparation} onChange={(e) => update('preparation', e.target.value)} /></Field>
       </Section>
 
-      <Technicians techs={techs} onChange={(next) => { setTechs(next); setTechDirty(true); }} />
-      <Answers />
-
-      <Section icon={<Code size={18} />} title="Add BOB to dryerventsquadaz.com" description="Paste this before the closing </body> tag on the website. It adds the chat button; the office dashboard is never exposed.">
+            <Section icon={<Code size={18} />} title="Add BOB to dryerventsquadaz.com" description="Paste this before the closing </body> tag on the website. It adds the chat button; the office dashboard is never exposed.">
         <pre className="text-xs bg-slate-900 text-orange-200 rounded-2xl p-4 overflow-x-auto">{embed}</pre>
         <div className="flex gap-2">
           <button className={secondaryButton} onClick={() => navigator.clipboard?.writeText(embed)}>Copy</button>
           <button className={subtleButton} onClick={() => saveText('BOB-website-embed.html', embed, 'text/html')}><Download size={15} />Download</button>
         </div>
       </Section>
+      </div>
 
-      <Password />
+      <div hidden={page !== 'answers'} className="space-y-6" data-settings-panel="answers">
+            <Answers active={active && page === 'answers'} />
+      </div>
 
-      <SaveDock changed={changed} busy={busy} error={error} onSave={save} onDiscard={discard} />
+      <div hidden={page !== 'security'} className="space-y-6" data-settings-panel="security">
+            <Password />
+      </div>
+
+      {active && <SaveDock changed={changed} busy={busy} error={error} onSave={save} onDiscard={discard} />}
     </div>
   );
 }

@@ -80,6 +80,7 @@ test("a Jobber timeout is held for the office: not confirmed, not retried, time 
   assert.equal(a.jobberState, "uncertain");
   const missing = await h.call(`/api/admin/appointments/${a.id}/resolve`, { method: "POST", cookie, body: { outcome: "in_jobber" } });
   assert.equal(missing.status, 400, "the office must give the Jobber job number it found");
+  h.jobber.visits.push({ id: 'verified-visit', jobNumber: 4521, start: Date.parse(a.scheduledAt), end: Date.parse(a.scheduledAt) + a.durationMins * 60_000, allDay: false, jobberUserIds: ['J-RYAN'], address: a.address });
   const found = await h.call(`/api/admin/appointments/${a.id}/resolve`, { method: "POST", cookie, body: { outcome: "in_jobber", jobNumber: "4521" } });
   assert.equal(found.status, 200);
   const [done] = await h.store.appointments().then((x) => x.filter((y) => y.id === a.id));

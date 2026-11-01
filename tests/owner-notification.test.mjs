@@ -98,6 +98,7 @@ test('uncertain Jobber appointment alerts only after office confirms it exists, 
   assert.equal(calls.length, 0);
   const [a] = await h.store.appointments();
   const cookie = await h.login();
+  h.jobber.visits.push({ id: 'verified-visit', jobNumber: 123, start: Date.parse(a.scheduledAt), end: Date.parse(a.scheduledAt) + a.durationMins * 60_000, allDay: false, jobberUserIds: ['J-RYAN'], address: a.address });
   const resolved = await h.call(`/api/admin/appointments/${a.id}/resolve`, { method: 'POST', cookie, body: { outcome: 'in_jobber', jobNumber: '123' } });
   assert.equal(resolved.status, 200, JSON.stringify(resolved.data));
   assert.equal(calls.length, 1);

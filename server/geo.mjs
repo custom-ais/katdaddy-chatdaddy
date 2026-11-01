@@ -1,12 +1,14 @@
+import { createHash } from "node:crypto";
+import { createIntegrationStatus } from "./integration-status.mjs";
 // Geocoding + drive times.
 // With GOOGLE_MAPS_API_KEY: Google Geocoding API + Routes API (real road drive times).
-// Without it: US Census geocoder (free) + a straight-line estimate. The estimate is
-// fine for testing but too rough to enforce the 20-minute rule in production.
+// Without it: US Census geocoder (free); drive feasibility stays unknown.
+// Estimates are exported for tests/display only, never used by hard scheduling rules.
 // If Google refuses or errors, the Census lookup is tried next. When every lookup fails the
 // error has code GEO_UNAVAILABLE, and the reason is kept for the office dashboard.
 
 const GEOCODE_TTL = 60 * 60 * 24 * 90;
-const DRIVE_TTL = 60 * 60 * 24 * 30;
+const DRIVE_TTL = 5 * 60; // Road measurements expire quickly; final checks bypass cache.
 
 export function normalizeAddress(text) {
   return String(text || "").toLowerCase().replace(/[.,#]/g, " ").replace(/\s+/g, " ").trim();
@@ -22,7 +24,7 @@ export function haversineMiles(a, b) {
 /** West Valley grid roads: ~1.3x detour at ~32 mph average. */
 export const estimateDriveMinutes = (a, b) => Math.round((haversineMiles(a, b) * 1.3 * 60) / 32);
 
-const pointKey = (p) => `${p.lat.toFixed(4)},${p.lng.toFixed(4)}`;
+const pointKey = (p) => `${p.lat},${p.lng}`;
 const LOOKUP_TIMEOUT_MS = 8000;
 const ISSUE_KEY = "diag:geo";
 // Address suggestions lean toward the West Valley (Places allows a 50 km bias circle).
@@ -47,6 +49,16 @@ export function googleFix(err, httpStatus, api) {
 }
 
 export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY || "", fetchImpl = fetch, clock = () => Date.now() } = {}) {
+  const routeRevision = createHash('sha256').update(`google-road-measured-v2:${googleKey}`).digest('hex');
+  const validPoint = p => p && Number.isFinite(p.lat) && Number.isFinite(p.lng) && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180;
+  const cacheKey = (kind, from, to) => `${kind}:${routeRevision}:${pointKey(from)}>${pointKey(to)}`;
+  const recent = hit => hit && Number.isFinite(hit.measuredAt) && clock() >= hit.measuredAt && clock() - hit.measuredAt < DRIVE_TTL * 1000;
+  const status = createIntegrationStatus({ cache, provider: 'google', revision: createHash('sha256').update(`google-maps-v1:${googleKey}`).digest('hex'), configured: Boolean(googleKey), operations: ['geocode', 'places', 'routes'], clock, legacyKey: ISSUE_KEY });
+  const safeMessage = message => String(message || '').split(googleKey || '\0').join('[redacted]').replace(/([?&]key=)[^&\s)]+/gi, '$1[redacted]');
+  const observe = async (operation, fn) => {
+    try { const result = await fn(); await status.recordSuccess(operation); return result; }
+    catch (error) { await status.recordFailure(operation, safeMessage(error.message)); throw error; }
+  };
   /** GET a JSON API with a time limit; an error page or a hang becomes a plain Error. */
   async function getJson(url, label) {
     let response;
@@ -67,7 +79,8 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
 
   async function geocodeGoogle(address) {
     const params = new URLSearchParams({ address, components: "country:US", key: googleKey });
-    const { json } = await getJson(`https://maps.googleapis.com/maps/api/geocode/json?${params}`, "Google address lookup");
+    const { response, json } = await getJson(`https://maps.googleapis.com/maps/api/geocode/json?${params}`, "Google address lookup");
+    if (!response.ok) throw new Error(`Google address lookup returned ${response.status}`);
     if (json.status === "ZERO_RESULTS") return null;
     // e.g. REQUEST_DENIED when the Geocoding API isn't enabled or the key only allows websites.
     if (json.status !== "OK") throw new Error(`Google address lookup refused: ${json.status}${json.error_message ? ` (${json.error_message})` : ""}`);
@@ -115,10 +128,10 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
     for (const lookup of lookups) {
       let result;
       try {
-        result = await lookup(address);
+        result = lookup === geocodeGoogle ? await observe("geocode", () => lookup(address)) : await lookup(address);
       } catch (error) {
-        problems.push(error.message);
-        console.warn("[geo]", error.message);
+        problems.push(safeMessage(error.message));
+        console.warn("[geo]", safeMessage(error.message));
         continue;
       }
       await cache.kvSet(key, result || { miss: true }, result ? GEOCODE_TTL : 6 * 3600);
@@ -138,13 +151,13 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
     const err = googleErrorOf(json);
     const reason = err ? `${err.status || response.status}${err.message ? ` (${err.message})` : ""}` : response.status;
     const fix = googleFix(err, response.status, label.includes("Routes") ? "Routes API" : "Places API (New)");
-    const message = `${label} failed: ${reason}${fix ? ` ${fix}` : ""}`;
+    const message = safeMessage(`${label} failed: ${reason}${fix ? ` ${fix}` : ""}`);
     await cache.kvSet(ISSUE_KEY, { at: clock(), message }, 60 * 60 * 24 * 7).catch(() => {});
     return new Error(message);
   };
 
   /** Up to 5 suggestions: [{ id, main, secondary }]. Empty without a Google key. */
-  async function suggestAddresses(input, sessionToken) {
+  async function suggestAddressesRaw(input, sessionToken) {
     if (!googleKey) return [];
     const response = await fetchImpl("https://places.googleapis.com/v1/places:autocomplete", {
       method: "POST",
@@ -166,7 +179,7 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
   }
 
   /** The chosen suggestion as street / city / ZIP. Also primes the geocode cache for booking. */
-  async function addressFor(placeId, sessionToken) {
+  async function addressForRaw(placeId, sessionToken) {
     if (!googleKey) return null;
     const qs = sessionToken ? `?sessionToken=${encodeURIComponent(sessionToken)}` : "";
     const response = await fetchImpl(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}${qs}`, {
@@ -208,13 +221,13 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
     try {
       return await fetchImpl("https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix", init);
     } catch (error) {
-      const message = `Google Routes (drive distance) didn't answer: ${error.name === "TimeoutError" ? "timed out" : error.message}`;
+      const message = safeMessage(`Google Routes (drive distance) didn't answer: ${error.name === "TimeoutError" ? "timed out" : error.message}`);
       await cache.kvSet(ISSUE_KEY, { at: clock(), message }, 60 * 60 * 24 * 7).catch(() => {});
       throw new Error(message);
     }
   }
 
-  async function matrix(origin, destinations) {
+  async function matrixRaw(origin, destinations) {
     const wp = (p) => ({ waypoint: { location: { latLng: { latitude: p.lat, longitude: p.lng } } } });
     const response = await routesFetch({
       method: "POST",
@@ -229,25 +242,30 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
     const json = await response.json().catch(() => null);
     // Errors come back as { error } or, because the matrix streams, as [{ error }].
     if (!response.ok || !Array.isArray(json) || googleErrorOf(json)) throw await placesError(response, json, "Google Routes (drive distance)");
+    if (json.some(el => el.status?.code)) throw new Error("Google Routes returned an operation error.");
     // Proto3 JSON omits zero values, so a missing index means 0.
     return json.map((el) => ({
       d: el.destinationIndex ?? 0,
-      minutes: el.condition === "ROUTE_EXISTS" && el.duration ? Math.round(Number(String(el.duration).replace("s", "")) / 60) : null,
+      minutes: el.condition === "ROUTE_EXISTS" && el.duration ? (Number(String(el.duration).replace("s", "")) / 60) : null,
       miles: el.condition === "ROUTE_EXISTS" && !el.status?.code && Number.isFinite(el.distanceMeters) ? el.distanceMeters / 1609.344 : null,
     }));
   }
 
+  const matrix = (origin, destinations) => observe('routes', () => matrixRaw(origin, destinations));
+  const suggestAddresses = (input, sessionToken) => googleKey ? observe('places', () => suggestAddressesRaw(input, sessionToken)) : Promise.resolve([]);
+  const addressFor = (placeId, sessionToken) => googleKey ? observe('places', () => addressForRaw(placeId, sessionToken)) : Promise.resolve(null);
+
   /** pairs: [{from, to}] -> minutes[] in the same order (null when unknown). */
-  async function driveMinutes(pairs) {
+  async function driveMinutes(pairs, { fresh = false } = {}) {
     const out = new Array(pairs.length).fill(null);
     const missing = [];
     await Promise.all(
       pairs.map(async (p, i) => {
-        if (!p.from || !p.to) return;
+        if (!validPoint(p.from) || !validPoint(p.to)) return;
         if (pointKey(p.from) === pointKey(p.to)) return void (out[i] = 0);
-        if (!googleKey) return void (out[i] = estimateDriveMinutes(p.from, p.to));
-        const hit = await cache.kvGet(`drive:${pointKey(p.from)}>${pointKey(p.to)}`);
-        if (hit) out[i] = hit.minutes;
+        if (!googleKey) return; // No measured route: the scheduler must reject required travel legs.
+        const hit = fresh ? null : await cache.kvGet(cacheKey("drive", p.from, p.to));
+        if (recent(hit) && Number.isFinite(hit.minutes) && hit.minutes >= 0) out[i] = hit.minutes;
         else missing.push(i);
       }),
     );
@@ -264,13 +282,13 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
         try {
           elements = await matrix(pairs[chunk[0]].from, chunk.map((i) => pairs[i].to));
         } catch (error) {
-          console.warn("[geo] route matrix unavailable, using estimate:", error.message);
+          console.warn("[geo] measured route unavailable; travel remains unknown:", safeMessage(error.message));
         }
         for (const [pos, i] of chunk.entries()) {
           const el = elements.find((e) => e.d === pos);
-          out[i] = el?.minutes ?? estimateDriveMinutes(pairs[i].from, pairs[i].to);
-          if (el?.minutes != null) {
-            await cache.kvSet(`drive:${pointKey(pairs[i].from)}>${pointKey(pairs[i].to)}`, { minutes: el.minutes }, DRIVE_TTL);
+          out[i] = Number.isFinite(el?.minutes) && el.minutes >= 0 ? el.minutes : null;
+          if (out[i] != null) {
+            await cache.kvSet(cacheKey("drive", pairs[i].from, pairs[i].to), { minutes: out[i], measuredAt: clock() }, DRIVE_TTL);
           }
         }
       }
@@ -279,15 +297,15 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
   }
 
   // Coverage uses measured road miles only. A routing outage must never silently become a radius.
-  async function roadRoutes(pairs) {
+  async function roadRoutes(pairs, { fresh = false } = {}) {
     if (!googleKey) throw Object.assign(new Error("GOOGLE_MAPS_API_KEY isn't set in Vercel. Add it (from a Google Cloud project with the Routes API turned on) and redeploy."), { code: "ROUTING_UNAVAILABLE" });
     const out = Array(pairs.length).fill(null), groups = new Map();
     for (let i = 0; i < pairs.length; i++) {
       const { from, to } = pairs[i];
-      if (!from || !to) continue;
+      if (!validPoint(from) || !validPoint(to)) continue;
       if (pointKey(from) === pointKey(to)) { out[i] = { miles: 0, minutes: 0 }; continue; }
-      const cached = await cache.kvGet(`road:${pointKey(from)}>${pointKey(to)}`);
-      if (cached && Number.isFinite(cached.miles)) { out[i] = cached; continue; }
+      const cached = fresh ? null : await cache.kvGet(cacheKey("road", from, to));
+      if (recent(cached) && Number.isFinite(cached.miles) && cached.miles >= 0) { out[i] = cached; continue; }
       const key = pointKey(from);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(i);
@@ -299,18 +317,18 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
       catch (cause) { throw Object.assign(new Error("Road-distance lookup is unavailable. Please try again or ask the office to review the address."), { code: "ROUTING_UNAVAILABLE", cause }); }
       for (let pos = 0; pos < chunk.length; pos++) {
         const i = chunk[pos], el = elements.find((e) => e.d === pos);
-        if (el?.miles == null) continue;
-        out[i] = { miles: el.miles, minutes: el.minutes };
-        await cache.kvSet(`road:${pointKey(pairs[i].from)}>${pointKey(pairs[i].to)}`, out[i], DRIVE_TTL);
+        if (!Number.isFinite(el?.miles) || el.miles < 0) continue;
+        out[i] = { miles: el.miles, minutes: Number.isFinite(el.minutes) && el.minutes >= 0 ? el.minutes : null, measuredAt: clock() };
+        await cache.kvSet(cacheKey("road", pairs[i].from, pairs[i].to), out[i], DRIVE_TTL);
       }
     }
     return out;
   }
 
   async function serviceAreaSamples(base, maximumMiles) {
-    const key = `area-samples:${pointKey(base)}:${maximumMiles}`;
+    const key = `area-samples:${routeRevision}:${pointKey(base)}:${maximumMiles}`;
     const hit = await cache.kvGet(key);
-    if (hit) return hit;
+    if (recent(hit)) return hit.samples;
     const points = [];
     for (const fraction of [0.25, 0.55, 0.85]) for (let bearing = 0; bearing < 12; bearing++) {
       const angle = bearing * Math.PI / 6, miles = maximumMiles * fraction;
@@ -318,8 +336,8 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
     }
     const routes = await roadRoutes(points.map((to) => ({ from: base, to })));
     const samples = points.map((point, i) => ({ ...point, ...(routes[i] || {}), reachable: Boolean(routes[i]) }));
-    await cache.kvSet(key, samples, 86_400);
+    await cache.kvSet(key, { samples, measuredAt: clock() }, DRIVE_TTL);
     return samples;
   }
-  return { geocode, driveMinutes, roadRoutes, serviceAreaSamples, lastIssue, suggestAddresses, addressFor, suggestions: Boolean(googleKey), provider: googleKey ? "google" : "estimate" };
+  return { geocode, driveMinutes, roadRoutes, serviceAreaSamples, lastIssue, diagnostics: status.snapshot, health: status.snapshot, suggestAddresses, addressFor, suggestions: Boolean(googleKey), provider: googleKey ? "google" : "estimate" };
 }

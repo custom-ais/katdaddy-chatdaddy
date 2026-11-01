@@ -661,14 +661,14 @@ test("an address lookup outage gets a clear, retryable message instead of the ge
   assert.equal(r.data.code, "ADDRESS_LOOKUP_UNAVAILABLE");
   assert.match(r.data.error, /couldn't check that address just now/);
 });
-test("a failed drive-time check from the base address doesn't stop the booking", async (t) => {
+test("a failed drive-time check from the configured base blocks automatic booking", async (t) => {
   const h = await harness(t, { config: { baseAddress: "1 Base Way, Buckeye, AZ 85326" } });
   const token = await h.accept();
   const real = h.geo.geocode;
   h.geo.geocode = async (a) => { if (/Base Way/.test(a)) throw Object.assign(new Error("Address lookup unavailable."), { code: "GEO_UNAVAILABLE" }); return real(a); };
   const r = await h.call("/api/contact", { method: "POST", token, body: contact });
-  assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.equal(r.data.session.travelFeeCents, 0);
+  assert.equal(r.status, 503, JSON.stringify(r.data));
+  assert.equal(r.data.code, "ROUTING_UNAVAILABLE");
 });
 test("an unexpected server error is shown to the office in Connections", async (t) => {
   const h = await harness(t);

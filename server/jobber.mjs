@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // Jobber GraphQL integration for BOB the Booking Bot (Jobber app: "BOB the Booking Bot").
 //
 // - OAuth: tokens live in BOB's database. Refresh tokens ROTATE (each refresh returns a
@@ -177,6 +178,13 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
         const error = new Error(`Jobber HTTP ${response.status} (unreadable response)`);
         throw response.ok || response.status >= 500 ? unsure(error) : error;
       }
+      // A partial mutation response may already have written data. Never replay it.
+      if (mutation && json.data && json.errors?.length) {
+        const partial = unsure(new Error("Jobber mutation returned a partial result; office review is required."));
+        if (json.data.jobCreate?.job?.id) partial.jobberJob = json.data.jobCreate.job;
+        if (json.data.visitCreate?.createdVisits?.[0]?.id) partial.jobberVisit = json.data.visitCreate.createdVisits[0];
+        throw partial;
+      }
       const throttled = response.status === 429 || (json.errors || []).some((e) => /throttl/i.test(e.message || ""));
       if (throttled && attempt < 4) {
         const t = json.extensions?.cost?.throttleStatus;
@@ -188,7 +196,8 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
         const error = new Error(`Jobber HTTP ${response.status}`);
         throw response.status >= 500 ? unsure(error) : error;
       }
-      if (json.errors?.length) throw new Error(`Jobber: ${json.errors[0].message}`);
+      if (json.errors?.length) throw unsure(new Error(`Jobber: ${json.errors[0].message}`));
+      if (mutation && (!json.data || typeof json.data !== "object")) throw unsure(new Error("Jobber mutation returned no readable data; office review is required."));
       return json.data;
     }
     throw new Error("Jobber is busy right now (rate limited).");
@@ -196,7 +205,16 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
 
   const userErrors = (payload, op) => {
     const errors = (payload?.userErrors || []).map((e) => e.message).filter(Boolean);
-    if (errors.length) throw new Error(`Jobber ${op}: ${errors.join("; ")}`);
+    if (errors.length) {
+      const error = new Error(`Jobber ${op}: ${errors.join("; ")}`);
+      if (payload?.job?.id || payload?.client?.id || payload?.properties?.some(p => p?.id) || payload?.createdVisits?.some(v => v?.id)) {
+        error.uncertain = true;
+        if (payload.job?.id) error.jobberJob = payload.job;
+        if (payload.client?.id) error.jobberClientId = payload.client.id;
+        if (payload.createdVisits?.[0]?.id) error.jobberVisit = payload.createdVisits[0];
+      }
+      throw error;
+    }
   };
 
   // ---- Reading ---------------------------------------------------------------------
@@ -209,46 +227,100 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
         pageInfo { hasNextPage endCursor }
         nodes {
           id title startAt endAt allDay
-          assignedUsers(first: 5) { nodes { id } }
-          job { id property { address { street1 street2 city province postalCode } } }
+          assignedUsers(first: 5) { nodes { id } pageInfo { hasNextPage } }
+          job { id jobNumber property { address { street1 street2 city province postalCode } } }
         }
       }
     }`;
 
   /** Visits starting in [from, to). Cached 60s unless fresh. */
   async function readVisits(from, to, { fresh = false } = {}) {
-    const key = `jobber:visits:${Math.floor(from / 3_600_000)}:${Math.floor(to / 86_400_000)}`;
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) throw new Error("A valid Jobber visit lookup interval is required.");
+    const binding = await accountIdentityRevision();
+    if (!appConfigured || !binding) throw new JobberNotConnected();
+    // Exact ranges and the OAuth binding prevent reusing another window/account.
+    const key = `jobber:visits:v2:${binding}:${cfg.version}:${from}:${to}`;
     if (!fresh) {
       const cached = await store.kvGet(key);
       if (cached) return cached;
     }
     const visits = [];
-    let cursor = null;
+    let cursor = null, complete = false;
     for (let page = 0; page < 15; page++) {
       const data = await gql(VISITS, { after: new Date(from).toISOString(), before: new Date(to).toISOString(), cursor });
+      if (!Array.isArray(data?.visits?.nodes) || typeof data.visits.pageInfo?.hasNextPage !== "boolean") throw new Error("Jobber occupancy could not be fully verified.");
       for (const n of data.visits.nodes) {
+        if (typeof n?.id !== "string" || !n.id.trim()) throw new Error("Jobber returned an invalid visit ID. Office review is required.");
         const start = Date.parse(n.startAt);
-        if (!Number.isFinite(start)) continue;
+        const end = n.endAt ? Date.parse(n.endAt) : n.allDay ? start + 86_400_000 : NaN;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("Jobber returned an invalid visit time range. Office review is required.");
+        if (!Array.isArray(n.assignedUsers?.nodes) || typeof n.assignedUsers.pageInfo?.hasNextPage !== "boolean" || n.assignedUsers.pageInfo.hasNextPage) throw new Error("Jobber visit assignment list is incomplete. Office review is required.");
+        if (n.assignedUsers.nodes.some(u => typeof u?.id !== "string" || !u.id)) throw new Error("Jobber visit assignment could not be verified.");
         visits.push({
           id: n.id,
           title: n.title || "",
           start,
-          end: n.endAt ? Date.parse(n.endAt) : start + 90 * 60_000,
+          end,
           allDay: Boolean(n.allDay),
           jobberUserIds: (n.assignedUsers?.nodes || []).map((u) => u.id),
+          jobNumber: n.job?.jobNumber ?? null,
           address: addressLine(n.job?.property?.address),
         });
       }
-      if (!data.visits.pageInfo.hasNextPage) break;
-      cursor = data.visits.pageInfo.endCursor;
+      if (!data.visits.pageInfo.hasNextPage) { complete = true; break; }
+      const next = data.visits.pageInfo.endCursor;
+      if (!next || next === cursor) throw new Error("Jobber occupancy pagination could not be completed.");
+      cursor = next;
     }
-    await store.kvSet(key, visits, 60);
+    if (!complete) throw new Error("Jobber occupancy exceeds the verification limit. Office review is required.");
+    // A refresh during pagination changes the binding conservatively. Do not
+    // populate a cache under stale credentials, even though these fresh rows are usable.
+    if (await accountIdentityRevision() === binding) await store.kvSet(key, visits, 60);
     return visits;
   }
 
   async function listUsers() {
-    const data = await gql(`query BobUsers { users(first: 50) { nodes { id name { full } email { raw } } } }`);
-    return data.users.nodes.map((u) => ({ id: u.id, name: u.name?.full || u.email?.raw || u.id }));
+    const users = [];
+    let cursor = null;
+    for (let page = 0; page < 20; page++) {
+      const data = await gql(`query BobUsers($cursor: String) { users(first: 50, after: $cursor) { nodes { id name { full } email { raw } } pageInfo { hasNextPage endCursor } } }`, { cursor });
+      if (!Array.isArray(data?.users?.nodes)) throw new Error("Jobber users could not be verified.");
+      users.push(...data.users.nodes.map((u) => ({ id: u.id, name: u.name?.full || u.email?.raw || u.id })));
+      if (!data.users.pageInfo?.hasNextPage) return users;
+      const next = data.users.pageInfo.endCursor;
+      if (!next || next === cursor) throw new Error("Jobber users could not be fully verified.");
+      cursor = next;
+    }
+    throw new Error("Jobber users exceed the verification limit. Ask the office to review the connection.");
+  }
+
+  /** Validate account membership before ANY booking mutation. Do not infer a user
+   * from the local technician name or default to the account owner. */
+  async function verifyAssignment(jobberUserId) {
+    if (typeof jobberUserId !== "string" || !jobberUserId.trim() || jobberUserId.length > 200) {
+      throw Object.assign(new Error("Link the active technician to a Jobber user before booking."), { code: "JOBBER_ASSIGNMENT_REQUIRED" });
+    }
+    const user = (await listUsers()).find((candidate) => candidate.id === jobberUserId);
+    if (!user) throw Object.assign(new Error("The selected technician is not a verified user of the connected Jobber account."), { code: "JOBBER_ASSIGNMENT_INVALID" });
+    return user;
+  }
+
+  /** Explicit read-only identity lookup. A configured OAuth client is not evidence
+   * of the connected business. Documented account fields require no special scope:
+   * https://developer.getjobber.com/docs/getting_started/ */
+  // Server-only cache binding. Never include this fingerprint in public identity.
+  async function accountIdentityRevision() {
+    const tokens = await loadTokens();
+    if (!tokens?.refreshToken) return null;
+    return createHash("sha256").update(JSON.stringify([cfg.clientId, tokens.refreshToken, tokens.savedAt || null])).digest("hex");
+  }
+
+  async function accountIdentity() {
+    const data = await gql(`query BobAccountIdentity { account { id name } }`);
+    if (typeof data?.account?.id !== "string" || !data.account.id || typeof data.account.name !== "string" || !data.account.name.trim()) {
+      throw new Error("The connected Jobber account identity could not be verified.");
+    }
+    return { id: data.account.id, name: data.account.name, verified: true, checkedAt: Date.now() };
   }
 
   // ---- Booking ---------------------------------------------------------------------
@@ -290,8 +362,10 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
         }`,
         { clientId: existing.id, input: { properties: [{ address: addr }] } },
       );
-      userErrors(data.propertyCreate, "propertyCreate");
-      return { clientId: existing.id, propertyId: data.propertyCreate.properties[0].id, newClient: false };
+      userErrors(data?.propertyCreate, "propertyCreate");
+      const propertyId = data?.propertyCreate?.properties?.[0]?.id;
+      if (!propertyId) throw Object.assign(new Error("Jobber property creation could not be verified. Office review is required."), { uncertain: true, jobberClientId: existing.id });
+      return { clientId: existing.id, propertyId, newClient: false };
     }
     const input = {
       firstName: contact.firstName,
@@ -308,8 +382,10 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
       }`,
       { input },
     );
-    userErrors(data.clientCreate, "clientCreate");
-    return { clientId: data.clientCreate.client.id, propertyId: data.clientCreate.client.properties[0].id, newClient: true };
+    userErrors(data?.clientCreate, "clientCreate");
+    const clientId = data?.clientCreate?.client?.id, propertyId = data?.clientCreate?.client?.properties?.[0]?.id;
+    if (!clientId || !propertyId) throw Object.assign(new Error("Jobber client/property creation could not be verified. Office review is required."), { uncertain: true, ...(clientId ? { jobberClientId: clientId } : {}) });
+    return { clientId, propertyId, newClient: true };
   }
 
   const local = (ms) => {
@@ -318,8 +394,31 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     return { date: `${p.year}-${p.month}-${p.day}`, time: `${p.hour === "24" ? "00" : p.hour}:${p.minute}:${p.second}`, timezone: cfg.timezone };
   };
 
+  /** Read-only verification for creation and office reconciliation. Never accepts
+   * a job number as proof of a correctly scheduled and assigned visit. */
+  async function verifyScheduledVisit({ visitId, jobNumber, start, end, jobberUserId }) {
+    const hasId = typeof visitId === "string" && Boolean(visitId.trim());
+    const number = String(jobNumber ?? "").trim();
+    const hasNumber = jobNumber != null && number !== "";
+    if ((hasNumber && !/^\d{1,10}$/.test(number)) || (hasId && visitId === "confirmed-by-office") || (!hasId && !/^\d{1,10}$/.test(number)) || typeof jobberUserId !== "string" || !jobberUserId.trim() || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+      throw Object.assign(new Error("A Jobber visit ID or job number, assigned technician and expected time are required for verification."), { code: "JOBBER_VISIT_UNVERIFIED" });
+    }
+    const visits = await readVisits(start - 60_000, end + 60_000, { fresh: true });
+    const exact = v => v.start === start && v.end === end && !v.allDay && v.jobberUserIds.length === 1 && v.jobberUserIds[0] === jobberUserId;
+    // A job number is only a search hint, never proof: require one exact matching
+    // visit in the connected account and return its actual ID for reconciliation.
+    const matches = visits.filter(v => (hasId ? v.id === visitId && (!hasNumber || String(v.jobNumber) === number) : String(v.jobNumber) === number) && exact(v));
+    if (matches.length !== 1) {
+      throw Object.assign(new Error("One uniquely matching Jobber visit with the expected time and technician could not be confirmed."), { code: "JOBBER_VISIT_UNVERIFIED" });
+    }
+    const readback = matches[0];
+    return { id: readback.id, ...(readback.jobNumber != null ? { jobNumber: readback.jobNumber } : {}), startAt: new Date(readback.start).toISOString(), endAt: new Date(readback.end).toISOString(), assignedUserIds: readback.jobberUserIds, assignmentVerified: true };
+  }
+
   /** Creates the job (no visits) and then its one scheduled visit. */
   async function createScheduledJob({ propertyId, title, instructions, lineItems, start, end, jobberUserId }) {
+    await verifyAssignment(jobberUserId);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("A valid scheduled visit interval is required.");
     const created = await gql(
       `mutation BobJobCreate($input: JobCreateAttributes!) {
         jobCreate(input: $input) { job { id jobNumber jobberWebUri } userErrors { message path } }
@@ -341,10 +440,12 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
         },
       },
     );
-    userErrors(created.jobCreate, "jobCreate");
-    const job = created.jobCreate.job;
+    userErrors(created?.jobCreate, "jobCreate");
+    const job = created?.jobCreate?.job;
+    if (!job?.id) throw Object.assign(new Error("Jobber did not return the created job. Office review is required."), { uncertain: true, code: "JOBBER_JOB_UNVERIFIED" });
     const schedule = { startAt: local(start), endAt: local(end), notifyTeam: env.JOBBER_NOTIFY_TEAM !== "false" };
-    if (jobberUserId) schedule.teamMemberIdsToAssign = [jobberUserId];
+    schedule.teamMemberIdsToAssign = [jobberUserId];
+    let createdVisit = null;
     try {
       const visitData = await gql(
         `mutation BobVisitCreate($jobId: EncodedId!, $input: VisitCreateInput!) {
@@ -352,10 +453,24 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
         }`,
         { jobId: job.id, input: { visits: [{ title, instructions: instructions || undefined, schedule }] } },
       );
-      userErrors(visitData.visitCreate, "visitCreate");
-      return { job, visit: visitData.visitCreate.createdVisits?.[0] || null };
+      userErrors(visitData?.visitCreate, "visitCreate");
+      createdVisit = visitData?.visitCreate?.createdVisits?.[0] || null;
+      if (!createdVisit?.id || visitData.visitCreate.createdVisits.length !== 1) throw new Error("Jobber did not return exactly one created visit.");
+      // Read from the existing documented Visits connection, not a guessed root
+      // lookup. fresh:true bypasses any availability cache from before creation.
+      const verified = await verifyScheduledVisit({ visitId: createdVisit.id, start, end, jobberUserId });
+      return { job, visit: { ...createdVisit, ...verified } };
     } catch (error) {
-      error.jobberJob = job; // job exists without a visit — surfaced to the office
+      createdVisit ||= error.jobberVisit || null;
+      error.jobberJob = job; // Preserve known IDs; never re-create a job after a failed readback.
+      if (createdVisit) {
+        error.jobberVisit = createdVisit;
+        error.uncertain = true;
+        error.code = "JOBBER_VISIT_UNVERIFIED";
+      } else if (!error.code && !error.message.startsWith("Jobber visitCreate:")) {
+        error.uncertain = true;
+        error.code = "JOBBER_VISIT_UNVERIFIED";
+      }
       throw error;
     }
   }
@@ -369,6 +484,10 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     gql,
     readVisits,
     listUsers,
+    verifyAssignment,
+    verifyScheduledVisit,
+    accountIdentity,
+    accountIdentityRevision,
     ensureClientAndProperty,
     createScheduledJob,
   };

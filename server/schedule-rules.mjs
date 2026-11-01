@@ -61,7 +61,7 @@ export function blockBelongsTo(block, tech) {
 }
 
 function touchesDate(block, date) {
-  if (!block.allDay) return phoenixDate(new Date(block.start)) === date;
+  // Timed overnight commitments occupy every day they intersect, just like all-day blocks.
   const first = phoenixDate(new Date(block.start));
   const last = phoenixDate(new Date(Math.max(block.start, (block.end || block.start) - 1)));
   return date >= first && date <= last;
@@ -83,7 +83,7 @@ export function evaluateTech({ candidate, tech, blocks, drive, config }) {
   const prev = timed.filter((b) => b.end <= candidate.start).sort((a, b) => b.end - a.end)[0];
   if (prev) {
     const d = drive.get(prev.id)?.toNew ?? null;
-    if (d == null) return { ok: false, reason: "unknown_location" };
+    if (!Number.isFinite(d) || d < 0) return { ok: false, reason: "unknown_location" };
     if (!(d < cap)) return { ok: false, reason: "too_far_from_previous", minutes: d };
     if (prev.end + Math.max(d, buffer) * MIN > candidate.start) return { ok: false, reason: "no_gap_after_previous", minutes: d };
     legs.push(d);
@@ -91,7 +91,7 @@ export function evaluateTech({ candidate, tech, blocks, drive, config }) {
   const next = timed.filter((b) => b.start >= candidate.end).sort((a, b) => a.start - b.start)[0];
   if (next) {
     const d = drive.get(next.id)?.fromNew ?? null;
-    if (d == null) return { ok: false, reason: "unknown_location" };
+    if (!Number.isFinite(d) || d < 0) return { ok: false, reason: "unknown_location" };
     if (!(d < cap)) return { ok: false, reason: "too_far_from_next", minutes: d };
     if (candidate.end + Math.max(d, buffer) * MIN > next.start) return { ok: false, reason: "no_gap_before_next", minutes: d };
     legs.push(d);
@@ -99,7 +99,7 @@ export function evaluateTech({ candidate, tech, blocks, drive, config }) {
   for (const b of mine.filter((x) => x.allDay)) {
     const info = drive.get(b.id);
     const d = info && info.toNew != null && info.fromNew != null ? Math.max(info.toNew, info.fromNew) : null;
-    if (d == null) return { ok: false, reason: "unknown_location" };
+    if (!Number.isFinite(d) || d < 0) return { ok: false, reason: "unknown_location" };
     if (!(d < cap)) return { ok: false, reason: "too_far_from_anytime_visit", minutes: d };
     legs.push(d);
   }

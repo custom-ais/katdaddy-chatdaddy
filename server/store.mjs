@@ -135,7 +135,7 @@ export function createStore(db, { clock = Date.now } = {}) {
     /** Non-cancelled appointments overlapping a window. */
     async activeAppointments(fromMs, toMs, ignoreId = null) {
       const rows = await q(
-        "select id, tech, start_ms, end_ms, data, jobber_visit_id from bob.appointments where status not in ('cancelled','rescheduled','failed') and start_ms<$1 and end_ms>$2 and ($3::text is null or id<>$3)",
+        "select id, tech, start_ms, end_ms, data, jobber_visit_id, status from bob.appointments where status not in ('cancelled','rescheduled','failed') and start_ms<$1 and end_ms>$2 and ($3::text is null or id<>$3)",
         [toMs, fromMs, ignoreId],
       );
       return rows.map((r) => ({
@@ -144,6 +144,7 @@ export function createStore(db, { clock = Date.now } = {}) {
         start: num(r.start_ms),
         end: num(r.end_ms),
         jobberVisitId: r.jobber_visit_id,
+        status: r.status,
         location: r.data?.location || null,
         address: r.data?.address ? `${r.data.address}, ${r.data.city}, AZ ${r.data.zip}` : "",
         overflow: Boolean(r.data?.overflow),

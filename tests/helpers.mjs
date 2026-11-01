@@ -74,6 +74,16 @@ export function fakeJobber({ connected = true } = {}) {
     async listUsers() {
       return [{ id: "J-RYAN", name: "Ryan Boucher" }, { id: "J-ANDREW", name: "Andrew Sulanke" }];
     },
+    async verifyAssignment(id) {
+      const user = (await j.listUsers()).find(user => user.id === id);
+      if (!user) throw new Error("Invalid Jobber mapping");
+      return user;
+    },
+    async verifyScheduledVisit({ visitId, jobNumber, start, end, jobberUserId }) {
+      const found = j.visits.filter(v => (visitId ? v.id === visitId : v.jobNumber === jobNumber) && v.start === start && v.end === end && v.jobberUserIds?.length === 1 && v.jobberUserIds[0] === jobberUserId);
+      if (found.length !== 1) throw new Error("Visit not verified");
+      return { id: found[0].id, assignmentVerified: true };
+    },
     async ensureClientAndProperty(c, a) {
       j.clients.push({ contact: c, address: a });
       return { clientId: `C${j.clients.length}`, propertyId: `P${j.clients.length}` };
@@ -169,7 +179,7 @@ export async function restDb(pglite) {
   return { ...db, close: () => pglite.close() };
 }
 
-export async function harness(t, { ready = true, config = {}, jobber: jobberOpts = {}, lc: lcOpts = {}, dataDir, assistant = null, twilio = null, rest = false, env: envOpts = {} } = {}) {
+export async function harness(t, { ready = true, config = {}, jobber: jobberOpts = {}, lc: lcOpts = {}, dataDir, assistant = null, twilio = null, integrationAccounts = null, rest = false, env: envOpts = {} } = {}) {
   let now = baseTime;
   const clock = () => now;
   const pg = await createPgliteDb(dataDir);
@@ -177,12 +187,13 @@ export async function harness(t, { ready = true, config = {}, jobber: jobberOpts
   const store = createStore(db, { clock });
   await store.init();
   if (ready) await store.set("config", structuredClone({ ...approved, ...config }));
+  if (ready) await store.set("technicians", (await store.technicians()).map(t => ({ ...t, jobberUserId: t.id === "tech-ryan" ? "J-RYAN" : "J-ANDREW" })));
   const jobber = fakeJobber(jobberOpts);
   const lc = fakeLc(lcOpts);
   const geo = fakeGeo();
   const scheduler = createScheduler({ store, jobber, geo });
   const env = { BOB_SETUP_TOKEN: "test-only-setup-token", ...envOpts };
-  const handle = createBobHandler({ store, jobber, lc, geo, scheduler, assistant, twilio, env, clock });
+  const handle = createBobHandler({ store, jobber, lc, geo, scheduler, assistant, twilio, integrationAccounts, env, clock });
   const server = http.createServer((req, res) => handle(req, res));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
