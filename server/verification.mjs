@@ -1,5 +1,6 @@
 // Twilio Verify state is scoped to this booking conversation and exact destination.
 import { createHash } from 'node:crypto';
+import { CODE_DIGITS, isVerificationCode } from '../shared/verification-code.mjs';
 const hash = (s) => createHash('sha256').update(s).digest('hex');
 const TTL = 10 * 60_000, VERIFIED_FOR = 6 * 3_600_000;
 export function createVerification({ store, twilio, clock, fail }) {
@@ -58,7 +59,7 @@ export function createVerification({ store, twilio, clock, fail }) {
       if (v.attempts >= 5) fail(429, 'Too many tries. Send a new code.');
       v.attempts++;
       await store.saveSession(token, data); // Failed provider calls count too.
-      if (!/^\d{6}$/.test(String(code || ''))) fail(400, 'Enter the six-digit code.');
+      if (!isVerificationCode(code)) fail(400, `Enter the ${CODE_DIGITS}-digit code.`);
       let result;
       try { result = await twilio.checkVerification({ sid: v.sid, code: String(code) }); }
       catch { fail(502, 'Verification could not be checked. Please try again or contact the office.'); }

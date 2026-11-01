@@ -24,6 +24,7 @@ import { initialSession, WELCOME, detectSafety } from "../shared/conversation.mj
 import { territoryFor, WEST_VALLEY_ZIPS } from "../shared/territory.mjs";
 import { chatTurn } from "./chat.mjs";
 import { confirmationEmail, confirmationSms, verificationSms, approvalRequestText } from "./messages.mjs";
+import { CODE_DIGITS } from "../shared/verification-code.mjs";
 
 const digest = (v) => createHash("sha256").update(String(v || "")).digest("hex");
 const secret = () => randomBytes(32).toString("base64url");
@@ -470,7 +471,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     const sends = (v.phone === phone ? v.sends || [] : []).filter((t) => now - t < 3_600_000);
     if (sends.length && now - sends.at(-1) < 30_000) return { required: true, sent: false, available: true, to: maskPhone(phone), retryInSeconds: Math.ceil((30_000 - (now - sends.at(-1))) / 1000) };
     if (sends.length >= 4) fail(429, "Too many codes were requested for this number. Please wait an hour, or send the team a request.");
-    const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+    const code = String(randomInt(0, 10 ** CODE_DIGITS)).padStart(CODE_DIGITS, "0");
     try {
       const contactId = await lc.upsertContact({ phone });
       await lc.sendSms(contactId, verificationSms(code));
@@ -866,7 +867,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         if (v.attempts >= 5) fail(429, "Too many tries. Send a new code.");
         const code = String(body.code || "").replace(/\D/g, "");
         v.attempts++;
-        if (!(code.length === 6 && safeEqual(digest(`${code}:${token}:${v.phone}`), v.hash))) {
+        if (!(code.length === CODE_DIGITS && safeEqual(digest(`${code}:${token}:${v.phone}`), v.hash))) {
           await store.saveSession(token, data);
           const left = 5 - v.attempts;
           fail(400, left > 0 ? `That code doesn't match. ${left} ${left === 1 ? "try" : "tries"} left.` : "That code doesn't match. Send a new code.");

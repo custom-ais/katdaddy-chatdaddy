@@ -20,7 +20,7 @@ test("times stay locked until the customer enters the text code", async (t) => {
   assert.ok(!JSON.stringify(r.data).includes(h.lastCode()), "the code is never sent back to the page");
   const early = await h.call("/api/availability", { token });
   assert.equal(early.status, 409);
-  const wrong = await h.call("/api/verify/check", { method: "POST", token, body: { code: "000000" === h.lastCode() ? "111111" : "000000" } });
+  const wrong = await h.call("/api/verify/check", { method: "POST", token, body: { code: "0000" === h.lastCode() ? "1111" : "0000" } });
   assert.equal(wrong.status, 400);
   assert.match(wrong.data.error, /4 tries left/);
   const ok = await h.call("/api/verify/check", { method: "POST", token, body: { code: h.lastCode() } });
@@ -33,7 +33,7 @@ test("a code can't be reused, guessed forever, or carried over to a new phone nu
   const token = await h.accept();
   await h.call("/api/contact", { method: "POST", token, body: contact });
   const code = h.lastCode();
-  for (let i = 0; i < 5; i++) await h.call("/api/verify/check", { method: "POST", token, body: { code: code === "999999" ? "888888" : "999999" } });
+  for (let i = 0; i < 5; i++) await h.call("/api/verify/check", { method: "POST", token, body: { code: code === "9999" ? "8888" : "9999" } });
   assert.equal((await h.call("/api/verify/check", { method: "POST", token, body: { code } })).status, 429, "locked after five wrong tries");
   h.advance(31_000);
   await h.call("/api/verify/send", { method: "POST", token, body: {} });
