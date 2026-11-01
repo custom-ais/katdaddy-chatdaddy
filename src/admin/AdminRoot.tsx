@@ -11,18 +11,26 @@ import { SettingsPage } from './SettingsPage';
 import { NewAppointmentModal } from './NewAppointmentModal';
 import { ErrorNote, Field, ToastContainer, inputClass, primaryButton, secondaryButton } from './ui';
 import { BookingBot } from '../customer/BookingBot';
+import { canViewTab } from '../../shared/admin-permissions.mjs';
+import { ADMIN_TABS, initialAdminTab, invitationLocation } from './access';
+import { UsersPage } from './UsersPage';
+import { InvitationPage } from './InvitationPage';
 
-const TABS: Tab[] = ['appointments', 'inbox', 'analytics', 'activity', 'bot', 'settings'];
+const TABS: Tab[] = ADMIN_TABS;
 
-function SignIn({ setupRequired, onSignedIn }: { setupRequired: boolean; onSignedIn: () => void }) {
-  const [setup, setSetup] = useState(setupRequired);
+function SignIn({ setupRequired, authMode, onSignedIn }: { setupRequired: boolean; authMode?: string; onSignedIn: () => void }) {
+  const individual = authMode === 'named' || new URLSearchParams(location.search).get('account') === '1';
+  const [setup, setSetup] = useState(setupRequired && !individual);
+  const [email, setEmail] = useState(''), [notice, setNotice] = useState('');
   const [password, setPassword] = useState(''), [code, setCode] = useState(''), [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const submit = async (e: React.FormEvent) => {
-    e.preventDefault(); setBusy(true); setError('');
+    e.preventDefault(); setBusy(true); setError(''); setNotice('');
     try {
       if (setup) { await api('/api/admin/setup', { method: 'POST', body: { setupToken: code, password } }); setSetup(false); }
-      await api('/api/admin/login', { method: 'POST', body: { password } });
+      const result = await api('/api/admin/login', { method: 'POST', body: { password, ...(individual ? { email } : {}) } });
+      setPassword('');
+      if (result.pendingCutover) { setNotice('Your account login is verified. Individual account access is awaiting the separately authorized cutover.'); return; }
       onSignedIn();
     } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
   };
@@ -35,9 +43,10 @@ function SignIn({ setupRequired, onSignedIn }: { setupRequired: boolean; onSigne
         </div>
         <div>
           <h1 className="text-2xl font-black text-slate-900 tracking-tight">{setup ? 'Set up the dashboard' : 'Sign in'}</h1>
-          <p className="text-sm text-slate-500 mt-1">{setup ? 'Enter the setup code saved as BOB_SETUP_TOKEN in Vercel, then choose the dashboard password.' : 'Appointments, approvals, prices and booking rules.'}</p>
+          <p className="text-sm text-slate-500 mt-1">{setup ? 'Enter the setup code saved as BOB_SETUP_TOKEN in Vercel, then choose the dashboard password.' : individual ? 'Use your individual account. Your Master Admin chooses which pages and actions you can access.' : 'Appointments, approvals, prices and booking rules.'}</p>
         </div>
         {setup && <Field label="Setup code"><input className={inputClass} value={code} onChange={(e) => setCode(e.target.value)} required autoComplete="one-time-code" /></Field>}
+        {individual && <Field label="Account email"><input className={inputClass} type="email" autoComplete="username" required value={email} onChange={event => setEmail(event.target.value)} /></Field>}
         <Field label={setup ? 'New password (14+ characters)' : 'Password'}>
           <div className="relative">
             <input className={`${inputClass} pr-11`} type={show ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} minLength={setup ? 14 : undefined} autoComplete={setup ? 'new-password' : 'current-password'} required autoFocus />
@@ -45,6 +54,7 @@ function SignIn({ setupRequired, onSignedIn }: { setupRequired: boolean; onSigne
           </div>
         </Field>
         {error && <ErrorNote>{error}</ErrorNote>}
+        {notice && <p role="status" className="rounded-xl bg-blue-50 p-3 text-sm text-blue-900">{notice}</p>}
         <button className={`${primaryButton} w-full`} disabled={busy}><LockKeyhole size={16} />{busy ? 'Signing in…' : setup ? 'Create password and sign in' : 'Sign in'}</button>
         <a className="block text-center text-xs font-bold text-slate-500 hover:text-orange-600" href="/chat">Open the customer chat</a>
       </form>
@@ -88,19 +98,19 @@ export function adminTabFromSearch(search: string): Tab {
 }
 
 function Dashboard({ onSignedOut, focusApproval }: { onSignedOut: () => void; focusApproval: string | null }) {
-  const { toasts, dismissToast, showToast } = useDashboard();
-  const initialTab = adminTabFromSearch(location.search);
-  const [tab, setTab] = useState<Tab>(initialTab);
+  const { data, can, toasts, dismissToast, showToast } = useDashboard();
+  const initialTab = initialAdminTab(location.search, data.access);
+  const [tab, setTab] = useState<Tab | null>(initialTab);
   const [settingsMounted, setSettingsMounted] = useState(initialTab === 'settings');
   useEffect(() => {
     const restore = () => {
-      const next = adminTabFromSearch(location.search);
+      const next = initialAdminTab(location.search, data.access);
       setTab(next);
       if (next === 'settings') setSettingsMounted(true);
     };
     window.addEventListener('popstate', restore);
     return () => window.removeEventListener('popstate', restore);
-  }, []);
+  }, [data.access]);
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
@@ -110,7 +120,7 @@ function Dashboard({ onSignedOut, focusApproval }: { onSignedOut: () => void; fo
     if (j) { p.delete('jobber'); p.set('tab', 'settings'); history.replaceState(null, '', `/admin?${p.toString()}`); }
   }, [showToast]);
   const choose = (t: Tab) => {
-    if (t === tab) return;
+    if (t === tab || !canViewTab(data.access, t)) return;
     const url = new URL(location.href);
     url.searchParams.delete('approval'); url.searchParams.delete('jobber'); url.searchParams.set('tab', t);
     history.pushState(null, '', `${url.pathname}${url.search}${url.hash}`);
@@ -118,39 +128,46 @@ function Dashboard({ onSignedOut, focusApproval }: { onSignedOut: () => void; fo
     window.scrollTo({ top: 0 });
   };
   const signOut = async () => { try { await api('/api/admin/logout', { method: 'POST', body: {} }); } catch {} onSignedOut(); };
+  const allowed = !!tab && canViewTab(data.access, tab);
+  const canBook = can('appointments.view') && can('appointments.manage') && can('finance.view');
 
   return (
     <div className="min-h-dvh bg-slate-100/80">
-      <Header tab={tab} onTab={choose} onNew={() => setCreating(true)} onSignOut={signOut} />
+      <Header tab={tab} onTab={choose} onNew={() => { if (canBook) setCreating(true); }} onSignOut={signOut} />
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        {tab === 'appointments' && <AppointmentManager />}
-        {tab === 'inbox' && <InboxPage focusApproval={focusApproval} />}
-        {tab === 'analytics' && <AnalyticsDashboard onNavigateToAppointments={() => choose('appointments')} />}
-        {tab === 'activity' && <ActivityLogPage />}
-        {tab === 'bot' && <BotPreview />}
-        {settingsMounted && <div hidden={tab !== 'settings'}><SettingsPage active={tab === 'settings'} /></div>}
+        {!allowed && <div role="alert" className="rounded-2xl bg-white border border-slate-200 p-6"><h1 className="text-xl font-bold">Access unavailable</h1><p className="mt-2 text-sm text-slate-600">You do not have access to this page. Choose an available page above or ask your Master Admin to update your access.</p></div>}
+        {allowed && tab === 'appointments' && <AppointmentManager />}
+        {allowed && tab === 'inbox' && <InboxPage focusApproval={focusApproval} />}
+        {allowed && tab === 'analytics' && <AnalyticsDashboard onNavigateToAppointments={() => choose('appointments')} />}
+        {allowed && tab === 'activity' && <ActivityLogPage />}
+        {allowed && tab === 'bot' && <BotPreview />}
+        {allowed && tab === 'users' && <UsersPage />}
+        {settingsMounted && canViewTab(data.access, 'settings') && <div hidden={tab !== 'settings'}><SettingsPage active={tab === 'settings'} /></div>}
       </main>
-      {creating && <NewAppointmentModal onClose={() => setCreating(false)} />}
+      {creating && canBook && <NewAppointmentModal onClose={() => setCreating(false)} />}
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
     </div>
   );
 }
 
 export function AdminRoot() {
-  const [state, setState] = useState<{ phase: 'loading' | 'signin' | 'ready' | 'error'; setupRequired?: boolean; data?: Snapshot; error?: string }>({ phase: 'loading' });
+  const [invitation] = useState(() => invitationLocation(location));
+  const [state, setState] = useState<{ phase: 'loading' | 'signin' | 'ready' | 'error'; setupRequired?: boolean; authMode?: string; data?: Snapshot; error?: string }>({ phase: 'loading' });
   const [focusApproval] = useState(() => new URLSearchParams(location.search).get('approval'));
   const load = useCallback(async () => {
     setState({ phase: 'loading' });
     try {
       const s = await api('/api/admin/status');
-      if (!s.authenticated) return setState({ phase: 'signin', setupRequired: s.setupRequired });
+      if (!s.authenticated) return setState({ phase: 'signin', setupRequired: s.setupRequired, authMode: s.authMode });
       setState({ phase: 'ready', data: await api('/api/admin/data') });
     } catch (e) {
       setState({ phase: 'error', error: (e as Error).message });
     }
   }, []);
-  useEffect(() => { void load(); }, [load]);
-  const signedOut = useCallback(() => setState({ phase: 'signin', setupRequired: false }), []);
+  useEffect(() => { if (!invitation) void load(); }, [load, invitation]);
+  const signedOut = useCallback(() => { void load(); }, [load]);
+
+  if (invitation) return <InvitationPage invitation={invitation} />;
 
   if (state.phase === 'loading') return <div className="min-h-dvh flex items-center justify-center bg-slate-100 text-slate-500"><Loader2 className="animate-spin" /></div>;
   if (state.phase === 'error') {
@@ -164,7 +181,7 @@ export function AdminRoot() {
       </div>
     );
   }
-  if (state.phase === 'signin') return <SignIn setupRequired={!!state.setupRequired} onSignedIn={load} />;
+  if (state.phase === 'signin') return <SignIn setupRequired={!!state.setupRequired} authMode={state.authMode} onSignedIn={load} />;
   return (
     <DashboardProvider initial={state.data!} onSignedOut={signedOut}>
       <Dashboard onSignedOut={signedOut} focusApproval={focusApproval} />

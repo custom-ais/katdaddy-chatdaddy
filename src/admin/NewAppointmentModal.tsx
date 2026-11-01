@@ -12,14 +12,16 @@ const tomorrow10 = () => {
 };
 
 export function NewAppointmentModal({ onClose }: { onClose: () => void }) {
-  const { data, mutate } = useDashboard();
+  const { data, mutate, can } = useDashboard();
   const c = data.config;
+  const canManage = can('appointments.view') && can('appointments.manage');
+  const canSend = can('appointments.send'), canViewFinance = can('finance.view');
   const smsReady = data.integrations?.sms?.enabled !== false && !!data.integrations?.sms?.configured;
   const emailReady = data.integrations?.email?.enabled !== false && !!data.integrations?.email?.configured;
   const [f, setF] = useState({
-    name: '', phone: '', email: '', address: '', city: '', zip: c.serviceZips[0] || '', service: 'cleaning:premium',
+    name: '', phone: '', email: '', address: '', city: '', zip: c.serviceZips?.[0] || '', service: 'cleaning:premium',
     stories: '1-story', upstairs: false, gas: false, noDryer: false, fogging: false, toolRetrieval: false,
-    scheduledAt: tomorrow10(), technicianId: '', urgency: 'normal', notes: '', smsConsent: false, sendConfirmation: true,
+    scheduledAt: tomorrow10(), technicianId: '', urgency: 'normal', notes: '', smsConsent: false, sendConfirmation: canSend,
   });
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const set = (patch: Partial<typeof f>) => setF((x) => ({ ...x, ...patch }));
@@ -39,18 +41,24 @@ export function NewAppointmentModal({ onClose }: { onClose: () => void }) {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!can('appointments.view') || !can('appointments.manage')) {
+      setError('You do not have permission to create appointments.');
+      return;
+    }
     setBusy(true); setError('');
     try {
       await mutate('/api/admin/appointments', {
         name: f.name, phone: f.phone, email: f.email, address: f.address, city: f.city, zip: f.zip,
         route, package: pkg, stories: f.stories, upstairs: f.stories === '2-story' && f.upstairs, gas: f.gas, noDryer: f.noDryer,
         fogging: f.fogging, toolRetrieval: f.toolRetrieval, scheduledAt: new Date(`${f.scheduledAt}:00-07:00`).toISOString(),
-        technicianId: f.technicianId || undefined, urgency: f.urgency, notes: f.notes, smsConsent: f.smsConsent, sendConfirmation: f.sendConfirmation,
+        technicianId: f.technicianId || undefined, urgency: f.urgency, notes: f.notes, smsConsent: f.smsConsent, sendConfirmation: can('appointments.send') && f.sendConfirmation,
       }, 'POST', c.scheduleSource === 'Jobber' ? 'Booked and added to Jobber' : 'Booked');
       onClose();
     } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
   };
   const families = [...TIERS, ...MORE].filter((fam) => (c.services || []).some((s: any) => s.family === fam && s.active !== false));
+
+  if (!canManage) return <Modal title="Office booking" onClose={onClose}><p className="text-sm text-slate-600">You do not have permission to create appointments.</p></Modal>;
 
   return (
     <Modal title="Office booking" subtitle="Phone or walk-in booking — checked against the same schedule and drive-time rules" onClose={onClose}
@@ -64,7 +72,7 @@ export function NewAppointmentModal({ onClose }: { onClose: () => void }) {
             <Field label="Email" className="sm:col-span-2"><input className={inputClass} type="email" value={f.email} onChange={(e) => set({ email: e.target.value })} /></Field>
             <Field label="Street address *" className="sm:col-span-2"><input className={inputClass} required value={f.address} onChange={(e) => set({ address: e.target.value })} placeholder="15420 W Bell Rd" /></Field>
             <Field label="City *"><input className={inputClass} required value={f.city} onChange={(e) => set({ city: e.target.value })} /></Field>
-            <Field label="ZIP *" hint={c.serviceZips.includes(f.zip) ? undefined : 'Add this ZIP to the service area in Settings first.'}><input className={inputClass} required inputMode="numeric" maxLength={5} value={f.zip} onChange={(e) => set({ zip: e.target.value.replace(/\D/g, '') })} /></Field>
+            <Field label="ZIP *" hint={(c.serviceZips || []).includes(f.zip) ? undefined : 'This ZIP must be in the saved service area.'}><input className={inputClass} required inputMode="numeric" maxLength={5} value={f.zip} onChange={(e) => set({ zip: e.target.value.replace(/\D/g, '') })} /></Field>
           </div>
         </div>
 
@@ -73,7 +81,7 @@ export function NewAppointmentModal({ onClose }: { onClose: () => void }) {
           <Field label="Service">
             <select className={inputClass} value={f.service} onChange={(e) => set({ service: e.target.value })}>
               <optgroup label="Cleaning">{families.map((fam) => <option key={fam} value={`cleaning:${fam}`}>{(PACKAGES as any)[fam].short}</option>)}</optgroup>
-              <optgroup label="Repairs"><option value="assessment:">Dryer-vent assessment ({money(c.assessmentPriceCents)})</option><option value="bundle:premium">Premium 1-2-3 + assessment (50% off)</option><option value="bundle:ultimate">Ultimate Protection + assessment (50% off)</option></optgroup>
+              <optgroup label="Repairs"><option value="assessment:">Dryer-vent assessment{canViewFinance && Number.isFinite(c.assessmentPriceCents) ? ` (${money(c.assessmentPriceCents)})` : ''}</option><option value="bundle:premium">Premium 1-2-3 + assessment (50% off)</option><option value="bundle:ultimate">Ultimate Protection + assessment (50% off)</option></optgroup>
             </select>
           </Field>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
@@ -100,12 +108,12 @@ export function NewAppointmentModal({ onClose }: { onClose: () => void }) {
           </div>
           <Field label="Gate codes and notes"><textarea rows={2} className={inputClass} value={f.notes} onChange={(e) => set({ notes: e.target.value })} /></Field>
           <Toggle checked={f.smsConsent} onChange={(v) => set({ smsConsent: v })} label="Customer agreed to appointment texts" />
-          <Toggle checked={f.sendConfirmation} onChange={(v) => set({ sendConfirmation: v })} disabled={!smsReady && !emailReady} label="Send an appointment confirmation" detail={smsReady || emailReady ? "Uses enabled confirmation channels: texts require consent; email requires a customer email address. Verification codes are separate." : "No confirmation sender is ready. Configure SMS or SendGrid in Connections first."} />
+          {canSend ? <Toggle checked={f.sendConfirmation} onChange={(v) => set({ sendConfirmation: v })} disabled={!smsReady && !emailReady} label="Send an appointment confirmation" detail={smsReady || emailReady ? "Uses enabled confirmation channels: texts require consent; email requires a customer email address. Verification codes are separate." : "No confirmation sender is ready. A Master Admin can review Connections."} /> : <p className="text-sm text-slate-600">Your account can create this booking without sending a customer confirmation.</p>}
         </div>
 
         <div className="bg-orange-50 p-4 rounded-2xl flex items-center justify-between border border-orange-200">
-          <div><span className="text-xs font-extrabold text-orange-900">Total</span><p className="text-xl font-black text-orange-600">{quote ? money(quote.totalCents) : '—'}</p>{quote && quote.lineItems.length > 1 && <p className="text-[11px] text-orange-900/70">{quote.lineItems.map((l: any) => l.name).join(' + ')}</p>}</div>
-          <div className="text-right text-xs text-orange-800 font-medium">{quote ? `${quote.durationMins} minutes` : ''}</div>
+          <div><span className="text-xs font-extrabold text-orange-900">Total</span><p className="text-xl font-black text-orange-600">{canViewFinance ? quote && Number.isFinite(quote.totalCents) ? money(quote.totalCents) : '—' : 'Restricted'}</p>{canViewFinance && quote && quote.lineItems.length > 1 && <p className="text-[11px] text-orange-900/70">{quote.lineItems.map((l: any) => l.name).join(' + ')}</p>}</div>
+          <div className="text-right text-xs text-orange-800 font-medium">{quote && Number.isFinite(quote.durationMins) ? `${quote.durationMins} minutes` : ''}</div>
         </div>
         {error && <ErrorNote>{error}</ErrorNote>}
         <div className="flex items-center justify-end gap-3">

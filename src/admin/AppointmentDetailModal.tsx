@@ -10,7 +10,8 @@ const toLocalInput = (iso: string) => new Date(Date.parse(iso) - 7 * 3_600_000).
 const fromLocalInput = (v: string) => new Date(`${v}:00-07:00`).toISOString();
 
 export function AppointmentDetailModal({ appointment: a, onClose }: { appointment: Appointment; onClose: () => void }) {
-  const { data, mutate } = useDashboard();
+  const { data, mutate, can } = useDashboard();
+  const canManage = can('appointments.view') && can('appointments.manage'), canSend = can('appointments.view') && can('appointments.send'), canViewFinance = can('finance.view');
   const linked = isLinked(a);
   const [status, setStatus] = useState(a.status);
   const [urgency, setUrgency] = useState(a.urgency || 'normal');
@@ -29,15 +30,22 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
     try { await fn(); onClose(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
   const save = () => run(() => {
-    const body: any = { revision: a.revision, notes, urgency };
+    if (!can('appointments.view') || !can('appointments.manage')) return Promise.reject(new Error('You have view-only access to appointments.'));
+    const body: any = { revision: a.revision, urgency, ...(can('finance.view') ? { notes } : {}) };
     if (status !== a.status) body.status = status;
     if (!linked && technicianId !== a.technicianId) body.technicianId = technicianId;
     if (!linked && fromLocalInput(scheduledAt) !== new Date(a.scheduledAt).toISOString()) body.scheduledAt = fromLocalInput(scheduledAt);
     if (before || after) body.airflowReadings = { beforeCfm: before ? Number(before) : null, afterCfm: after ? Number(after) : null };
     return mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}`, body, 'PATCH', 'Appointment updated');
   });
-  const resolve = (outcome: 'in_jobber' | 'not_in_jobber') => run(() => mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}/resolve`, { outcome, jobNumber }, 'POST', outcome === 'in_jobber' ? 'Appointment confirmed — check notification status' : 'Released — the time is open again'));
-  const resend = () => run(() => mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}/confirmation`, {}, 'POST', 'Confirmation request processed — check notification status'));
+  const resolve = (outcome: 'in_jobber' | 'not_in_jobber') => {
+    if (!can('appointments.view') || !can('appointments.manage')) return;
+    return run(() => mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}/resolve`, { outcome, jobNumber }, 'POST', outcome === 'in_jobber' ? 'Appointment confirmed — check notification status' : 'Released — the time is open again'));
+  };
+  const resend = () => {
+    if (!can('appointments.view') || !can('appointments.send')) return;
+    return run(() => mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}/confirmation`, {}, 'POST', 'Confirmation request processed — check notification status'));
+  };
   const sms = a.notifications?.sms, email = a.notifications?.email;
 
   return (
@@ -50,25 +58,29 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
         <>
           <div className="flex items-center gap-2">
             {a.jobber?.webUri && <a className={secondaryButton} href={a.jobber.webUri} target="_blank" rel="noreferrer">Open in Jobber<ExternalLink size={14} /></a>}
-            {a.status === 'confirmed' && ((data.integrations?.sms?.enabled !== false && data.integrations?.sms?.configured) || (data.integrations?.email?.enabled !== false && data.integrations?.email?.configured)) && <button className={subtleButton} onClick={resend} disabled={busy}><Send size={15} />Send confirmation</button>}
+            {canSend && a.status === 'confirmed' && ((data.integrations?.sms?.enabled !== false && data.integrations?.sms?.configured) || (data.integrations?.email?.enabled !== false && data.integrations?.email?.configured)) && <button className={subtleButton} onClick={resend} disabled={busy}><Send size={15} />Send manual confirmation</button>}
           </div>
           <div className="flex items-center gap-2.5">
             <button className={secondaryButton} onClick={onClose}>Close</button>
-            <button className={primaryButton} onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
+            {canManage && <button className={primaryButton} onClick={save} disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>}
           </div>
         </>
       }
     >
+      {!canManage && <p className="text-sm text-slate-600">You have view-only access to appointments.</p>}
       {reason && (
         <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 space-y-3">
           <p className="text-sm font-extrabold text-rose-800 flex items-center gap-2"><AlertTriangle size={16} />{reason}</p>
           {a.jobberError && <p className="text-xs text-rose-700 font-mono">{a.jobberError}</p>}
           <p className="text-xs text-rose-800">The customer was told it isn't confirmed yet. Search Jobber for <b>{a.customerName}</b> or reference <b>{a.id}</b> on {azDay(a.scheduledAt)} {azTime(a.scheduledAt)}. Don't rebook until you've checked.</p>
-          {a.jobberState && (
-            <div className="flex flex-col sm:flex-row sm:items-end gap-2">
-              <Field label="Jobber job number you found" className="flex-1"><input className={inputClass} inputMode="numeric" value={jobNumber || (a.jobber?.jobNumber ? String(a.jobber.jobNumber) : '')} onChange={(e) => setJobNumber(e.target.value.replace(/\D/g, ''))} placeholder="e.g. 4521" /></Field>
-              <button className={primaryButton} disabled={busy} onClick={() => resolve('in_jobber')}>It's in Jobber — confirm it</button>
-              <button className={secondaryButton} disabled={busy} onClick={() => resolve('not_in_jobber')}>Not in Jobber — release</button>
+          {canManage && a.jobberState && (
+            <div className="space-y-2">
+              <div className="flex flex-col sm:flex-row sm:items-end gap-2">
+                <Field label="Jobber job number you found" className="flex-1"><input className={inputClass} inputMode="numeric" value={jobNumber || (a.jobber?.jobNumber ? String(a.jobber.jobNumber) : '')} onChange={(e) => setJobNumber(e.target.value.replace(/\D/g, ''))} placeholder="e.g. 4521" /></Field>
+                <button className={primaryButton} disabled={busy} onClick={() => resolve('in_jobber')}>It's in Jobber — confirm it</button>
+                <button className={secondaryButton} disabled={busy} onClick={() => resolve('not_in_jobber')}>Not in Jobber — release</button>
+              </div>
+              <p className="text-xs text-rose-800">Completing this booking may send configured automatic customer and owner notifications. Existing consent and sending holds still apply.</p>
             </div>
           )}
         </div>
@@ -76,7 +88,7 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200/80">
         <Field label="Status">
-          <select className={inputClass} value={status} onChange={(e) => setStatus(e.target.value as any)}>
+          <select className={inputClass} value={status} disabled={!canManage || busy} onChange={(e) => setStatus(e.target.value as any)}>
             <option value="confirmed">Scheduled</option>
             <option value="in_progress">In progress (tech on site)</option>
             <option value="completed">Completed</option>
@@ -85,7 +97,7 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
           </select>
         </Field>
         <Field label="Urgency">
-          <select className={inputClass} value={urgency} onChange={(e) => setUrgency(e.target.value as any)}>
+          <select className={inputClass} value={urgency} disabled={!canManage || busy} onChange={(e) => setUrgency(e.target.value as any)}>
             <option value="normal">Normal</option>
             <option value="elevated">Elevated</option>
             <option value="high">High (emergency, clog)</option>
@@ -107,10 +119,10 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
         <h4 className="text-xs font-extrabold text-slate-400 flex items-center gap-1.5"><Calendar size={14} className="text-orange-500" />Schedule</h4>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <Field label="Arrival time (Arizona)" hint={linked ? 'Reschedule in Jobber — BOB follows the Jobber calendar.' : 'BOB checks the new time against the schedule rules.'}>
-            <input type="datetime-local" className={inputClass} value={scheduledAt} disabled={linked} onChange={(e) => setScheduledAt(e.target.value)} />
+            <input type="datetime-local" className={inputClass} value={scheduledAt} disabled={linked || !canManage || busy} onChange={(e) => setScheduledAt(e.target.value)} />
           </Field>
           <Field label="Technician" hint={linked ? 'Reassign in Jobber.' : undefined}>
-            <select className={inputClass} value={technicianId} disabled={linked} onChange={(e) => setTechnicianId(e.target.value)}>
+            <select className={inputClass} value={technicianId} disabled={linked || !canManage || busy} onChange={(e) => setTechnicianId(e.target.value)}>
               {data.technicians.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
             </select>
           </Field>
@@ -121,8 +133,9 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
       <div className="space-y-3 pt-2 border-t border-slate-100">
         <h4 className="text-xs font-extrabold text-slate-400 flex items-center gap-1.5"><DollarSign size={14} className="text-orange-500" />Service and price</h4>
         <div className="rounded-2xl border border-slate-200 divide-y divide-slate-100 text-sm">
-          {(a.lineItems?.length ? a.lineItems : [{ name: a.package, cents: Math.round(a.price * 100) }]).map((l, i) => <div key={i} className="flex justify-between px-4 py-2"><span className="text-slate-600">{l.name}</span><span className="font-bold">{money(l.cents)}</span></div>)}
-          <div className="flex justify-between px-4 py-2 font-black"><span>Total</span><span>{dollars(a.price)}</span></div>
+          {canViewFinance && (a.lineItems?.length ? a.lineItems : [{ name: a.package, cents: Math.round(a.price * 100) }]).map((l, i) => <div key={i} className="flex justify-between px-4 py-2"><span className="text-slate-600">{l.name}</span><span className="font-bold">{Number.isFinite(l.cents) ? money(l.cents) : '—'}</span></div>)}
+          {!canViewFinance && <p className="px-4 py-2 text-slate-600">{a.package}</p>}
+          <div className="flex justify-between px-4 py-2 font-black"><span>Total</span><span>{canViewFinance ? Number.isFinite(a.price) ? dollars(a.price) : '—' : 'Restricted'}</span></div>
         </div>
         {a.route && a.route !== 'cleaning' && <p className="text-xs font-bold text-amber-800">Repairs and parts are quoted separately.</p>}
         {(a.property && Object.keys(a.property).length > 0) && (
@@ -137,14 +150,14 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
           {gain !== null && <span className="text-xs font-extrabold bg-emerald-100 text-emerald-800 px-2.5 py-0.5 rounded-full">{gain >= 0 ? '+' : ''}{gain}% after cleaning</span>}
         </div>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Before"><input type="number" min={0} max={2000} className={inputClass} value={before} onChange={(e) => setBefore(e.target.value)} placeholder="Reading" /></Field>
-          <Field label="After"><input type="number" min={0} max={2000} className={inputClass} value={after} onChange={(e) => setAfter(e.target.value)} placeholder="Reading" /></Field>
+          <Field label="Before"><input type="number" min={0} max={2000} className={inputClass} value={before} disabled={!canManage || busy} onChange={(e) => setBefore(e.target.value)} placeholder="Reading" /></Field>
+          <Field label="After"><input type="number" min={0} max={2000} className={inputClass} value={after} disabled={!canManage || busy} onChange={(e) => setAfter(e.target.value)} placeholder="Reading" /></Field>
         </div>
         <p className="text-[11px] text-orange-900/70">Enter what the technician measured. Leave blank if it wasn't measured.</p>
       </div>
 
       <Field label="Notes and property access">
-        <textarea rows={3} className={inputClass} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Gate codes, pets, dryer details…" />
+        <textarea rows={3} className={inputClass} value={canViewFinance ? notes : 'Restricted'} disabled={!canManage || !canViewFinance || busy} onChange={(e) => setNotes(e.target.value)} placeholder="Gate codes, pets, dryer details…" />
       </Field>
       <p className="text-xs text-slate-500 flex items-center gap-2"><FileText size={14} />Confirmation: text {sms || 'not sent'} · email {email || 'not sent'}</p>
       <p className="text-xs text-slate-500">Email “accepted” means the provider accepted the request, not confirmed delivery. “rejected” means it was rejected; “failed_or_uncertain” requires office review before any further contact. An email already attempted is not resent automatically, including from this button. Texts may be resent when enabled and consented.</p>

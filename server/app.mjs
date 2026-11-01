@@ -1,3 +1,8 @@
+import { createOwnerConsent } from './owner-consent.mjs';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createAdminAuth } from './admin-auth.mjs';
+import { requireAdminRoute, applyConfigPatch, projectSnapshot, projectAdminResponse, projectPrincipal } from './admin-authorization.mjs';
+import { hasPermission } from '../shared/admin-permissions.mjs';
 import { validateHtmlTemplate, renderHtmlTemplate } from './email-html.mjs';
 import { MESSAGE_VARIABLES } from '../shared/message-templates.mjs';
 import { deliverConfirmationSmsOnce } from './sms-notification.mjs';
@@ -78,6 +83,48 @@ const APPROVAL_WINDOW = 30 * 60_000;
 const FAQ_STATUSES = ["approved", "draft"];
 
 export function createBobHandler({ store, jobber, geo, scheduler, assistant = null, twilio = null, sendgrid = null, integrationAccounts = null, connectionHealth = null, env = process.env, clock = () => Date.now() }) {
+  const rawStore = store;
+  const adminAuth = createAdminAuth({ store: rawStore, clock });
+  const adminScope = new AsyncLocalStorage();
+  const currentAdmin = async () => {
+    const req = adminScope.getStore();
+    if (!req?.adminPrincipal) return;
+    if (req.adminPrincipal.role === 'legacy') {
+      if (await adminAuth.mode() !== 'legacy') fail(401, 'Please sign in with your individual account.');
+    } else {
+      req.adminPrincipal = await adminAuth.revalidate(req.adminPrincipal);
+    }
+    requireAdminRoute(req.adminPrincipal, req.adminPermissionMethod || req.method, req.adminPermissionPath);
+  };
+  // Recheck authority after awaits, immediately before durable changes or provider work.
+  // Cleanup and audit recording remain available even after a session is revoked.
+  const guardedWrites = new Set(['set', 'insertAppointment', 'updateAppointment', 'retireAppointment', 'insertRequest', 'updateRequest', 'insertApproval', 'updateApproval', 'enqueue']);
+  const consentDb = { ...rawStore.db, query: async (...args) => { await currentAdmin(); return rawStore.db.query(...args); } };
+  store = new Proxy(rawStore, { get(target, key) {
+    if (key === 'db') return consentDb;
+    if (key === 'audit') return async (action, targetId) => {
+      await target.audit(action, targetId);
+      const req = adminScope.getStore();
+      if (req?.adminPrincipal?.role !== 'legacy' && req?.adminPrincipal?.id) {
+        await target.log('admin.action', { actorUserId: req.adminPrincipal.id, action, target: String(targetId) }, { requestId: req.bobActivity?.requestId || '' });
+      }
+    };
+    if (key === 'kvSet' || key === 'kvDel') return async (entry, ...args) => {
+      if (/^(?:client-hub:|jobber:state:)/.test(String(entry))) await currentAdmin();
+      return target[key](entry, ...args);
+    };
+    if (guardedWrites.has(key)) return async (...args) => { await currentAdmin(); return target[key](...args); };
+    return Reflect.get(target, key);
+  } });
+  const guardProvider = (provider, names) => provider && new Proxy(provider, { get(target, key) {
+    if (names.includes(key) && typeof target[key] === 'function') return async (...args) => { await currentAdmin(); return target[key](...args); };
+    return Reflect.get(target, key);
+  } });
+  jobber = guardProvider(jobber, ['ensureClientAndProperty', 'createScheduledJob', 'exchangeCode', 'disconnect', 'verifyScheduledVisit', 'verifyAssignment', 'listUsers']);
+  geo = guardProvider(geo, ['geocode', 'serviceAreaSamples', 'driveMinutes']);
+  twilio = guardProvider(twilio, ['sendSms', 'sendVerification', 'checkVerification']);
+  sendgrid = guardProvider(sendgrid, ['sendEmail']);
+  const ownerConsent = createOwnerConsent({store,clock});
   const clientHub = createClientHub({store,jobber,clock});
   const useTwilioVerify = env.BOOKING_VERIFICATION_PROVIDER === 'twilio';
   const verifyService = createVerification({ store, twilio, clock, fail });
@@ -112,7 +159,12 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
   };
   const notifyOwner = async (appointment, config) => {
     try {
-      return await notifyBookingOwner({ store, appointment, config, clock, provider: 'Twilio', sendSms: (phone, text) => sendSms(null, phone, text) });
+      if(!await ownerConsent.allows(config.bookingOwnerSmsPhone))return {status:'skipped',reason:'owner_consent_required'};
+      return await notifyBookingOwner({ store, appointment, config, clock, provider: 'Twilio', sendSms: async (phone, text) => {
+        const latest=await store.config();
+        if(latest.bookingOwnerSmsEnabled!==true||normalizePhone(latest.bookingOwnerSmsPhone)!==normalizePhone(phone)||!await ownerConsent.allows(phone))throw new Error('Owner SMS consent is revoked or does not match this recipient.');
+        return sendSms(null, phone, text);
+      } });
     } catch { return { status: 'failed', reason: 'notification_unavailable' }; }
   };
   const publicOrigin = (env.PUBLIC_ORIGIN || env.NEXT_PUBLIC_APP_URL || env.APP_URL || "").replace(/\/$/, "");
@@ -151,8 +203,15 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     if (!(await store.rateHit(`${scope}:${clientIP(req)}`, limit, period))) fail(429, "Too many requests. Please try again shortly.");
   };
   const admin = async (req) => {
+    req.adminAuthMode = await adminAuth.mode();
+    if (req.adminAuthMode === 'named') {
+      const raw = cookie(req, 'bob_user');
+      req.adminPrincipal = await adminAuth.authenticate(raw);
+      return digest(raw);
+    }
     const token = digest(cookie(req, "bob_admin"));
     if (!(await store.isAdmin(token))) fail(401, "Please sign in to the management dashboard.");
+    req.adminPrincipal = { id: 'legacy', name: 'Shared administrator', role: 'legacy', permissions: [] };
     return token;
   };
   const session = async (req) => {
@@ -179,7 +238,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
   };
 
   const record = async (req, kind, details, level = "info") => {
-    try { await store.log(kind, details, { ...req.bobActivity, level }); return true; }
+    try { await store.log(kind, { ...details, ...(req.adminPrincipal?.role !== 'legacy' && req.adminPrincipal?.id ? { actorUserId: req.adminPrincipal.id } : {}) }, { ...req.bobActivity, level }); return true; }
     catch (error) { console.error("[activity] persistent write failed", error.message); return false; }
   };
 
@@ -240,6 +299,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       const url = new URL(webhookUrl);
       if (url.protocol !== "https:") throw new Error("Webhook requires HTTPS.");
       const payload = JSON.stringify({ id: event.id, type: event.kind, data: event.data });
+      await currentAdmin();
       const response = await fetch(url, {
         method: "POST",
         headers: {
@@ -271,14 +331,14 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     return list;
   };
 
-  const snapshot = async () => ({
+  const dashboardSnapshot = async ({ maintain = true } = {}) => ({
     config: await store.config(),
     bookingEnabled: await bookingOpen(await store.config()),
     faqs: await store.get("faqs"),
     technicians: await store.technicians(),
     appointments: await store.appointments(),
     requests: await store.requests(),
-    approvals: await sweepApprovals(await store.approvals()),
+    approvals: maintain ? await sweepApprovals(await store.approvals()) : await store.approvals(),
     heldLocksCount: await store.countActiveHolds(),
     conversations: await store.countSessions(),
     notifications: await store.recentEvents(),
@@ -638,6 +698,11 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       if (lease) await lease.release();
     };
     const send = async (status, data) => {
+      if (req.adminPrincipal && req.adminPermissionPath && status < 400) {
+        if (data?.config || req.method === 'GET') await currentAdmin();
+        data = projectAdminResponse(req.adminPrincipal, req.method, req.adminPermissionPath, data);
+        if (data?.config && Array.isArray(data.appointments)) data.access = projectPrincipal(req.adminPrincipal);
+      }
       if (req.url !== "/api/health" && (status >= 400 || req.method !== "GET")) {
         await record(req, "request.finished", { path: String(req.url || "").split("?")[0], method: req.method, status, ...(status >= 400 ? { error: data?.error } : {}) }, status >= 500 ? "error" : status >= 400 ? "warning" : "info");
       }
@@ -1033,11 +1098,16 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       }
       if (method === "GET" && (pathname === "/api/jobber/callback" || pathname === "/api/jobber/oauth/callback")) {
         const state = url.searchParams.get("state") || "", code = url.searchParams.get("code") || "";
-        const ok = state && code && (await store.kvGet(`jobber:state:${state}`));
-        if (state) await store.kvDel(`jobber:state:${state}`);
+        const ok = state && code && (await rawStore.consumeKv(`jobber:state:${state}`));
         let result = "failed";
         if (ok) {
           try {
+            if (await adminAuth.mode() === 'named') {
+              req.adminPrincipal = await adminAuth.authenticateReference(ok.adminSessionReference);
+              req.adminPermissionPath = '/api/admin/jobber/connect';
+              req.adminPermissionMethod = 'GET';
+              requireAdminRoute(req.adminPrincipal, 'GET', req.adminPermissionPath);
+            } else if (ok.adminSessionReference) fail(401, 'The management session is no longer active.');
             await clientHub.invalidate();
             await jobber.exchangeCode(code);
             await store.audit("jobber.connected", "jobber");
@@ -1052,14 +1122,24 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
 
       // ---- management --------------------------------------------------------------
       if (method === "GET" && pathname === "/api/admin/status") {
+        const authMode = await adminAuth.mode();
         let authenticated = false;
         try {
           await admin(req);
           authenticated = true;
-        } catch {}
-        return send(200, { authenticated, setupRequired: !envPassword && !(await store.get("auth")), passwordFromEnv: Boolean(envPassword) && !(await store.get("auth")) });
+        } catch (error) { if (error.status !== 401) throw error; }
+        return send(200, { authenticated, authMode, ...(authenticated ? { principal: projectPrincipal(req.adminPrincipal) } : {}), setupRequired: authMode === 'legacy' && !envPassword && !(await store.get("auth")), passwordFromEnv: authMode === 'legacy' && Boolean(envPassword) && !(await store.get("auth")) });
+      }
+      if (method === 'POST' && ['/api/admin/invite/details','/api/admin/invite/accept','/api/admin/owner-bootstrap/accept'].includes(pathname)) {
+        await rate(req, 'account-acceptance', 12, 900_000);
+        const body = await readBody(req);
+        if (Object.keys(body).some(key => !['token','password'].includes(key))) fail(400, 'Only the invitation and your password may be supplied.');
+        if (pathname === '/api/admin/invite/details') return send(200, await adminAuth.invitationDetails({ token: body.token }));
+        const result = pathname === '/api/admin/owner-bootstrap/accept' ? await adminAuth.acceptOwnerBootstrap(body) : await adminAuth.acceptInvite(body);
+        return send(200, result);
       }
       if (method === "POST" && pathname === "/api/admin/setup") {
+        if (await adminAuth.mode() !== 'legacy') fail(403, 'Shared-password setup is unavailable.');
         await rate(req, "setup", 5, 900_000);
         const body = await readBody(req);
         if ((await store.get("auth")) || envPassword) fail(409, "Management access has already been set up.");
@@ -1073,7 +1153,15 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       }
       if (method === "POST" && pathname === "/api/admin/login") {
         await rate(req, "login", 8, 900_000);
-        const body = await readBody(req), auth = await store.get("auth");
+        const body = await readBody(req);
+        if (await adminAuth.mode() === 'named' || Object.prototype.hasOwnProperty.call(body, 'email')) {
+          if (!await rawStore.rateHit(`named-account-login:${digest(String(body.email || '').trim().toLowerCase())}`, 8, 900_000)) fail(429, 'Too many requests. Please try again shortly.');
+          const result = await adminAuth.login(body);
+          const secure = publicOrigin.startsWith('https:') || env.VERCEL ? '; Secure' : '';
+          res.setHeader('Set-Cookie', `bob_user=${result.token}; HttpOnly; SameSite=Lax; Path=/api/admin; Max-Age=28800${secure}`);
+          return send(200, { authenticated: !result.pendingCutover, pendingCutover: result.pendingCutover, principal: projectPrincipal(result.principal) });
+        }
+        const auth = await store.get("auth");
         if (!auth && !envPassword) fail(409, "Complete management setup first.");
         if (typeof body.password !== "string" || body.password.length > 200) fail(401, "Invalid password.");
         if (auth) {
@@ -1089,6 +1177,35 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
 
       if (pathname.startsWith("/api/admin/")) {
         const adminToken = await admin(req);
+        req.adminPermissionPath = pathname;
+        requireAdminRoute(req.adminPrincipal, method, pathname);
+        const snapshot = () => dashboardSnapshot({ maintain: req.adminPrincipal.role === 'legacy' });
+        if (pathname === '/api/admin/users' && method === 'GET') return send(200, await adminAuth.listUsers(req.adminPrincipal));
+        if (pathname === '/api/admin/users/invite' && method === 'POST') {
+          await rate(req, 'user-management', 20, 900_000);
+          return send(201, await adminAuth.invite(req.adminPrincipal, await readBody(req)));
+        }
+        if (method === 'PATCH' && /^\/api\/admin\/users\/[^/]+$/.test(pathname)) {
+          return send(200, await adminAuth.updateUser(req.adminPrincipal, decodeURIComponent(pathname.split('/').pop()), await readBody(req)));
+        }
+        if (method === 'POST' && /^\/api\/admin\/users\/[^/]+\/reset-invite$/.test(pathname)) {
+          await rate(req, 'user-management', 20, 900_000);
+          return send(201, await adminAuth.resetInvite(req.adminPrincipal, decodeURIComponent(pathname.split('/')[4])));
+        }
+        if (method === 'POST' && /^\/api\/admin\/invitations\/[^/]+\/revoke$/.test(pathname)) {
+          return send(200, await adminAuth.revokeInvite(req.adminPrincipal, decodeURIComponent(pathname.split('/')[4])));
+        }
+        if(pathname==='/api/admin/owner-sms-consent'&&['GET','POST'].includes(method)) {
+          if(method==='GET')return send(200,await ownerConsent.snapshot());
+          const body=await readBody(req);
+          try{
+            const result = await ownerConsent.record(body, adminToken, req.adminPrincipal.role === 'master' ? req.adminPrincipal.id : null);
+            await store.audit('owner_sms.consent_recorded', result.receipt.id);
+            return send(200,result);
+          }
+          catch(error){fail(error.status||503,error.status?error.message:'Consent could not be saved. Please retry.');}
+        }
+
         if (["GET", "POST"].includes(method) && pathname === "/api/admin/integration-accounts") {
           if (method === "POST") {
             await rate(req, "integration-accounts", 5, 60_000);
@@ -1098,8 +1215,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           return send(200, await integrationAccounts?.snapshot() || {});
         }
         if (method === "POST" && pathname === "/api/admin/logout") {
-          await store.removeAdmin(adminToken);
-          res.setHeader("Set-Cookie", "bob_admin=; HttpOnly; SameSite=Lax; Path=/api/admin; Max-Age=0");
+          if (req.adminPrincipal.role === 'legacy') await store.removeAdmin(adminToken);
+          else await adminAuth.logout(cookie(req, 'bob_user'));
+          res.setHeader("Set-Cookie", ["bob_admin=; HttpOnly; SameSite=Lax; Path=/api/admin; Max-Age=0", "bob_user=; HttpOnly; SameSite=Lax; Path=/api/admin; Max-Age=0"]);
           return send(200, { signedOut: true });
         }
         if (method === "GET" && pathname === "/api/admin/data") return send(200, await snapshot());
@@ -1126,7 +1244,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           if (!enabled(await store.config(), 'jobber')) fail(409, 'Enable Jobber in Connections first.');
           if (!jobber.appConfigured) fail(400, "Add JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET and JOBBER_REDIRECT_URI in Vercel first.");
           const state = secret();
-          await store.kvSet(`jobber:state:${state}`, { at: clock() }, 600);
+          await store.kvSet(`jobber:state:${state}`, { at: clock(), ...(req.adminPrincipal.role === 'legacy' ? {} : { adminSessionReference: adminAuth.sessionReference(req.adminPrincipal) }) }, 600);
           res.writeHead(302, { Location: jobber.authorizeUrl(state), "Cache-Control": "no-store" });
           return res.end();
         }
@@ -1184,8 +1302,13 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         if (method === "PATCH" && pathname === "/api/admin/config") {
           const body = await readBody(req), old = await store.config();
           if (body.version !== old.version) fail(409, "Settings were changed elsewhere. Refresh before saving.");
-          const next = { ...old };
-          for (const key of Object.keys(DEFAULT_CONFIG)) if (key in body && key !== "version") next[key] = body[key];
+          const next = req.adminPrincipal.role === 'legacy' ? { ...old } : applyConfigPatch(req.adminPrincipal, body, old);
+          if (req.adminPrincipal.role === 'legacy') for (const key of Object.keys(DEFAULT_CONFIG)) if (key in body && key !== "version") {
+            const value = body[key], previous = old[key];
+            // The dashboard sends sparse nested changes; retain unsupplied settings and custom templates.
+            next[key] = value && typeof value === 'object' && !Array.isArray(value) && previous && typeof previous === 'object' && !Array.isArray(previous)
+              ? { ...previous, ...value } : value;
+          }
           next.version = old.version + 1;
           next.bundlePriceCents = BUNDLE_PRICE_CENTS;
           const errors = validateConfig(next), known = (await store.technicians()).map((t) => t.id);
@@ -1204,7 +1327,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           return send(200, await snapshot());
         }
         if (method === "POST" && pathname === "/api/admin/password") {
-          const b = await readBody(req), auth = await store.get("auth");
+          const b = await readBody(req);
+          if (req.adminPrincipal.role !== 'legacy') return send(200, await adminAuth.changePassword(req.adminPrincipal, b));
+          const auth = await store.get("auth");
           if (!auth && envPassword) {
             if (typeof b.currentPassword !== "string" || !safeEqual(digest(b.currentPassword), digest(envPassword))) fail(403, "Current password is incorrect.");
           } else if (typeof b.currentPassword !== "string" || b.currentPassword.length > 200 || digest(scryptSync(b.currentPassword, auth.salt, 64).toString("hex")) !== digest(auth.hash)) fail(403, "Current password is incorrect.");
@@ -1242,6 +1367,23 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           const b = await readBody(req);
           if (!Array.isArray(b.technicians) || !b.technicians.length || b.technicians.length > 30 || b.technicians.some((t) => !/^[-a-zA-Z0-9]{1,80}$/.test(t.id) || typeof t.name !== "string" || !t.name.trim() || t.name.length > 100 || !["available", "on_route", "on_job", "off_duty"].includes(t.status) || (t.jobberUserId != null && (typeof t.jobberUserId !== "string" || t.jobberUserId.length > 200)))) fail(400, "Check technician names and status.");
           if (new Set(b.technicians.map((t) => t.id)).size !== b.technicians.length) fail(400, "Technician identifiers must be unique.");
+          if (req.adminPrincipal.role !== 'legacy') {
+            const previous = await store.technicians();
+            if (!hasPermission(req.adminPrincipal, 'integrations.manage')) {
+              // This technician is the legacy availability-text fallback recipient.
+              // Protect it even while an explicit approver currently overrides it.
+              const before = previous.find(t => t.id === 'tech-ryan');
+              const after = b.technicians.find(t => t.id === 'tech-ryan');
+              const afterPhone = String(after && Object.hasOwn(after, 'phone') ? after.phone || '' : before?.phone || '').slice(0, 30);
+              if (Boolean(before) !== Boolean(after) || normalizePhone(before?.phone) !== normalizePhone(afterPhone)) fail(403, 'Changing the staff SMS fallback recipient requires Master Admin.');
+            }
+            if (!hasPermission(req.adminPrincipal, 'integrations.manage') && b.technicians.some(t => {
+              const old = previous.find(row => row.id === t.id)?.jobberUserId || '';
+              return String(Object.hasOwn(t, 'jobberUserId') ? t.jobberUserId || '' : old) !== String(old);
+            })) fail(403, 'Changing provider technician mappings requires Master Admin.');
+            if (!hasPermission(req.adminPrincipal, 'integrations.manage') && previous.some(old => old.jobberUserId && !b.technicians.some(t => t.id === old.id))) fail(403, 'Removing a mapped technician requires Master Admin.');
+            b.technicians = b.technicians.map(t => ({ ...previous.find(old => old.id === t.id), ...t }));
+          }
           const linked = b.technicians.map((t) => t.jobberUserId).filter(Boolean);
           if (new Set(linked).size !== linked.length) fail(400, "Each Jobber user can be linked to only one technician.");
           await store.set("technicians", b.technicians.map((t) => ({
@@ -1274,10 +1416,11 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           await sweepApprovals([a]);
           if (a.status !== "pending") fail(409, `This request is already ${a.status}.`);
           if (!["approve", "decline"].includes(b.decision)) fail(400, "Choose approve or decline.");
-          const by = String(b.approverName || "").trim();
+          const by = String(req.adminPrincipal.role === 'legacy' ? b.approverName || '' : req.adminPrincipal.name || '').trim();
           if (by.length < 2 || by.length > 100) fail(400, "Enter the name of the person approving.");
           a.decision = {
             decision: b.decision, by, at: clock(), note: String(b.note || "").slice(0, 500),
+            ...(req.adminPrincipal.role === 'legacy' ? {} : { actorUserId: req.adminPrincipal.id }),
             namedApprover: c.approver?.name ? by.toLowerCase() === c.approver.name.trim().toLowerCase() : null,
           };
           if (b.decision === "decline") {
@@ -1315,6 +1458,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
 
         if (method === "POST" && pathname === "/api/admin/appointments") {
           const b = await readBody(req), c = await store.config();
+          if (b.sendConfirmation === true && !hasPermission(req.adminPrincipal, 'appointments.send')) fail(403, 'Sending confirmations requires a separate permission.');
           const errors = validateContact(b);
           if (errors.length) fail(400, errors.join(" "));
           if (!["driving_distance", "radius"].includes(c.serviceAreaMode) && areaFor(b.zip, c) === "out") fail(400, "Add the ZIP code to the service area (or the just-outside list) in settings first.");
@@ -1451,15 +1595,17 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           return send(200, await snapshot());
         }
         if (method === "GET" && pathname === "/api/admin/export") {
+          const exported = await snapshot();
+          await currentAdmin();
           res.writeHead(200, { "Content-Type": "application/json", "Content-Disposition": 'attachment; filename="BOB-data-export.json"', "Cache-Control": "no-store" });
-          return res.end(JSON.stringify({ ...(await snapshot()), exportedAt: new Date(clock()).toISOString() }, null, 2));
+          return res.end(JSON.stringify({ ...projectSnapshot(exported, req.adminPrincipal), access: projectPrincipal(req.adminPrincipal), exportedAt: new Date(clock()).toISOString() }, null, 2));
         }
         fail(404, "Management action not found.");
       }
       fail(404, "Endpoint not found.");
     } catch (e) {
       if (res.headersSent) return res.end();
-      if (!(e instanceof HttpError) && e.extra?.code !== 'CONVERSATION_PENDING') {
+      if (!(e instanceof HttpError) && !(Number.isInteger(e.status) && e.status >= 400 && e.status < 500) && e.extra?.code !== 'CONVERSATION_PENDING') {
         console.error("BOB request failed:", e);
         // Kept for a week so the office can see what went wrong (Settings → Connections).
         await store.kvSet("diag:last-error", { at: clock(), path: `${method} ${pathname}`, message: String(e?.message || e).slice(0, 300) }, 60 * 60 * 24 * 7).catch(() => {});
@@ -1472,7 +1618,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       await releaseConversation();
     }
     };
-    await routeRequest();
+    await adminScope.run(req, routeRequest);
     if (response && !res.headersSent) {
       res.setHeader("X-BOB-Request-ID", req.bobActivity.requestId);
       res.writeHead(response.status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });

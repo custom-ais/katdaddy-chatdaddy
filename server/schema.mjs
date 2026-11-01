@@ -2,6 +2,8 @@
 // not exposed through Supabase's public Data API; only the server connects to it.
 // Timestamps are epoch milliseconds (bigint), matching the original SQLite store.
 
+import { ADMIN_AUTH_SCHEMA_SQL } from './admin-auth-schema.mjs';
+
 export const SCHEMA_SQL = `
 create schema if not exists bob;
 
@@ -98,11 +100,12 @@ create table if not exists bob.kv (
   expires bigint
 );
 create index if not exists kv_expires on bob.kv (expires);
-`;
+` + ADMIN_AUTH_SCHEMA_SQL;
 
 // Row-level security on, no policies: nothing but the server's own role can read these.
 export const RLS_SQL = [
   "settings", "sessions", "admins", "holds", "appointments", "requests", "approvals", "events", "audit", "kv",
+  "auth_users", "auth_sessions", "auth_invitations", "auth_audit",
 ]
   .map((t) => `alter table bob.${t} enable row level security;`)
   .join("\n");

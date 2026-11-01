@@ -20,12 +20,15 @@ function minutesLeft(expiresAt: number) {
 }
 
 function ApprovalModal({ approval: a, onClose }: { approval: any; onClose: () => void }) {
-  const { data, mutate } = useDashboard();
-  const [name, setName] = useState(data.config.approver?.name || '');
+  const { data, mutate, can } = useDashboard();
+  const canManage = can('inbox.view') && can('inbox.manage'), canViewFinance = can('finance.view');
+  const namedUser = data.access?.role === 'master' || data.access?.role === 'member';
+  const [name, setName] = useState(namedUser ? data.access?.name || '' : data.config.approver?.name || '');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const pending = a.status === 'pending';
   const decide = async (decision: 'approve' | 'decline') => {
+    if (!can('inbox.view') || !can('inbox.manage')) return;
     setBusy(true); setError('');
     try {
       const r = await mutate(`/api/admin/approvals/${encodeURIComponent(a.id)}`, { decision, approverName: name, note }, 'POST', '');
@@ -38,12 +41,15 @@ function ApprovalModal({ approval: a, onClose }: { approval: any; onClose: () =>
   return (
     <Modal title={a.service} subtitle={<>{a.customer?.name} · requested {azDay(a.requestedAt)} {azTime(a.requestedAt)}</>} onClose={onClose}
       badge={<div className="bg-amber-500 text-white p-2 rounded-xl"><ShieldCheck size={20} /></div>}
-      footer={pending ? (
+      footer={pending && canManage ? (
         <>
           <span className="text-xs font-bold text-amber-800 flex items-center gap-1.5"><Clock size={14} />{minutesLeft(a.expiresAt)} — the time is held until then</span>
-          <div className="flex gap-2.5">
-            <button className={secondaryButton} disabled={busy} onClick={() => decide('decline')}>Decline</button>
-            <button className={primaryButton} disabled={busy || name.trim().length < 2} onClick={() => decide('approve')}>{busy ? 'Booking…' : 'Approve and book'}</button>
+          <div className="space-y-2">
+            <p className="text-xs text-slate-600 max-w-md">Completing this booking may send configured automatic customer and owner notifications. Existing consent and sending holds still apply.</p>
+            <div className="flex gap-2.5">
+              <button className={secondaryButton} disabled={busy} onClick={() => decide('decline')}>Decline</button>
+              <button className={primaryButton} disabled={busy || name.trim().length < 2} onClick={() => decide('approve')}>{busy ? 'Booking…' : 'Approve and book'}</button>
+            </div>
           </div>
         </>
       ) : <button className={secondaryButton} onClick={onClose}>Close</button>}>
@@ -62,19 +68,20 @@ function ApprovalModal({ approval: a, onClose }: { approval: any; onClose: () =>
         </div>
       </div>
       <div className="rounded-2xl border border-slate-200 divide-y divide-slate-100 text-sm">
-        {(a.lineItems || []).map((l: any, i: number) => <div key={i} className="flex justify-between px-4 py-2"><span className="text-slate-600">{l.name}</span><span className="font-bold">{money(l.cents)}</span></div>)}
-        <div className="flex justify-between px-4 py-2 font-black"><span>Total</span><span>{money(a.totalCents)}</span></div>
+        {canViewFinance && (a.lineItems || []).map((l: any, i: number) => <div key={i} className="flex justify-between px-4 py-2"><span className="text-slate-600">{l.name}</span><span className="font-bold">{Number.isFinite(l.cents) ? money(l.cents) : '—'}</span></div>)}
+        <div className="flex justify-between px-4 py-2 font-black"><span>Total</span><span>{canViewFinance ? Number.isFinite(a.totalCents) ? money(a.totalCents) : '—' : 'Restricted'}</span></div>
       </div>
       {a.concerns?.length > 0 && <p className="text-xs text-slate-600"><b>Customer said:</b> {a.concerns.join(' · ')}</p>}
       {a.notes && <p className="text-xs text-slate-600"><b>Notes:</b> {a.notes}</p>}
       {a.notified && <p className="text-[11px] text-slate-400">Approver text {a.notified.sms} · email {a.notified.email}{a.notified.reason === 'not_configured' ? ' (add the approver phone and configure Twilio in Settings)' : ''}</p>}
-      {pending ? (
+      {!canManage && <p className="text-sm text-slate-600">You have view-only access to the inbox.</p>}
+      {pending && canManage ? (
         <div className="space-y-3 pt-2 border-t border-slate-100">
           <Field label="Your name" hint={data.config.approver?.name ? `The named approver is ${data.config.approver.name}. Your name is saved with the decision.` : 'Saved with the decision.'}>
-            <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" />
+            <input className={inputClass} value={name} disabled={namedUser || busy} onChange={(e) => setName(e.target.value)} autoComplete="name" />
           </Field>
           <Field label="Note (optional)"><textarea rows={2} className={inputClass} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
-          <p className="text-[11px] text-slate-500">Approving books the held time right away — into Jobber when it's connected — and sends the customer's confirmation.</p>
+          <p className="text-[11px] text-slate-500">Approving books the held time right away — into Jobber when it's connected.</p>
         </div>
       ) : a.decision && (
         <p className="text-sm text-slate-700 pt-2 border-t border-slate-100">{a.decision.decision === 'approve' ? 'Approved' : 'Declined'} by <b>{a.decision.by}</b> on {azDay(a.decision.at)} {azTime(a.decision.at)}{a.decision.note ? ` — ${a.decision.note}` : ''}.{a.failure ? ` ${a.failure}` : ''}{a.appointmentId ? ` Appointment ${a.appointmentId}.` : ''}</p>
@@ -85,9 +92,11 @@ function ApprovalModal({ approval: a, onClose }: { approval: any; onClose: () =>
 }
 
 function RequestModal({ request: r, onClose }: { request: any; onClose: () => void }) {
-  const { mutate } = useDashboard();
+  const { mutate, can } = useDashboard();
+  const canManage = can('inbox.view') && can('inbox.manage');
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const set = async (status: string) => {
+    if (!can('inbox.view') || !can('inbox.manage')) return;
     setBusy(true); setError('');
     try { await mutate(`/api/admin/requests/${encodeURIComponent(r.id)}`, { status }, 'PATCH', status === 'resolved' ? 'Marked resolved' : 'Updated'); onClose(); }
     catch (e) { setError((e as Error).message); } finally { setBusy(false); }
@@ -98,11 +107,12 @@ function RequestModal({ request: r, onClose }: { request: any; onClose: () => vo
       badge={<div className="bg-orange-500 text-white p-2 rounded-xl"><MessageSquare size={20} /></div>}
       footer={<>
         <div className="flex gap-2"><a className={secondaryButton} href={`tel:${r.phone}`}><Phone size={15} />Call</a>{r.email && <a className={secondaryButton} href={`mailto:${r.email}`}><Mail size={15} />Email</a>}</div>
-        <div className="flex gap-2">
+        {canManage && <div className="flex gap-2">
           {r.status === 'new' && <button className={secondaryButton} disabled={busy} onClick={() => set('in_progress')}>Mark in progress</button>}
           {r.status !== 'resolved' ? <button className={primaryButton} disabled={busy} onClick={() => set('resolved')}>Mark resolved</button> : <button className={secondaryButton} disabled={busy} onClick={() => set('new')}>Reopen</button>}
-        </div>
+        </div>}
       </>}>
+      {!canManage && <p className="text-sm text-slate-600">You have view-only access to the inbox.</p>}
       {r.safety && <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3 text-sm font-bold text-rose-800 flex gap-2"><AlertTriangle size={18} />Safety flag: {r.safety}</div>}
       <div className="text-sm text-slate-700 space-y-1">
         <p><a className="font-bold hover:text-orange-600" href={`tel:${r.phone}`}>{r.phone}</a>{r.email ? ` · ${r.email}` : ''}{r.zip ? ` · ZIP ${r.zip}` : ''}</p>
@@ -127,7 +137,8 @@ function RequestModal({ request: r, onClose }: { request: any; onClose: () => vo
 }
 
 export function InboxPage({ focusApproval }: { focusApproval?: string | null }) {
-  const { data } = useDashboard();
+  const { data, can } = useDashboard();
+  const canViewFinance = can('finance.view');
   const [approvalId, setApprovalId] = useState<string | null>(focusApproval || null);
   const [requestId, setRequestId] = useState<string | null>(null);
   const [showDone, setShowDone] = useState(false);
@@ -161,7 +172,7 @@ export function InboxPage({ focusApproval }: { focusApproval?: string | null }) 
             return (
               <button key={a.id} onClick={() => setApprovalId(a.id)} className="w-full text-left py-3.5 px-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-slate-50 rounded-xl">
                 <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap"><span className="font-extrabold text-sm text-slate-900">{a.customer?.name}</span><span className="text-xs font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">{a.service}</span><span className="text-xs font-extrabold text-orange-600">{money(a.totalCents)}</span></div>
+                  <div className="flex items-center gap-2 flex-wrap"><span className="font-extrabold text-sm text-slate-900">{a.customer?.name}</span><span className="text-xs font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">{a.service}</span><span className="text-xs font-extrabold text-orange-600">{canViewFinance ? Number.isFinite(a.totalCents) ? money(a.totalCents) : '—' : 'Restricted'}</span></div>
                   <p className="text-xs text-slate-500 mt-0.5">{azDay(a.scheduledAt)} {azTime(a.scheduledAt)} · {a.customer?.city} · {a.reason}</p>
                 </div>
                 <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-black rounded-full border shrink-0 self-start sm:self-auto ${cls}`}>

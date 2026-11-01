@@ -268,6 +268,10 @@ export function createStore(db, { clock = Date.now } = {}) {
         [key, json(value), expires],
       );
     },
+    async consumeKv(key) {
+      const rows = await q('delete from bob.kv where key=$1 and (expires is null or expires>$2) returning value', [key, clock()]);
+      return rows[0]?.value || null;
+    },
     async kvDel(key) {
       await q("delete from bob.kv where key=$1", [key]);
     },

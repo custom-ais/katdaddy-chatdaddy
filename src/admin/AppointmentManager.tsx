@@ -8,7 +8,9 @@ import { TechnicianManagement } from './TechnicianManagement';
 type StatusFilter = 'all' | 'active' | 'scheduled' | 'action_needed' | 'in_progress' | 'completed' | 'cancelled';
 
 export function AppointmentManager() {
-  const { data, activeAppointments: appointments, mutate, showToast } = useDashboard();
+  const { data, activeAppointments: appointments, mutate, showToast, can } = useDashboard();
+  const canManage = can('appointments.view') && can('appointments.manage'), canViewFinance = can('finance.view');
+  const amount = (value: number) => canViewFinance ? Number.isFinite(value) ? dollars(value) : '—' : 'Restricted';
   const technicians = data.technicians;
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active');
@@ -46,6 +48,7 @@ export function AppointmentManager() {
   }), [appointments, today]);
 
   const quickStatus = async (a: Appointment, status: Appointment['status']) => {
+    if (!can('appointments.view') || !can('appointments.manage')) return;
     try {
       await mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}`, { revision: a.revision, status }, 'PATCH', status === 'completed' ? 'Marked completed' : 'Marked in progress');
     } catch (e) {
@@ -153,7 +156,7 @@ export function AppointmentManager() {
                       </div>
                       <div className="flex items-center gap-2 pt-1 flex-wrap">
                         <span className="text-xs font-extrabold text-slate-800 bg-slate-100 px-2.5 py-0.5 rounded-md">{a.package}</span>
-                        <span className="text-xs font-black text-orange-600 bg-orange-50 px-2 py-0.5 rounded-md border border-orange-100">{dollars(a.price)}</span>
+                        <span className="text-xs font-black text-orange-600 bg-orange-50 px-2 py-0.5 rounded-md border border-orange-100">{amount(a.price)}</span>
                         {a.airflowReadings?.beforeCfm != null && (
                           <span className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-600 bg-slate-50 px-2 py-0.5 rounded-md border border-slate-200">
                             <Gauge size={12} className="text-orange-500" />
@@ -170,8 +173,8 @@ export function AppointmentManager() {
                       <div className="leading-none"><span className="block text-xs font-extrabold text-slate-800">{a.technicianName}</span><span className="text-[10px] text-slate-400 font-semibold">{a.territory?.city || tech?.zone || 'West Valley'}</span></div>
                     </div>
                     <div className="flex items-center gap-1">
-                      {a.status === 'confirmed' && <button onClick={() => quickStatus(a, 'in_progress')} title="Mark tech on site" aria-label="Mark in progress" className="p-2 rounded-xl text-blue-600 hover:bg-blue-50 border border-blue-200"><Play size={16} className="fill-blue-500" /></button>}
-                      {a.status === 'in_progress' && <button onClick={() => quickStatus(a, 'completed')} title="Mark completed" aria-label="Mark completed" className="p-2 rounded-xl text-emerald-600 hover:bg-emerald-50 border border-emerald-200"><Check size={16} /></button>}
+                      {canManage && a.status === 'confirmed' && <button onClick={() => quickStatus(a, 'in_progress')} title="Mark tech on site" aria-label="Mark in progress" className="p-2 rounded-xl text-blue-600 hover:bg-blue-50 border border-blue-200"><Play size={16} className="fill-blue-500" /></button>}
+                      {canManage && a.status === 'in_progress' && <button onClick={() => quickStatus(a, 'completed')} title="Mark completed" aria-label="Mark completed" className="p-2 rounded-xl text-emerald-600 hover:bg-emerald-50 border border-emerald-200"><Check size={16} /></button>}
                       <button onClick={() => setSelectedId(a.id)} className="flex items-center gap-1 text-xs font-extrabold text-slate-700 hover:text-orange-600 bg-slate-100 hover:bg-orange-50 px-3 py-2 rounded-xl">Details<ChevronRight size={14} /></button>
                     </div>
                   </div>
@@ -194,13 +197,13 @@ export function AppointmentManager() {
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
             {technicians.map((tech) => {
               const jobs = filtered.filter((a) => a.technicianId === tech.id && a.status !== 'cancelled' && azDate(a.scheduledAt) === day).sort((x, y) => Date.parse(x.scheduledAt) - Date.parse(y.scheduledAt));
-              const revenue = jobs.reduce((n, a) => n + a.price, 0), target = (data.config.dailyRevenueTargetCents || 0) / 100;
+              const revenue = jobs.reduce((n, a) => n + (Number.isFinite(a.price) ? a.price : 0), 0), target = canViewFinance ? (data.config.dailyRevenueTargetCents || 0) / 100 : 0;
               return (
                 <div key={tech.id} className="bg-slate-50/80 rounded-2xl p-4 border border-slate-200/80 space-y-3">
                   <div className="flex items-center justify-between pb-2 border-b border-slate-200">
                     <div className="flex items-center gap-2">
                       <div className="w-7 h-7 rounded-full text-white text-xs font-black flex items-center justify-center" style={{ backgroundColor: tech.color }}>{initials(tech.name)}</div>
-                      <div><span className="font-extrabold text-xs text-slate-900 block leading-tight">{tech.name}</span><span className="text-[10px] text-slate-500 font-medium">{jobs.length} jobs · {dollars(revenue)}{target ? ` of ${dollars(target)}` : ''}</span></div>
+                      <div><span className="font-extrabold text-xs text-slate-900 block leading-tight">{tech.name}</span><span className="text-[10px] text-slate-500 font-medium">{jobs.length} jobs · {amount(revenue)}{target ? ` of ${amount(target)}` : ''}</span></div>
                     </div>
                   </div>
                   {target > 0 && <div className="h-1.5 rounded-full bg-slate-200 overflow-hidden" aria-label={`Revenue target ${Math.round((revenue / target) * 100)}%`}><div className="h-full bg-orange-500" style={{ width: `${Math.min(100, (revenue / target) * 100)}%` }} /></div>}
@@ -210,7 +213,7 @@ export function AppointmentManager() {
                         <div className="flex items-center justify-between"><span className="text-xs font-black text-orange-600">{azTime(a.scheduledAt)}</span><StatusBadge appt={a} compact /></div>
                         <p className="font-extrabold text-xs text-slate-900 leading-tight">{a.customerName}</p>
                         <p className="text-[11px] text-slate-500 truncate flex items-center gap-1"><MapPin size={10} className="text-slate-400" />{a.city} ({a.zip}){a.territory?.micro ? ` · ${a.territory.micro}` : ''}</p>
-                        <div className="flex items-center justify-between text-[10px] font-bold text-slate-600 pt-1 border-t border-slate-100"><span className="truncate">{a.package}</span><span className="text-orange-600 font-black">{dollars(a.price)}</span></div>
+                        <div className="flex items-center justify-between text-[10px] font-bold text-slate-600 pt-1 border-t border-slate-100"><span className="truncate">{a.package}</span><span className="text-orange-600 font-black">{amount(a.price)}</span></div>
                       </button>
                     ))}
                   </div>
