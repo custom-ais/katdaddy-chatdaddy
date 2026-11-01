@@ -10,6 +10,7 @@
 
 import { notifyBookingOwner } from "./owner-notification.mjs";
 import { createVerification } from "./verification.mjs";
+import { waitForRequestLock } from "./request-lock.mjs";
 import { approvalPolicy } from "./approval-policy.mjs";
 import { isIP } from "node:net";
 import { distanceMiles, validPoint } from "../shared/coverage.mjs";
@@ -621,14 +622,22 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
 
   return async function handle(req, res) {
     req.bobActivity = { requestId: randomBytes(10).toString("hex"), sessionId: "" };
+    let conversationLock = null;
+    let response = null;
+    const releaseConversation = async () => {
+      const lease = conversationLock;
+      conversationLock = null;
+      if (lease) await lease.release();
+    };
     const send = async (status, data) => {
       if (req.url !== "/api/health" && (status >= 400 || req.method !== "GET")) {
         await record(req, "request.finished", { path: String(req.url || "").split("?")[0], method: req.method, status, ...(status >= 400 ? { error: data?.error } : {}) }, status >= 500 ? "error" : status >= 400 ? "warning" : "info");
       }
-      res.setHeader("X-BOB-Request-ID", req.bobActivity.requestId);
-      res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
-      res.end(JSON.stringify(data));
+      response = { status, data };
     };
+    // Prepare the reply, then let every nested finally release its locks before
+    // sending it. A browser may make its next request immediately after a reply.
+    const routeRequest = async () => {
     let url;
     try {
       url = new URL(req.url || "/", "http://bob.local");
@@ -649,7 +658,6 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         return send(503, { ok: false, error: "BOB can't reach its database.", reason });
       }
     }
-    let conversationLock = null;
     try {
       await store.init();
       if (Math.random() < 0.05) store.cleanup().catch(() => {});
@@ -659,12 +667,11 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
       if (method !== "GET") csrf(req);
       // Serialize session mutations (including chat/contact/verification/booking),
       // so a slow provider response cannot restore stale ownership or contact data.
-      if (method !== 'GET' && !pathname.startsWith('/api/admin/') && pathname !== '/api/session' && req.headers['x-bob-session']) {
+      if (method !== 'GET' && !pathname.startsWith('/api/admin/') && !['/api/session', '/api/activity'].includes(pathname) && req.headers['x-bob-session']) {
         const token = digest(req.headers['x-bob-session']);
         if (!await store.loadSession(token)) fail(401, 'This conversation expired. Start again.');
-        const key = `conversation:${token}`;
-        if (!await store.lock(key, 120)) fail(409, 'Another request for this booking is in progress. Please wait.');
-        conversationLock = key;
+        req.bobActivity.sessionId = token.slice(0, 16);
+        conversationLock = await waitForRequestLock(store, `conversation:${token}`);
       }
 
       if (method === "GET" && pathname === "/api/health") {
@@ -804,6 +811,12 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
           notes: String(body.notes || "").trim(), smsConsent: body.smsConsent === true,
         };
         if (data.phoneVerified?.phone !== data.contact.phone) delete data.phoneVerified;
+        if (useTwilioVerify) {
+          if (!verifyService.verified(data)) delete data.verifiedContact;
+          const pending = data.verification;
+          const to = pending?.channel === 'email' ? data.contact.email.toLowerCase() : data.contact.phone;
+          if (pending?.provider === 'twilio' && pending.to !== to) delete data.verification;
+        }
         data.addOns = data.route === "cleaning" ? { fogging: body.addOns?.fogging === true, toolRetrieval: body.addOns?.toolRetrieval === true } : {};
         data.zip = body.zip;
         data.location = where.location;
@@ -1231,8 +1244,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
           let a = await store.approval(id);
           if (!a) fail(404, "Approval request not found.");
           const key = `conversation:${a.session}`;
-          if (!await store.lock(key, 120)) fail(409, 'This booking is being updated. Please wait.');
-          conversationLock = key;
+          conversationLock = await waitForRequestLock(store, key);
           a = await store.approval(id);
           if (!a) fail(404, 'Approval request not found.');
           const c = await store.config();
@@ -1404,17 +1416,24 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
       fail(404, "Endpoint not found.");
     } catch (e) {
       if (res.headersSent) return res.end();
-      if (!(e instanceof HttpError)) {
+      if (!(e instanceof HttpError) && e.extra?.code !== 'CONVERSATION_PENDING') {
         console.error("BOB request failed:", e);
         // Kept for a week so the office can see what went wrong (Settings → Connections).
         await store.kvSet("diag:last-error", { at: clock(), path: `${method} ${pathname}`, message: String(e?.message || e).slice(0, 300) }, 60 * 60 * 24 * 7).catch(() => {});
       }
-      send(e.status || 500, {
+      return send(e.status || 500, {
         error: e.status ? e.message : "The operation could not be completed. Your appointment is not confirmed unless a booking reference was returned.",
         ...(e.extra || {}),
       });
     } finally {
-      if (conversationLock) await store.unlock(conversationLock);
+      await releaseConversation();
+    }
+    };
+    await routeRequest();
+    if (response && !res.headersSent) {
+      res.setHeader("X-BOB-Request-ID", req.bobActivity.requestId);
+      res.writeHead(response.status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(JSON.stringify(response.data));
     }
   };
 }

@@ -285,6 +285,20 @@ export function createStore(db, { clock = Date.now } = {}) {
     async unlock(key) {
       await q("delete from bob.kv where key=$1", [`lock:${key}`]);
     },
+    async acquireLease(key, owner, ttlSeconds) {
+      const now = clock();
+      const rows = await q(
+        `insert into bob.kv(key,value,expires) values($1,$2::jsonb,$3)
+         on conflict (key) do update set value=excluded.value, expires=excluded.expires
+         where bob.kv.expires is not null and bob.kv.expires<=$4
+         returning key`,
+        [`lock:${key}`, json({ owner }), now + ttlSeconds * 1000, now],
+      );
+      return rows.length > 0;
+    },
+    async releaseLease(key, owner) {
+      await q("delete from bob.kv where key=$1 and value->>'owner'=$2", [`lock:${key}`, owner]);
+    },
     /** Fixed-window counter. Returns true while under the limit. */
     async rateHit(key, limit, periodMs) {
       const now = clock();

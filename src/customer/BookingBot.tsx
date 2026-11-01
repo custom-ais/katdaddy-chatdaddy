@@ -297,6 +297,7 @@ function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { t
   const notSent = verification?.available && !verification.sent && !verification.reused;
   const [code, setCode] = useState(''), [busy, setBusy] = useState(false), [info, setInfo] = useState<any>(verification), [now, setNow] = useState(Date.now());
   const busyRef = useRef(false);
+  const [operation, setOperation] = useState<'send' | 'check' | ''>('');
   const [error, setError] = useState(notSent && !verification.chooseChannel && !verification.retryInSeconds ? "We couldn't send the code. Try again, or send the team a request." : '');
   const [retryAt, setRetryAt] = useState(Date.now() + (typeof verification.retryInSeconds === 'number' ? verification.retryInSeconds * 1000 : notSent ? 0 : 30_000));
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
@@ -317,15 +318,15 @@ function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { t
   const check = async (e: React.FormEvent) => {
     e.preventDefault();
     if (busyRef.current || !sent || code.replace(/\D/g, '').length !== 6) return;
-    busyRef.current = true; setBusy(true); setError('');
+    busyRef.current = true; setBusy(true); setOperation('check'); setError('');
     try {
       const r = await api('/api/verify/check', { method: 'POST', token, body: { code } });
       onVerified(r.session);
-    } catch (err) { setError((err as Error).message); setCode(''); } finally { busyRef.current = false; setBusy(false); }
+    } catch (err) { setError((err as Error).message); setCode(''); } finally { busyRef.current = false; setBusy(false); setOperation(''); }
   };
   const sendCode = async (nextChannel = channel) => {
     if (busyRef.current || Date.now() < retryAt) return;
-    busyRef.current = true; setBusy(true); setError(''); setCode('');
+    busyRef.current = true; setBusy(true); setOperation('send'); setError(''); setCode('');
     try {
       const r = await api('/api/verify/send', { method: 'POST', token, body: { channel: nextChannel } });
       setInfo({ ...r.verification, channels: r.verification.channels || channels });
@@ -333,7 +334,7 @@ function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { t
       setRetryAt(Date.now() + delay * 1000); setNow(Date.now());
       if (!r.verification.sent && r.verification.retryInSeconds) setError(`You can request another code in ${r.verification.retryInSeconds} seconds.`);
       else if (!r.verification.sent) setError("We couldn't send the code. Try again, or send the team a request.");
-    } catch (err) { setError((err as Error).message); } finally { busyRef.current = false; setBusy(false); }
+    } catch (err) { setError((err as Error).message); } finally { busyRef.current = false; setBusy(false); setOperation(''); }
   };
   return (
     <Card>
@@ -351,6 +352,7 @@ function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { t
         />
         <button className="px-5 bg-gradient-to-r from-orange-500 to-orange-600 text-white font-extrabold rounded-2xl disabled:opacity-50" disabled={busy || code.length !== 6}>{busy ? <Loader2 className="animate-spin" size={20} /> : 'Verify'}</button>
       </form>}
+      {busy && <p role="status" className="mt-3 flex items-center gap-2 text-sm font-semibold text-slate-500"><Loader2 className="animate-spin" size={16} />{operation === 'send' ? 'Sending your code…' : 'Checking your code…'}</p>}
       {error && <div role="alert" className="mt-3 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">{error}</div>}
       <div className="mt-4 flex items-center justify-between text-sm gap-3">
         {sent && channels.length === 1 ? <button type="button" className="font-bold text-orange-600 disabled:text-slate-400" onClick={() => sendCode()} disabled={busy || wait > 0}>{wait > 0 ? `Resend code in ${wait}s` : 'Resend code'}</button> : <span className="text-slate-500" aria-live="polite">{wait > 0 ? `Another code in ${wait}s` : ''}</span>}
