@@ -162,7 +162,7 @@ test("same-day: only before the cutoff, with short notice, next to a booked job"
   assert.deepEqual(await h.slots(far, "?date=2026-09-22"), [], "not next to the booked job, so no same-day");
 });
 
-test("5 PM overflow: short, nearby, high enough ticket — and it needs approval", async (t) => {
+test("non-emergency 5 PM overflow remains office-only even when the scheduling lane is enabled", async (t) => {
   const h = await harness(t, {
     config: { overflow: { enabled: true, start: "17:00", maxDurationMins: 90, minTicketCents: 22000, requireNearby: true }, approver: { name: "Ryan", phone: "", email: "" } },
   });
@@ -177,11 +177,11 @@ test("5 PM overflow: short, nearby, high enough ticket — and it needs approval
   for (const m of ["Dryer Vent Cleaning", "85326", "Have Dryer", "No", "1-Story", "Gas", "Standard", "Dries in one normal cycle", "No signs", "Premium 1-2-3 · $228", "Accept & Continue"]) await h.chat(token, m);
   await h.contactAndVerify(token);
   const day = [...(await h.slots(token, "?date=2026-09-23")), ...(await h.slots(token, "?date=2026-09-23&cursor=3"))];
-  const pm = day.find((s) => s.overflow);
-  assert.ok(pm, JSON.stringify(day));
-  assert.equal(pm.scheduledAt, "2026-09-24T00:00:00.000Z");
-  assert.equal(pm.approval, true);
-  const held = await h.hold(token, pm.scheduledAt);
-  assert.equal(held.data.hold.approvalRequired, true);
-  assert.equal((await h.confirm(token, held.data.hold)).data.code, "APPROVAL_REQUIRED");
+  assert.ok(!day.some((s) => s.overflow), "approval-only overflow is not offered for regular bookings");
+  const held = await h.hold(token, "2026-09-24T00:00:00.000Z");
+  assert.equal(held.status, 409);
+  assert.equal(held.data.code, "OFFICE_SCHEDULING_REQUIRED");
+  assert.equal(await h.count("holds"), 0);
+  assert.equal(await h.count("appointments"), 0);
+  assert.ok(!h.lc.calls.some((c) => c[0] === "sms"), "no company approval text for regular overflow");
 });

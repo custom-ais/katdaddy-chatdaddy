@@ -1,13 +1,17 @@
 // BOB HTTP API — Postgres-backed, serverless-friendly. Jobber is the master schedule,
-// LeadConnector carries the phone check, approvals and confirmations, and Gemini reads
+// Selected providers carry verification and messages; LeadConnector retains CRM/email. Gemini reads
 // free-typed chat. Static files are served by the host (Vercel).
 //
 // Booking sequence (rulebook, Oct 20 architecture):
-//   chat → service accepted → contact → LeadConnector text code (phone verified)
+//   chat → service accepted → contact → selected verification (SMS or email)
 //   → live Jobber-aware times → 5-minute hold → final approval
-//   → [approval by a named approver for emergency / 5 PM visits]
-//   → Jobber client + job + visit → only then "confirmed" → LeadConnector confirmation.
+//   → [approval by a named approver only for emergency same-day visits]
+//   → Jobber client + job + visit → only then "confirmed" → selected confirmation provider.
 
+import { notifyBookingOwner } from "./owner-notification.mjs";
+import { createVerification } from "./verification.mjs";
+import { waitForRequestLock } from "./request-lock.mjs";
+import { approvalPolicy } from "./approval-policy.mjs";
 import { isIP } from "node:net";
 import { distanceMiles, validPoint } from "../shared/coverage.mjs";
 import { captureAvailabilityRequest } from "./availability-request.mjs";
@@ -16,7 +20,7 @@ import {
   DEFAULT_CONFIG, INITIAL_FAQS, bookingQuote, travelFeeFor, validateContact,
   validateConfig, normalizePhone, isBookable, BUNDLE_PRICE_CENTS, phoenixDate, areaFor, drivingAreaFor, textCodeOn,
 } from "../shared/domain.mjs";
-import { initialSession, WELCOME } from "../shared/conversation.mjs";
+import { initialSession, WELCOME, detectSafety } from "../shared/conversation.mjs";
 import { territoryFor, WEST_VALLEY_ZIPS } from "../shared/territory.mjs";
 import { chatTurn } from "./chat.mjs";
 import { confirmationEmail, confirmationSms, verificationSms, approvalRequestText } from "./messages.mjs";
@@ -73,7 +77,22 @@ const VERIFIED_FOR = 6 * 3_600_000;
 const APPROVAL_WINDOW = 30 * 60_000;
 const FAQ_STATUSES = ["approved", "draft"];
 
-export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant = null, env = process.env, clock = () => Date.now() }) {
+export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant = null, twilio = null, env = process.env, clock = () => Date.now() }) {
+  const useTwilioVerify = env.BOOKING_VERIFICATION_PROVIDER === 'twilio';
+  const verifyService = createVerification({ store, twilio, clock, fail });
+  const verificationOn = (c) => useTwilioVerify || textCodeOn(c);
+  const useTwilioSms = env.BOOKING_SMS_PROVIDER === 'twilio';
+  const sendSms = (contactId, phone, text) => useTwilioSms ? twilio?.messagingConfigured ? twilio.sendSms(phone, text) : Promise.reject(new Error('Approved Twilio SMS sender is not configured.')) : lc.sendSms(contactId, text);
+  const notifyOwner = async (appointment, config) => {
+    try {
+      return await notifyBookingOwner({ store, appointment, config, clock, provider: useTwilioSms ? 'Twilio' : 'LeadConnector', sendSms: async (phone, text) => {
+        if (useTwilioSms) return sendSms(null, phone, text);
+        if (!lc.configured) throw new Error('Owner SMS provider is not configured.');
+        const contactId = await lc.upsertContact({ phone, tags: ['bob-booking-owner'] });
+        return sendSms(contactId, phone, text);
+      } });
+    } catch { return { status: 'failed', reason: 'notification_unavailable' }; }
+  };
   const publicOrigin = (env.PUBLIC_ORIGIN || env.NEXT_PUBLIC_APP_URL || env.APP_URL || "").replace(/\/$/, "");
   // ChatDaddy's existing admin password works as the dashboard password.
   const envPassword = env.ADMIN_PASSWORD || "";
@@ -123,13 +142,14 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
   };
 
   const jobberMode = (c) => c.scheduleSource === "Jobber";
-  const verificationReady = (c) => !textCodeOn(c) || lc.configured;
+  const verificationReady = (c) => !verificationOn(c) || (useTwilioVerify ? Boolean(twilio?.verifyConfigured) : lc.configured);
   const bookingOpen = async (c) => isBookable(c) && (c.serviceAreaMode !== "driving_distance" || geo.provider === "google") && verificationReady(c) && (!jobberMode(c) || (await jobber.connected()));
   const aiReady = (c) => Boolean(assistant?.configured) && c.aiAssistant !== false;
-  const phoneOk = (data, c) =>
+  const phoneOk = (data, c) => useTwilioVerify ? verifyService.verified(data) :
     !textCodeOn(c) ||
     Boolean(data.phoneVerified?.phone && data.phoneVerified.phone === data.contact?.phone && clock() - data.phoneVerified.at < VERIFIED_FOR);
-  const needsApproval = (q, slot, c) => (c.approvalServices || []).includes(q.package) || Boolean(slot?.overflow);
+  const needsApproval = (q, slot, c) => approvalPolicy(q, slot, c, clock()).required;
+  const requireAllowedSlot = (q, slot, c) => { if (approvalPolicy(q, slot, c, clock()).blocked) fail(409, 'This exception needs office scheduling. Please choose a regular opening or contact the office.', { code: 'OFFICE_SCHEDULING_REQUIRED' }); };
   const coverageFingerprint = (c) => digest(JSON.stringify([c.serviceAreaMode, c.baseAddress, c.baseLocation, c.serviceAreaMiles, c.travelAreaMiles, c.customServiceAreas, c.serviceZips, c.travelZips, c.travelZoneFeeCents, c.maxDriveFromBaseMin, c.travelFeeTiers]));
   const ensureCoverageCurrent = (data, c) => {
     if ((data.coverageFingerprint && data.coverageFingerprint !== coverageFingerprint(c)) || (!data.coverageFingerprint && ["driving_distance", "radius"].includes(c.serviceAreaMode))) {
@@ -157,10 +177,11 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
       preparation: c.preparation,
       faqs: ((await store.get("faqs")) || []).filter((f) => f.status !== "draft").map(({ id, question, answer, category, subcategory }) => ({ id, question, answer, category, subcategory })),
       welcome: WELCOME,
-      notificationsConfigured: lc.configured || Boolean(webhookUrl),
+      notificationsConfigured: lc.configured || (useTwilioSms && Boolean(twilio?.messagingConfigured)) || Boolean(webhookUrl),
       pricesApproved: Boolean(c.pricesAcknowledged),
       smartChat: aiReady(c),
-      phoneVerification: textCodeOn(c),
+      phoneVerification: verificationOn(c),
+      verificationChannels: useTwilioVerify ? ['sms', 'email'] : ['sms'],
       textMessages: c.smsConfirmations !== false, // off: no SMS consent question and no texts to customers
       approverName: c.approver?.name || "",
       // Optional extras the customer can tick on the details form.
@@ -173,6 +194,8 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
 
   const integrations = async () => ({
     jobber: { appConfigured: jobber.appConfigured, connected: await jobber.connected() },
+    verification: { provider: useTwilioVerify ? 'twilio' : 'leadconnector', configured: useTwilioVerify ? Boolean(twilio?.verifyConfigured) : lc.configured, channels: useTwilioVerify ? ['sms', 'email'] : ['sms'] },
+    sms: { provider: useTwilioSms ? 'twilio' : 'leadconnector', configured: useTwilioSms ? Boolean(twilio?.messagingConfigured) : lc.configured },
     leadConnector: { configured: lc.configured, tokenKind: lc.tokenKind || "", issue: (await store.kvGet("diag:lc").catch(() => null)) || null },
     maps: { provider: geo.provider, issue: (await geo.lastIssue?.()) || null },
     lastError: (await store.kvGet("diag:last-error").catch(() => null)) || null,
@@ -230,7 +253,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     heldLocksCount: await store.countActiveHolds(),
     conversations: await store.countSessions(),
     notifications: await store.recentEvents(),
-    notificationsConfigured: lc.configured || Boolean(webhookUrl),
+    notificationsConfigured: lc.configured || (useTwilioSms && Boolean(twilio?.messagingConfigured)) || Boolean(webhookUrl),
     integrations: await integrations(),
     westValleyZips: WEST_VALLEY_ZIPS,
     now: clock(),
@@ -360,31 +383,37 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
   /** LeadConnector confirmations. Never throws; records what actually happened. */
   async function confirmWithLeadConnector(appt, c) {
     const result = { sms: "skipped", email: "skipped" };
-    if (!lc.configured) return result;
-    try {
-      const contactId = await lc.upsertContact({
-        name: appt.customerName, phone: appt.phone, email: appt.email, address: appt.address, city: appt.city, zip: appt.zip,
-        smsConsent: appt.smsConsent, tags: lc.cfg.bookedTags,
-      });
-      result.contactId = contactId;
-      if (appt.phone && appt.smsConsent && c.smsConfirmations) {
-        result.sms = await lc.sendSms(contactId, confirmationSms(appt, c)).then(async (response) => {
+    let contactId = null;
+    // CRM and email remain on LeadConnector, but a CRM outage must not prevent
+    // an explicitly selected Twilio sender from sending the confirmation.
+    if (lc.configured) {
+      try {
+        contactId = await lc.upsertContact({
+          name: appt.customerName, phone: appt.phone, email: appt.email, address: appt.address, city: appt.city, zip: appt.zip,
+          smsConsent: appt.smsConsent, tags: lc.cfg.bookedTags,
+        });
+        result.contactId = contactId;
+      } catch { result.crm = "failed"; }
+    }
+    if (appt.phone && appt.smsConsent && c.smsConfirmations) {
+      if (!useTwilioSms && !contactId) result.sms = lc.configured ? "failed" : "skipped";
+      else {
+        result.sms = await sendSms(contactId, appt.phone, confirmationSms(appt, c)).then(async (response) => {
           result.smsMessageId = response?.messageId || response?.id || null;
-          await store.log("notification.accepted", { appointmentId: appt.id, channel: "sms", provider: "LeadConnector", messageId: result.smsMessageId, delivery: "not_confirmed" }).catch((error) => console.error("[activity] notification log", error.message));
+          await store.log("notification.accepted", { appointmentId: appt.id, channel: "sms", provider: useTwilioSms ? "Twilio" : "LeadConnector", messageId: result.smsMessageId, delivery: "not_confirmed" }).catch((error) => console.error("[activity] notification log", error.message));
           return "sent";
         }, async (error) => {
-          await store.log("notification.failed", { appointmentId: appt.id, channel: "sms", error: error.message }, { level: "error" }).catch((error) => console.error("[activity] notification log", error.message));
+          await store.log("notification.failed", { appointmentId: appt.id, channel: "sms", provider: useTwilioSms ? "Twilio" : "LeadConnector", error: error.message }, { level: "error" }).catch((error) => console.error("[activity] notification log", error.message));
           return "failed";
         });
       }
-      if (appt.email && c.emailConfirmations) {
-        result.email = await lc.sendEmail(contactId, confirmationEmail(appt, c)).then(() => "sent", (e) => (console.error("[lc] email", e.message), "failed"));
-      }
-      await lc.addNote(contactId, `BOB booking ${appt.id}: ${appt.package}, ${new Date(appt.scheduledAt).toLocaleString("en-US", { timeZone: "America/Phoenix" })}${appt.jobber?.jobNumber ? ` · Jobber job #${appt.jobber.jobNumber}` : ""}.`);
-    } catch (error) {
-      console.error("[lc] contact", error.message);
-      if (result.sms === "skipped" && appt.smsConsent && c.smsConfirmations) result.sms = "failed";
-      if (result.email === "skipped" && appt.email) result.email = "failed";
+    }
+    if (appt.email && c.emailConfirmations) {
+      result.email = contactId ? await lc.sendEmail(contactId, confirmationEmail(appt, c)).then(() => "sent", () => "failed") : lc.configured ? "failed" : "skipped";
+    }
+    if (contactId) {
+      try { await lc.addNote(contactId, `BOB booking ${appt.id}: ${appt.package}, ${new Date(appt.scheduledAt).toLocaleString("en-US", { timeZone: "America/Phoenix" })}${appt.jobber?.jobNumber ? ` · Jobber job #${appt.jobber.jobNumber}` : ""}.`); }
+      catch { result.crm = "failed"; }
     }
     result.at = clock();
     return result;
@@ -459,35 +488,35 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
   async function notifyApprover(a, c, origin = publicOrigin) {
     const out = { sms: "skipped", email: "skipped" };
     const ap = c.approver || {};
-    if (!lc.configured || (!ap.phone && !ap.email)) {
+    if ((!useTwilioSms && !lc.configured) || (!ap.phone && !ap.email)) {
       await store.log("notification.skipped", { approvalId: a.id, reason: "not_configured" }, { sessionId: a.session?.slice(0, 16) || "", level: "warning" }).catch((error) => console.error("[activity] notification log", error.message));
       return { ...out, reason: "not_configured" };
     }
     const link = `${origin || ""}/admin?approval=${encodeURIComponent(a.id)}`;
     const text = approvalRequestText(a, link);
-    try {
-      const contactId = await lc.upsertContact({ name: ap.name, phone: normalizePhone(ap.phone) || undefined, email: ap.email || undefined, tags: ["bob-approver"] });
-      if (ap.phone) out.sms = await lc.sendSms(contactId, text).then(async (response) => {
+    let contactId = null;
+    if (lc.configured) {
+      try { contactId = await lc.upsertContact({ name: ap.name, phone: normalizePhone(ap.phone) || undefined, email: ap.email || undefined, tags: ["bob-approver"] }); }
+      catch { out.crm = "failed"; }
+    }
+    if (ap.phone) {
+      if (!useTwilioSms && !contactId) out.sms = "failed";
+      else out.sms = await sendSms(contactId, normalizePhone(ap.phone), text).then(async (response) => {
         out.smsMessageId = response?.messageId || response?.id || null;
-        await store.log("notification.accepted", { approvalId: a.id, channel: "sms", recipient: ap.name, messageId: out.smsMessageId, delivery: "not_confirmed" }, { sessionId: a.session?.slice(0, 16) || "" }).catch((error) => console.error("[activity] notification log", error.message));
+        await store.log("notification.accepted", { approvalId: a.id, channel: "sms", provider: useTwilioSms ? "Twilio" : "LeadConnector", recipient: ap.name, messageId: out.smsMessageId, delivery: "not_confirmed" }, { sessionId: a.session?.slice(0, 16) || "" }).catch((error) => console.error("[activity] notification log", error.message));
         return "sent";
       }, async (error) => {
         out.error = error.message;
-        await store.log("notification.failed", { approvalId: a.id, channel: "sms", error: error.message }, { sessionId: a.session?.slice(0, 16) || "", level: "error" }).catch((error) => console.error("[activity] notification log", error.message));
+        await store.log("notification.failed", { approvalId: a.id, channel: "sms", provider: useTwilioSms ? "Twilio" : "LeadConnector", error: error.message }, { sessionId: a.session?.slice(0, 16) || "", level: "error" }).catch((error) => console.error("[activity] notification log", error.message));
         return "failed";
       });
-      if (ap.email) {
-        out.email = await lc
-          .sendEmail(contactId, { subject: `BOB approval needed: ${a.service} (${a.id})`, html: `<p>${text.replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[ch])}</p>`, text })
-          .then(() => "sent", (e) => (console.error("[lc] approval email", e.message), "failed"));
-      }
-    } catch (error) {
-      console.error("[lc] approver contact", error.message);
-      if (ap.phone) out.sms = "failed";
-      if (ap.email) out.email = "failed";
+    }
+    if (ap.email) {
+      out.email = contactId ? await lc.sendEmail(contactId, { subject: `BOB approval needed: ${a.service} (${a.id})`, html: `<p>${text.replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[ch])}</p>`, text }).then(() => "sent", () => "failed") : lc.configured ? "failed" : "skipped";
     }
     return out;
   }
+
   const publicApproval = (a, c) => ({
     id: a.id,
     status: a.status,
@@ -502,7 +531,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
   function requireReadyToBook(data, c) {
     if (data.stage !== "slots" || data.safety || !data.serviceAccepted || !data.location) fail(409, "Complete the service and contact details first.");
     if (data.route === "bundle" && !data.bundleAccepted) fail(409, "Accept the combined assessment offer first.");
-    if (!phoneOk(data, c)) fail(409, "Confirm your phone number with the text code first.", { code: "PHONE_NOT_VERIFIED" });
+    if (!phoneOk(data, c)) fail(409, "Verify your selected contact method with a code first.", { code: "PHONE_NOT_VERIFIED" });
     ensureCoverageCurrent(data, c);
     const area = areaFor(data.contact.zip, c, "AZ", data.driveFromBaseMiles, data.location);
     if (!(area === "in" || (area === "travel" && data.travelZone))) fail(409, "Service coverage changed. Please ask the team to review.");
@@ -514,6 +543,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
    */
   async function commitBooking({ token, data, hold, c, idem, approval = null }) {
     const q = quoteFor(data, c);
+    if (!phoneOk(data, c)) fail(409, 'Verification expired or contact details changed. Verify again before booking.');
     if (!sameQuote(q, hold.quote)) fail(409, "Service details changed. Please review a new quote and time.");
     const errors = validateContact(data.contact);
     if (errors.length) fail(400, errors.join(" "));
@@ -524,6 +554,9 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
     try {
       const slot = await scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, q), location: data.location, now: clock(), iso: new Date(hold.start).toISOString(), preferTech: hold.tech, excludeSession: token, fresh: true });
       if (!slot) fail(409, "That opening changed. Please select another time.", { code: "SLOT_GONE" });
+      requireAllowedSlot(q, slot, c);
+      if (approval && !needsApproval(q, slot, c)) fail(409, 'This request needs office scheduling; its approval is no longer applicable.');
+      if (needsApproval(q, slot, c) && !approval) fail(409, 'Emergency same-day service needs approval first.');
       const contact = data.contact;
       appt = {
         id: newId("DVS"), customerName: contact.name, email: contact.email, phone: contact.phone,
@@ -536,7 +569,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         concerns: [...(data.concerns || []), ...(data.notes || [])], property: data.property, smsConsent: contact.smsConsent,
         assessmentAccepted: data.bundleAccepted, urgency: q.package === "emergency" ? "high" : "normal", source: "ai_bot",
         createdAt: new Date(clock()).toISOString(), revision: 1, scheduleSource: c.scheduleSource, jobber: null,
-        phoneVerified: Boolean(data.phoneVerified), overflow: Boolean(slot.overflow), sameDay: Boolean(slot.sameDay), travelZone: Boolean(data.travelZone),
+        phoneVerified: Boolean(data.phoneVerified?.phone === contact.phone && clock() - data.phoneVerified.at < VERIFIED_FOR), overflow: Boolean(slot.overflow), sameDay: Boolean(slot.sameDay), travelZone: Boolean(data.travelZone),
         routeScore: slot.routeScore ?? null,
         approval: approval ? { id: approval.id, by: approval.decision?.by, at: approval.decision?.at } : null,
       };
@@ -579,6 +612,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
       await store.unlock(`slot:${day}`);
     }
     if (!pending) {
+      await notifyOwner(appt, c);
       appt.notifications = await confirmWithLeadConnector(appt, c);
       await store.updateAppointment(appt);
       await dispatch();
@@ -588,14 +622,22 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
 
   return async function handle(req, res) {
     req.bobActivity = { requestId: randomBytes(10).toString("hex"), sessionId: "" };
+    let conversationLock = null;
+    let response = null;
+    const releaseConversation = async () => {
+      const lease = conversationLock;
+      conversationLock = null;
+      if (lease) await lease.release();
+    };
     const send = async (status, data) => {
       if (req.url !== "/api/health" && (status >= 400 || req.method !== "GET")) {
         await record(req, "request.finished", { path: String(req.url || "").split("?")[0], method: req.method, status, ...(status >= 400 ? { error: data?.error } : {}) }, status >= 500 ? "error" : status >= 400 ? "warning" : "info");
       }
-      res.setHeader("X-BOB-Request-ID", req.bobActivity.requestId);
-      res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
-      res.end(JSON.stringify(data));
+      response = { status, data };
     };
+    // Prepare the reply, then let every nested finally release its locks before
+    // sending it. A browser may make its next request immediately after a reply.
+    const routeRequest = async () => {
     let url;
     try {
       url = new URL(req.url || "/", "http://bob.local");
@@ -623,6 +665,14 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
       await rate(req, "api", 240);
       if (!["GET", "POST", "PATCH", "DELETE"].includes(method)) fail(405, "Method not supported.");
       if (method !== "GET") csrf(req);
+      // Serialize session mutations (including chat/contact/verification/booking),
+      // so a slow provider response cannot restore stale ownership or contact data.
+      if (method !== 'GET' && !pathname.startsWith('/api/admin/') && !['/api/session', '/api/activity'].includes(pathname) && req.headers['x-bob-session']) {
+        const token = digest(req.headers['x-bob-session']);
+        if (!await store.loadSession(token)) fail(401, 'This conversation expired. Start again.');
+        req.bobActivity.sessionId = token.slice(0, 16);
+        conversationLock = await waitForRequestLock(store, `conversation:${token}`);
+      }
 
       if (method === "GET" && pathname === "/api/health") {
         return send(200, { ok: true, version: "3.0.0", bookingEnabled: await bookingOpen(await store.config()) });
@@ -660,11 +710,20 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         if (typeof body.message !== "string" || !body.message.trim() || body.message.length > 2000) fail(400, "Enter a message of 1–2,000 characters.");
         if (data.bookingId) fail(409, "This conversation already has a booking. Start a new conversation for another request.");
         if (data.stage === "approval") fail(409, "Your visit is waiting for approval. You'll see the answer here.");
+        // Never send an in-band OTP to activity/history or the language model.
+        // Keep safety words intact so a safety stop still takes precedence.
+        if (data.stage === 'verify' && /\b\d{4,8}\b/.test(body.message)) {
+          body.message = body.message.replace(/\b\d{4,8}\b/g, '[verification code omitted]');
+          if (!detectSafety(body.message)) {
+            await record(req, 'conversation.message', { role: 'user', text: '[verification code omitted]', stage: data.stage });
+            return send(200, { session: data, reply: 'Please enter the verification code in the code box below, not in the chat.', options: [], via: 'rules' });
+          }
+        }
         const c = await store.config();
         const place = data.pending === "serviceAddress" || data.stage === "out_of_area" ? await lookupPlace(body.message, c) : null;
         await record(req, "conversation.message", { role: "user", text: /^\s*\d{4,8}\s*$/.test(body.message) ? "[verification code omitted]" : body.message, stage: data.stage });
         const result = await chatTurn({ message: body.message, session: data, config: c, faqs: await store.get("faqs"), assistant: aiReady(c) ? assistant : null, place });
-        const note = await captureAvailabilityRequest({ store, lc, config: c, data: result.session, message: body.message, session: token, now: clock(), origin: publicOrigin, log: (kind, details, level) => record(req, kind, details, level) });
+        const note = await captureAvailabilityRequest({ store, lc, sendStaffSms: useTwilioSms ? async ({ phone, text }) => sendSms(null, phone, text) : null, config: c, data: result.session, message: body.message, session: token, now: clock(), origin: publicOrigin, log: (kind, details, level) => record(req, kind, details, level) });
         if (note) {
           result.reply = `${note}\n\n${result.reply}`;
           const last = result.session.history.at(-1);
@@ -727,7 +786,11 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
 
       if (method === "POST" && pathname === "/api/contact") {
         await rate(req, "contact", 20, 600_000);
-        const { token, data } = await session(req), body = await readBody(req);
+        const { token } = await session(req), body = await readBody(req);
+        if (!await store.lock(`verification:${token}`, 30)) fail(409, 'A verification request is in progress. Please wait.');
+        try {
+        const data = await store.loadSession(token);
+        if (!data) fail(401, 'This conversation expired. Start again.');
         if (!["cleaning", "assessment", "bundle"].includes(data.route) || !data.serviceAccepted || data.safety || ["review", "approval", "confirmed"].includes(data.stage)) fail(409, "Choose and accept the appropriate service first.");
         if (data.route === "bundle" && !data.bundleAccepted) fail(409, "Accept the combined assessment offer first.");
         const errors = validateContact(body);
@@ -747,6 +810,13 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
           address: body.address.trim(), city: body.city.trim(), zip: body.zip,
           notes: String(body.notes || "").trim(), smsConsent: body.smsConsent === true,
         };
+        if (data.phoneVerified?.phone !== data.contact.phone) delete data.phoneVerified;
+        if (useTwilioVerify) {
+          if (!verifyService.verified(data)) delete data.verifiedContact;
+          const pending = data.verification;
+          const to = pending?.channel === 'email' ? data.contact.email.toLowerCase() : data.contact.phone;
+          if (pending?.provider === 'twilio' && pending.to !== to) delete data.verification;
+        }
         data.addOns = data.route === "cleaning" ? { fogging: body.addOns?.fogging === true, toolRetrieval: body.addOns?.toolRetrieval === true } : {};
         data.zip = body.zip;
         data.location = where.location;
@@ -760,18 +830,26 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         if (phoneOk(data, c)) data.stage = "slots";
         else {
           data.stage = "verify";
+          if (useTwilioVerify) verification = { required: true, available: Boolean(twilio?.verifyConfigured), sent: false, chooseChannel: true, channels: ['sms', ...(data.contact.email ? ['email'] : [])] };
+          else {
           const live = data.verification?.phone === data.contact.phone && data.verification.expires > clock() + 60_000;
           verification = live ? { required: true, sent: true, available: true, to: maskPhone(data.contact.phone), expiresAt: data.verification.expires, reused: true } : await sendCode(token, data);
+          }
         }
         await store.releaseHolds(token);
         await store.saveSession(token, data);
         return send(200, { session: data, quote: quoteFor(data, c), verification, address: where.location.formatted });
+        } finally { await store.unlock(`verification:${token}`); }
       }
 
       if (method === "POST" && pathname === "/api/verify/send") {
         await rate(req, "verify-send", 10, 3_600_000);
         const { token, data } = await session(req);
         const c = await store.config();
+        if (useTwilioVerify) {
+          const body = await readBody(req);
+          return send(200, { verification: await verifyService.send(token, body.channel) });
+        }
         if (!textCodeOn(c)) fail(409, "Phone verification isn't required.");
         if (!data.contact?.phone || !["verify", "slots"].includes(data.stage)) fail(409, "Enter your contact details first.");
         const verification = await sendCode(token, data);
@@ -781,6 +859,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
       if (method === "POST" && pathname === "/api/verify/check") {
         await rate(req, "verify-check", 30, 3_600_000);
         const { token, data } = await session(req), body = await readBody(req);
+        if (useTwilioVerify) return send(200, { verified: true, session: await verifyService.check(token, body.code) });
         const v = data.verification;
         if (!v?.hash || v.phone !== data.contact?.phone) fail(409, "Send a new code first.");
         if (clock() > v.expires) fail(410, "That code expired. Send a new one.");
@@ -805,7 +884,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         const { token, data } = await session(req);
         const c = await store.config();
         if (data.stage !== "slots" || !data.serviceAccepted || data.safety || !data.location) fail(409, "Complete the service and contact details first.");
-        if (!phoneOk(data, c)) fail(409, "Confirm your phone number with the text code first.", { code: "PHONE_NOT_VERIFIED" });
+        if (!phoneOk(data, c)) fail(409, "Verify your selected contact method with a code first.", { code: "PHONE_NOT_VERIFIED" });
         ensureCoverageCurrent(data, c);
         if (!(await bookingOpen(c))) return send(200, { slots: [], nextCursor: null, enabled: false });
         const date = url.searchParams.get("date") || "";
@@ -819,6 +898,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
           console.error("[availability]", error.message);
           fail(502, "We couldn't reach the live schedule. Please try again, or send the team a request.");
         }
+        all = all.filter(slot => !approvalPolicy(q, slot, c, clock()).blocked);
         const start = Math.max(0, Number(url.searchParams.get("cursor")) || 0);
         return send(200, {
           slots: all.slice(start, start + 3).map((s, i) => ({
@@ -848,6 +928,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
           const quote = quoteFor(data, c);
           const slot = await scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, quote), location: data.location, now: clock(), iso: body.scheduledAt, excludeSession: token, fresh: true });
           if (!slot) fail(409, "That time is no longer available. Please choose a fresh opening.");
+          requireAllowedSlot(quote, slot, c);
           const hold = { id: newId("HOLD"), session: token, tech: slot.technicianId, start: slot.start, end: slot.end, expires: clock() + 300_000, quote, lat: data.location.lat, lng: data.location.lng, address: `${data.contact.address}, ${data.contact.city}, AZ ${data.contact.zip}`, overflow: Boolean(slot.overflow) };
           await store.releaseHolds(token);
           await store.insertHold(hold);
@@ -882,6 +963,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         requireReadyToBook(data, c);
         const hold = await store.getHold(String(body.holdId || ""), token);
         if (!hold) fail(409, "Your hold expired. Choose a time again before confirming.");
+        requireAllowedSlot(hold.quote, hold, c);
         if (needsApproval(hold.quote, hold, c)) fail(409, "This visit needs approval from our team first.", { code: "APPROVAL_REQUIRED" });
         const { appt, pending } = await commitBooking({ token, data, hold, c, idem: body.idempotencyKey });
         return send(pending ? 202 : 201, { receipt: await receipt(appt), pending });
@@ -902,6 +984,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         if (!hold) fail(409, "Your hold expired. Choose a time again.");
         const q = quoteFor(data, c);
         if (!sameQuote(q, hold.quote)) fail(409, "Service details changed. Please review a new quote and time.");
+        requireAllowedSlot(q, hold, c);
         if (!needsApproval(q, hold, c)) fail(409, "This visit doesn't need approval. Confirm it directly.");
         const slot = await scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, q), location: data.location, now: clock(), iso: new Date(hold.start).toISOString(), preferTech: hold.tech, excludeSession: token, fresh: true });
         if (!slot) fail(409, "That time is no longer available. Please choose a fresh opening.");
@@ -1157,9 +1240,14 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         }
 
         if (method === "POST" && /^\/api\/admin\/approvals\/[^/]+$/.test(pathname)) {
-          const id = decodeURIComponent(pathname.split("/").pop()), b = await readBody(req), c = await store.config();
-          const a = await store.approval(id);
+          const id = decodeURIComponent(pathname.split("/").pop()), b = await readBody(req);
+          let a = await store.approval(id);
           if (!a) fail(404, "Approval request not found.");
+          const key = `conversation:${a.session}`;
+          conversationLock = await waitForRequestLock(store, key);
+          a = await store.approval(id);
+          if (!a) fail(404, 'Approval request not found.');
+          const c = await store.config();
           await sweepApprovals([a]);
           if (a.status !== "pending") fail(409, `This request is already ${a.status}.`);
           if (!["approve", "decline"].includes(b.decision)) fail(400, "Choose approve or decline.");
@@ -1268,6 +1356,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
             a.status = "confirmed";
             a.revision++;
             await store.updateAppointment(a);
+            await notifyOwner(a, c);
             a.notifications = await confirmWithLeadConnector(a, c);
             await store.updateAppointment(a);
             await store.audit("appointment.resolved_in_jobber", id);
@@ -1327,15 +1416,24 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
       fail(404, "Endpoint not found.");
     } catch (e) {
       if (res.headersSent) return res.end();
-      if (!(e instanceof HttpError)) {
+      if (!(e instanceof HttpError) && e.extra?.code !== 'CONVERSATION_PENDING') {
         console.error("BOB request failed:", e);
         // Kept for a week so the office can see what went wrong (Settings → Connections).
         await store.kvSet("diag:last-error", { at: clock(), path: `${method} ${pathname}`, message: String(e?.message || e).slice(0, 300) }, 60 * 60 * 24 * 7).catch(() => {});
       }
-      send(e.status || 500, {
+      return send(e.status || 500, {
         error: e.status ? e.message : "The operation could not be completed. Your appointment is not confirmed unless a booking reference was returned.",
         ...(e.extra || {}),
       });
+    } finally {
+      await releaseConversation();
+    }
+    };
+    await routeRequest();
+    if (response && !res.headersSent) {
+      res.setHeader("X-BOB-Request-ID", req.bobActivity.requestId);
+      res.writeHead(response.status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+      res.end(JSON.stringify(response.data));
     }
   };
 }
