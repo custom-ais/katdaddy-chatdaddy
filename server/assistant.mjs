@@ -118,7 +118,7 @@ ASSESSMENT: ${config.assessmentProcess}${priced ? ` Price ${money(config.assessm
 CLEANING + ASSESSMENT: when a customer wants cleaning and also has a vent concern, the assessment is 50% off when added to the cleaning${priced ? ` (${money(halfAssessmentCents(config))})` : ""}. The customer still picks the cleaning package. Repairs are quoted separately.
 No dryer installed → the visit is Express Vent Cleaning (vent only).
 Emergency Same-Day Clog Relief needs approval from the team before it's confirmed.
-Before booking, the customer confirms their phone with a text code, then picks a live time and approves the final summary.
+Before booking, the customer completes the verification method offered by the booking form, then picks a live time and approves the final summary. Email verification proves email ownership only, not phone ownership.
 PREPARATION: ${config.preparation}
 
 APPROVED FAQ ANSWERS:

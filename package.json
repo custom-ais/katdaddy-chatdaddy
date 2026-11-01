@@ -10,7 +10,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --test-concurrency=6 tests/*.test.mjs",
+    "test": "node --import ./scripts/test-no-network.mjs --test --test-concurrency=6 tests/*.test.mjs",
     "db:schema": "node scripts/print-schema.mjs"
   },
   "dependencies": {

@@ -834,3 +834,57 @@ test("with text confirmations off, BOB sends no phone code and no confirmation t
   assert.equal(done.status, 201, JSON.stringify(done.data));
   assert.equal(h.lc.calls.filter((x) => x[0] === "sms").length, 0, "no texts were attempted");
 });
+
+
+test("regular booking confirms directly without company approval or staff inquiry", async (t) => {
+  const h = await harness(t, { config: { approver: { name: "Office", phone: "6235559999", email: "" } } });
+  const token = await h.prepare();
+  await h.chat(token, "Can a tech come today at 5pm?");
+  assert.ok(!h.lc.calls.some((c) => c[0] === "sms"), "regular same-day inquiry sends no company text");
+  const [slot] = await h.slots(token);
+  assert.equal(slot.approval, false);
+  const held = await h.hold(token, slot.scheduledAt);
+  const asked = await h.call("/api/approvals", { method: "POST", token, body: { holdId: held.data.hold.id, approved: true } });
+  assert.equal(asked.status, 409);
+  assert.equal((await h.confirm(token, held.data.hold)).status, 201);
+  assert.equal((await h.store.approvals()).length, 0);
+  assert.ok(!h.lc.calls.some((c) => c[0] === "sms"), "no company text and customer has not opted into SMS");
+});
+
+test("legacy pending non-emergency approval cannot bypass office-only exception policy", async (t) => {
+  const h = await harness(t);
+  const token = await h.prepare();
+  const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
+  const hold = await h.store.holdById(held.data.hold.id);
+  const config = await h.store.config();
+  await h.store.set("config", { ...config, approvalServices: [...config.approvalServices, hold.quote.package] });
+  const a = { id: "APR-legacy", session: hold.session, status: "pending", holdId: hold.id, expiresAt: hold.expires,
+    requestedAt: hold.expires - 300000, service: hold.quote.name, scheduledAt: new Date(hold.start).toISOString() };
+  await h.store.insertApproval(a);
+  const cookie = await h.login();
+  const result = await h.call(`/api/admin/approvals/${a.id}`, { method: "POST", cookie, body: { decision: "approve", approverName: "Office" } });
+  assert.equal(result.status, 200, JSON.stringify(result.data));
+  assert.equal(result.data.result.status, "failed");
+  assert.match(result.data.result.failure, /office scheduling/);
+  assert.equal(h.jobber.jobs.length, 0);
+  assert.equal(await h.count("appointments"), 0);
+  assert.equal(await h.count("holds"), 0);
+});
+
+test("stale approval for an ordinary slot cannot execute even when its old approval setting was removed", async (t) => {
+  const h = await harness(t);
+  const token = await h.prepare();
+  const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
+  const hold = await h.store.holdById(held.data.hold.id);
+  const a = { id: "APR-stale", session: hold.session, status: "pending", holdId: hold.id, expiresAt: hold.expires,
+    requestedAt: hold.expires - 300000, service: hold.quote.name, scheduledAt: new Date(hold.start).toISOString() };
+  await h.store.insertApproval(a);
+  const cookie = await h.login();
+  const result = await h.call(`/api/admin/approvals/${a.id}`, { method: "POST", cookie, body: { decision: "approve", approverName: "Office" } });
+  assert.equal(result.status, 200, JSON.stringify(result.data));
+  assert.equal(result.data.result.status, "failed");
+  assert.match(result.data.result.failure, /approval is no longer applicable/);
+  assert.equal(h.jobber.jobs.length, 0);
+  assert.equal(await h.count("appointments"), 0);
+  assert.equal(await h.count("holds"), 0);
+});

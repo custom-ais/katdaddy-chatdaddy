@@ -1,3 +1,4 @@
+import { PhoneInput } from '../components/PhoneInput';
 import React, { useMemo, useState } from 'react';
 import { Calendar, Shield, User } from 'lucide-react';
 import { useDashboard } from './DashboardContext';
@@ -57,7 +58,7 @@ export function NewAppointmentModal({ onClose }: { onClose: () => void }) {
           <h4 className="text-xs font-extrabold text-slate-400 flex items-center gap-1.5"><User size={14} className="text-orange-500" />Customer</h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="Full name *"><input className={inputClass} required value={f.name} onChange={(e) => set({ name: e.target.value })} /></Field>
-            <Field label="Phone *"><input className={inputClass} required type="tel" value={f.phone} onChange={(e) => set({ phone: e.target.value })} /></Field>
+            <Field label="Phone *"><PhoneInput className={inputClass} required type="tel" value={f.phone} onValueChange={(value) => set({ phone: value })} /></Field>
             <Field label="Email" className="sm:col-span-2"><input className={inputClass} type="email" value={f.email} onChange={(e) => set({ email: e.target.value })} /></Field>
             <Field label="Street address *" className="sm:col-span-2"><input className={inputClass} required value={f.address} onChange={(e) => set({ address: e.target.value })} placeholder="15420 W Bell Rd" /></Field>
             <Field label="City *"><input className={inputClass} required value={f.city} onChange={(e) => set({ city: e.target.value })} /></Field>
