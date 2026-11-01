@@ -10,7 +10,7 @@ For verification, explicitly select `BOOKING_VERIFICATION_PROVIDER=twilio`, and 
 - `TWILIO_API_KEY_SECRET`
 - `TWILIO_VERIFY_SERVICE_SID` (VA identifier)
 
-Use a Verify service with **six-digit codes**, SMS and Email enabled, and its SendGrid mailer attached. The attached mailer stays in Twilio; this application does not need its SendGrid key. Confirm the active email template uses `{{twilio_code}}`. Review geographic restrictions and fraud safeguards before approved real tests.
+Use a Verify service with **four-digit codes**, SMS and Email enabled, and its SendGrid mailer attached. The attached mailer stays in Twilio; this application does not need its SendGrid key. Confirm the active email template uses `{{twilio_code}}`. Review geographic restrictions and fraud safeguards before approved real tests.
 
 Twilio verification is always required when explicitly selected, independently of the old phone-verification/text-confirmation switches. An incomplete configuration disables online booking. The customer explicitly chooses SMS or email before sending. A callback number remains required and can be a landline with email verification. Email verification never marks a phone verified and never grants SMS consent.
 

@@ -38,7 +38,7 @@ for (const channel of ['sms', 'email']) {
     const h = await harness(t, { twilio, env });
     const token = await prepare(h, { ...contact, email: 'owner@example.test' });
     await h.call('/api/verify/send', { method: 'POST', token, body: { channel } });
-    const checking = h.call('/api/verify/check', { method: 'POST', token, body: { code: '123456' } });
+    const checking = h.call('/api/verify/check', { method: 'POST', token, body: { code: '1234' } });
     await entered.promise;
     const waiting = observeContention(h.store);
     const safety = h.call('/api/chat', { method: 'POST', token, body: { message: 'There is smoke coming from my dryer' } });
@@ -72,7 +72,7 @@ for (const rest of [false, true]) {
     assert.equal(b.data.verification.reused, true);
     assert.equal(a.data.verification.expiresAt, b.data.verification.expiresAt);
     assert.equal(sends, 1, 'no second provider send or code invalidation');
-    const checked = await h.call('/api/verify/check', { method: 'POST', token, body: { code: '123456' } });
+    const checked = await h.call('/api/verify/check', { method: 'POST', token, body: { code: '1234' } });
     assert.equal(checked.status, 200);
   });
 }
@@ -118,7 +118,7 @@ test('a contact edit waits for verification and cannot retain ownership of the o
   const h = await harness(t, { twilio, env });
   const token = await prepare(h);
   await h.call('/api/verify/send', { method: 'POST', token, body: { channel: 'sms' } });
-  const checking = h.call('/api/verify/check', { method: 'POST', token, body: { code: '123456' } });
+  const checking = h.call('/api/verify/check', { method: 'POST', token, body: { code: '1234' } });
   await entered.promise;
   const waiting = observeContention(h.store);
   const editing = h.call('/api/contact', { method: 'POST', token, body: { ...contact, phone: '6235559999' } });

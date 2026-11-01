@@ -304,6 +304,7 @@ function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { t
   const wait = Math.max(0, Math.ceil((retryAt - now) / 1000));
   const channels: string[] = info?.channels || verification?.channels || ['sms'];
   const channel = info?.channel || 'sms';
+  const codeLength = info?.codeLength === 4 ? 4 : 6;
   const sent = Boolean(info?.sent || info?.reused);
   const email = channel === 'email';
   if (!info?.available) {
@@ -317,7 +318,7 @@ function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { t
   }
   const check = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (busyRef.current || !sent || code.replace(/\D/g, '').length !== 6) return;
+    if (busyRef.current || !sent || code.replace(/\D/g, '').length !== codeLength) return;
     busyRef.current = true; setBusy(true); setOperation('check'); setError('');
     try {
       const r = await api('/api/verify/check', { method: 'POST', token, body: { code } });
@@ -339,18 +340,18 @@ function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { t
   return (
     <Card>
       <h3 className="font-extrabold text-slate-800 text-lg flex items-center gap-2.5"><ShieldCheck size={22} className="text-orange-500" />{sent ? `Confirm your ${email ? 'email' : 'phone'}` : 'Choose how to receive your code'}</h3>
-      <p className="text-sm text-slate-500 mt-1">{sent ? `We ${email ? 'emailed' : 'texted'} a 6-digit code to ${info.to}. ${info.expiresAt ? `It expires at ${new Date(info.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : 'Enter it within 10 minutes.'}` : channels.includes('email') ? 'Choose text or email to continue booking. A landline cannot receive a text code.' : 'Send a text verification code to continue booking. A landline cannot receive a text code. Use a mobile number, or send the team a booking request.'}</p>
+      <p className="text-sm text-slate-500 mt-1">{sent ? `We ${email ? 'emailed' : 'texted'} a ${codeLength}-digit code to ${info.to}. ${info.expiresAt ? `It expires at ${new Date(info.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.` : 'Enter it within 10 minutes.'}` : channels.includes('email') ? 'Choose text or email to continue booking. A landline cannot receive a text code.' : 'Send a text verification code to continue booking. A landline cannot receive a text code. Use a mobile number, or send the team a booking request.'}</p>
       {(!sent || channels.length > 1) && <div className="mt-4 flex flex-wrap gap-2" role="group" aria-label="Verification delivery method">
         {channels.map((c) => <button key={c} type="button" disabled={busy || wait > 0} onClick={() => sendCode(c)} className="px-4 py-2 rounded-xl border border-orange-200 font-bold text-orange-700 bg-orange-50 disabled:opacity-50">{sent && c === channel ? 'Resend' : 'Send'} code by {c === 'email' ? 'email' : 'text'}</button>)}
       </div>}
       {sent && <form onSubmit={check} className="mt-4 flex gap-2">
         <input
-          aria-label="Verification code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} disabled={busy}
-          onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+          aria-label="Verification code" inputMode="numeric" autoComplete="one-time-code" maxLength={codeLength} value={code} disabled={busy}
+          onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, codeLength))}
           className="flex-1 min-w-0 text-center tracking-[0.5em] text-2xl font-black text-slate-900 border-2 border-slate-200 focus:border-orange-500 rounded-2xl py-3 outline-none"
-          placeholder="••••••"
+          placeholder={'•'.repeat(codeLength)}
         />
-        <button className="px-5 bg-gradient-to-r from-orange-500 to-orange-600 text-white font-extrabold rounded-2xl disabled:opacity-50" disabled={busy || code.length !== 6}>{busy ? <Loader2 className="animate-spin" size={20} /> : 'Verify'}</button>
+        <button className="px-5 bg-gradient-to-r from-orange-500 to-orange-600 text-white font-extrabold rounded-2xl disabled:opacity-50" disabled={busy || code.length !== codeLength}>{busy ? <Loader2 className="animate-spin" size={20} /> : 'Verify'}</button>
       </form>}
       {busy && <p role="status" className="mt-3 flex items-center gap-2 text-sm font-semibold text-slate-500"><Loader2 className="animate-spin" size={16} />{operation === 'send' ? 'Sending your code…' : 'Checking your code…'}</p>}
       {error && <div role="alert" className="mt-3 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">{error}</div>}
@@ -641,7 +642,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
           const active = v?.provider === 'twilio' && channels.includes(v.channel) && v.to === destination && v.expires > Date.now();
           const masked = active ? v.channel === 'email' ? `${String(v.to).slice(0, 1)}•••@${String(v.to).split('@')[1] || 'email'}` : `(•••) •••-${String(v.to).replace(/\D/g, '').slice(-4)}` : '';
           const retryInSeconds = Math.max(0, Math.ceil(((s.verifyLastAttempt || 0) + 30_000 - Date.now()) / 1000));
-          setVerification({ available: true, required: true, sent: Boolean(active), reused: Boolean(active), chooseChannel: !active, channels, channel: active ? v.channel : null, to: masked, expiresAt: active ? v.expires : undefined, retryInSeconds });
+          setVerification(r.verification || { codeLength: r.config?.verificationCodeLength === 4 ? 4 : 6, available: true, required: true, sent: Boolean(active), reused: Boolean(active), chooseChannel: !active, channels, channel: active ? v.channel : null, to: masked, expiresAt: active ? v.expires : undefined, retryInSeconds });
         } else setVerification({ available: true, sent: false, to: 'your phone' });
       }
       else if (s.stage === 'contact') { setAction('contact'); startContact(s); }

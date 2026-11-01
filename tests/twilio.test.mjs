@@ -28,19 +28,19 @@ for (const [channel, to] of [["sms", "+16235550100"], ["email", "customer@exampl
 
 test("verification checks bind to the stored VE SID, not a new destination", async () => {
   const { twilio, calls } = harness({ sid: sid("VE"), status: "approved" });
-  assert.deepEqual(await twilio.checkVerification({ sid: sid("VE"), code: "123456", to: "attacker@example.com" }), { sid: sid("VE"), status: "approved" });
+  assert.deepEqual(await twilio.checkVerification({ sid: sid("VE"), code: "1234", to: "attacker@example.com" }), { sid: sid("VE"), status: "approved" });
   assert.equal(calls[0].url.endsWith("/VerificationCheck"), true);
-  assert.deepEqual(Object.fromEntries(calls[0].form), { VerificationSid: sid("VE"), Code: "123456" });
+  assert.deepEqual(Object.fromEntries(calls[0].form), { VerificationSid: sid("VE"), Code: "1234" });
 });
 
 test("pending is not treated as successful verification", async () => {
   const { twilio } = harness();
-  assert.equal((await twilio.checkVerification({ sid: sid("VE"), code: "123456" })).status, "pending");
+  assert.equal((await twilio.checkVerification({ sid: sid("VE"), code: "1234" })).status, "pending");
 });
 
 test("a mismatched verification SID or unexpected provider status fails closed", async () => {
   for (const result of [{ sid: sid("VE", "b"), status: "approved" }, { sid: sid("VE"), status: "surprise" }]) {
-    await assert.rejects(harness(result).twilio.checkVerification({ sid: sid("VE"), code: "123456" }), { code: "TWILIO_BAD_RESPONSE" });
+    await assert.rejects(harness(result).twilio.checkVerification({ sid: sid("VE"), code: "1234" }), { code: "TWILIO_BAD_RESPONSE" });
   }
   await assert.rejects(harness({ sid: sid("VE"), status: "approved" }).twilio.sendVerification({ to: "customer@example.com", channel: "email" }), { code: "TWILIO_BAD_RESPONSE" });
 });
@@ -58,7 +58,7 @@ test("invalid channels, destinations and codes never reach Twilio", async () => 
   const { twilio, calls } = harness();
   for (const data of [{ channel: "call", to: "+16235550100" }, { channel: "sms", to: "6235550100" }, { channel: "email", to: "bad" }]) await assert.rejects(twilio.sendVerification(data), { code: "INVALID_VERIFICATION_DESTINATION" });
   await assert.rejects(twilio.checkVerification({ sid: sid("VE"), code: "123&To=bad" }), { code: "INVALID_VERIFICATION_CODE" });
-  await assert.rejects(twilio.checkVerification({ sid: "VEbad", code: "123456" }), { code: "INVALID_VERIFICATION_CODE" });
+  await assert.rejects(twilio.checkVerification({ sid: "VEbad", code: "1234" }), { code: "INVALID_VERIFICATION_CODE" });
   assert.equal(calls.length, 0);
 });
 
@@ -92,4 +92,12 @@ test("provider and network errors are sanitized and never automatically retried"
     });
     assert.equal(count, 1);
   }
+});
+
+test('adapter only accepts the configured four-digit code length', async () => {
+  const { twilio, calls } = harness();
+  for (const code of ['123', '12345', '123456', 1234]) {
+    await assert.rejects(twilio.checkVerification({ sid: sid('VE'), code }), { code: 'INVALID_VERIFICATION_CODE' });
+  }
+  assert.equal(calls.length, 0);
 });

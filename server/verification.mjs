@@ -9,7 +9,7 @@ export function createVerification({ store, twilio, clock, fail }) {
     const v = data.verifiedContact;
     return Boolean(v && ['sms', 'email'].includes(v.channel) && v.to === destination(data, v.channel) && clock() - v.at < VERIFIED_FOR);
   };
-  const info = (data, extra = {}) => ({ required: true, available: Boolean(twilio?.verifyConfigured), channels: channels(data), sent: false, chooseChannel: true, ...extra });
+  const info = (data, extra = {}) => ({ required: true, codeLength: 4, available: Boolean(twilio?.verifyConfigured), channels: channels(data), sent: false, chooseChannel: true, ...extra });
   const pendingInfo = data => {
     const v = data.verification;
     if (!v || v.provider !== 'twilio' || v.to !== destination(data, v.channel) || v.expires <= clock()) return null;
@@ -44,7 +44,7 @@ export function createVerification({ store, twilio, clock, fail }) {
       try { result = await twilio.sendVerification({ to, channel }); }
       catch { fail(502, 'The code could not be sent. Please wait before retrying or contact the office.'); }
       if (!result?.sid || result.status !== 'pending') fail(502, 'The verification service did not accept the request.');
-      data.verification = { provider: 'twilio', sid: result.sid, channel, to, expires: now + TTL, attempts: 0 };
+      data.verification = { provider: 'twilio', codeLength: 4, sid: result.sid, channel, to, expires: now + TTL, attempts: 0 };
       await store.saveSession(token, data);
       const masked = channel === 'sms' ? `•••${to.slice(-4)}` : `${to[0]}•••@${to.split('@')[1]}`;
       return info(data, { sent: true, chooseChannel: false, channel, to: masked, expiresAt: now + TTL });
@@ -58,7 +58,7 @@ export function createVerification({ store, twilio, clock, fail }) {
       if (v.attempts >= 5) fail(429, 'Too many tries. Send a new code.');
       v.attempts++;
       await store.saveSession(token, data); // Failed provider calls count too.
-      if (!/^\d{6}$/.test(String(code || ''))) fail(400, 'Enter the six-digit code.');
+      if (!/^\d{4}$/.test(String(code || ''))) fail(400, 'Enter the four-digit code.');
       let result;
       try { result = await twilio.checkVerification({ sid: v.sid, code: String(code) }); }
       catch { fail(502, 'Verification could not be checked. Please try again or contact the office.'); }

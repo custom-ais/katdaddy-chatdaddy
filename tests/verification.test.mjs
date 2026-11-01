@@ -46,13 +46,13 @@ for (const channel of ['sms', 'email']) {
     assert.equal(sent.channel, channel);
     assert.equal(sent.to.includes('Customer'), false);
     assert.deepEqual(h.releases, ['one']);
-    const data = await h.service.check('one', '123456');
+    const data = await h.service.check('one', '1234');
     assert.equal(data.stage, 'slots');
     assert.equal(data.verifiedContact.channel, channel);
     assert.equal(h.service.verified(data), true);
     assert.equal(Boolean(data.phoneVerified), channel === 'sms');
     assert.equal(data.verification, undefined);
-    await rejects(h.service.check('one', '123456'), 409);
+    await rejects(h.service.check('one', '1234'), 409);
     assert.equal(h.calls.filter(x => x[0] === 'check').length, 1);
     const changed = structuredClone(data);
     changed.contact[channel === 'sms' ? 'phone' : 'email'] = channel === 'sms' ? '+16235550199' : 'other@example.com';
@@ -67,7 +67,7 @@ test('editing the destination while a code is pending invalidates its check', as
     const h = harness();
     await h.service.send('one', channel);
     h.sessions.get('one').contact[channel === 'sms' ? 'phone' : 'email'] = channel === 'sms' ? '+16235550199' : 'other@example.com';
-    await rejects(h.service.check('one', '123456'), 409);
+    await rejects(h.service.check('one', '1234'), 409);
     assert.equal(h.calls.filter(x => x[0] === 'check').length, 0);
   }
 });
@@ -76,7 +76,7 @@ test('expiry rejects before the provider, including the exact expiration boundar
   const h = harness();
   await h.service.send('one', 'sms');
   h.advance(10 * 60_000);
-  await rejects(h.service.check('one', '123456'), 410);
+  await rejects(h.service.check('one', '1234'), 410);
   assert.equal(h.calls.length, 1);
 });
 
@@ -85,10 +85,10 @@ test('wrong codes and provider failures count toward the five-attempt limit', as
   await h.service.send('one', 'sms');
   h.twilio.checkVerification = async () => ({ status: 'pending' });
   await rejects(h.service.check('one', 'bad'), 400);
-  await rejects(h.service.check('one', '123456'), 400);
+  await rejects(h.service.check('one', '1234'), 400);
   h.twilio.checkVerification = async () => { throw new Error('private provider error'); };
-  for (let i = 0; i < 3; i++) await rejects(h.service.check('one', '123456'), 502);
-  await rejects(h.service.check('one', '123456'), 429);
+  for (let i = 0; i < 3; i++) await rejects(h.service.check('one', '1234'), 502);
+  await rejects(h.service.check('one', '1234'), 429);
   assert.equal(h.sessions.get('one').verification.attempts, 5);
   assert.equal(h.locks.size, 0);
 });
@@ -120,13 +120,13 @@ test('a duplicate or channel switch during cooldown preserves the pending code a
     assert.equal(reused.retryInSeconds, 30);
   }
   assert.equal(h.calls.length, 1);
-  assert.equal((await h.service.check('one', '123456')).verifiedContact.channel, 'sms');
+  assert.equal((await h.service.check('one', '1234')).verifiedContact.channel, 'sms');
 });
 
 test('switching channels shares cooldown and removes previous ownership', async () => {
   const h = harness();
   await h.service.send('one', 'sms');
-  await h.service.check('one', '123456');
+  await h.service.check('one', '1234');
   const before = h.calls.length;
   assert.equal((await h.service.send('one', 'email')).sent, false);
   assert.equal(h.calls.length, before);
@@ -135,7 +135,7 @@ test('switching channels shares cooldown and removes previous ownership', async 
   assert.equal(h.sessions.get('one').phoneVerified, undefined);
   assert.equal(h.sessions.get('one').verifiedContact, undefined);
   assert.equal(h.sessions.get('one').verification.channel, 'email');
-  assert.equal((await h.service.check('one', '123456')).phoneVerified, undefined);
+  assert.equal((await h.service.check('one', '1234')).phoneVerified, undefined);
 });
 
 test('destination budget spans new sessions and does not contain the destination', async () => {
@@ -153,7 +153,7 @@ test('session lock blocks concurrent sends/checks and releases on every failure'
   const h = harness();
   h.locks.add('verification:one');
   await rejects(h.service.send('one', 'sms'), 409);
-  await rejects(h.service.check('one', '123456'), 409);
+  await rejects(h.service.check('one', '1234'), 409);
   assert.equal(h.calls.length, 0);
   h.locks.clear();
   await rejects(h.service.send('missing', 'sms'), 401);
@@ -172,3 +172,17 @@ test('unconfigured service and unsupported channels never send', async () => {
   await rejects(h.service.send('one', 'email'), 400);
   assert.equal(h.calls.length, 0);
 });
+
+for (const channel of ['sms', 'email']) {
+  test(`${channel} advertises four digits and rejects other lengths before provider checks`, async () => {
+    const h = harness();
+    assert.equal(h.service.info(h.sessions.get('one')).codeLength, 4);
+    assert.equal((await h.service.send('one', channel)).codeLength, 4);
+    for (const code of ['123', '12345', '123456', 'abcd']) {
+      await rejects(h.service.check('one', code), 400);
+    }
+    assert.equal(h.calls.filter(c => c[0] === 'check').length, 0);
+    assert.equal((await h.service.check('one', '0123')).stage, 'slots');
+    assert.equal(h.calls.at(-1)[1].code, '0123', 'leading zero is preserved');
+  });
+}

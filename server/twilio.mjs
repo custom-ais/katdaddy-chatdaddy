@@ -49,7 +49,7 @@ export function createTwilio({ env = process.env, fetchImpl = fetch } = {}) {
 
   async function checkVerification({ sid, code }) {
     if (!verifyConfigured) throw error("TWILIO_NOT_CONFIGURED", "Verification is not configured.");
-    if (!isSid(sid, "VE") || typeof code !== "string" || !/^\d{4,10}$/.test(code)) throw error("INVALID_VERIFICATION_CODE", "Enter the verification code you received.");
+    if (!isSid(sid, "VE") || typeof code !== "string" || !/^\d{4}$/.test(code)) throw error("INVALID_VERIFICATION_CODE", "Enter the verification code you received.");
     const result = await post(`https://verify.twilio.com/v2/Services/${service}/VerificationCheck`, { VerificationSid: sid, Code: code });
     if (result.sid !== sid || !["pending", "approved", "canceled", "expired", "failed", "max_attempts_reached", "deleted"].includes(result.status)) throw error("TWILIO_BAD_RESPONSE", "The messaging provider returned an invalid response.");
     return { sid, status: result.status };

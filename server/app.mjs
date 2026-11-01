@@ -182,6 +182,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
       smartChat: aiReady(c),
       phoneVerification: verificationOn(c),
       verificationChannels: useTwilioVerify ? ['sms', 'email'] : ['sms'],
+      verificationCodeLength: useTwilioVerify ? 4 : 6,
       textMessages: c.smsConfirmations !== false, // off: no SMS consent question and no texts to customers
       approverName: c.approver?.name || "",
       // Optional extras the customer can tick on the details form.
@@ -830,7 +831,7 @@ export function createBobHandler({ store, jobber, lc, geo, scheduler, assistant 
         if (phoneOk(data, c)) data.stage = "slots";
         else {
           data.stage = "verify";
-          if (useTwilioVerify) verification = { required: true, available: Boolean(twilio?.verifyConfigured), sent: false, chooseChannel: true, channels: ['sms', ...(data.contact.email ? ['email'] : [])] };
+          if (useTwilioVerify) verification = verifyService.info(data);
           else {
           const live = data.verification?.phone === data.contact.phone && data.verification.expires > clock() + 60_000;
           verification = live ? { required: true, sent: true, available: true, to: maskPhone(data.contact.phone), expiresAt: data.verification.expires, reused: true } : await sendCode(token, data);
