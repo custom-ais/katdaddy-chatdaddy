@@ -59,14 +59,14 @@ const accountExports = {};
 new Function('require', 'exports', accountCode)(require, accountExports);
 test('account identity requires explicit verified name; opaque config never infers identity', () => {
   const renderAccount = account => renderToStaticMarkup(React.createElement(accountExports.AccountIdentity, {account}));
-  for (const account of [undefined, {}, {status:'unverified',displayName:'Do not claim'}, {status:'unavailable'}, {status:'verified'}]) assert.match(renderAccount(account), /Account identity not verified/);
-  assert.match(renderAccount({status:'verified',displayName:'Example Company',checkedAt:1000}), /Verified account.*Example Company/);
+  for (const account of [undefined, {}, {status:'unverified',displayName:'Do not claim'}, {status:'unavailable'}, {status:'verified'}]) assert.match(renderAccount(account), /Account name (?:not yet looked up|unavailable at the last lookup)/);
+  assert.match(renderAccount({status:'verified',displayName:'Example Company',checkedAt:1000}), /Verified account name.*Example Company/);
 });
 test('account names refresh is explicit and separate from passive status refresh', () => {
   assert.ok(source.includes("api('/api/admin/integration-accounts', { method: 'POST', body: {} })"));
   assert.match(source, /onClick=\{\(\) => void refreshAccounts\(\)\}/);
   assert.match(source, /i\.accounts\?\.jobber/);
-  assert.match(source, /Google, Gemini and OpenAI account identity is not verified/);
+  assert.match(source, /Optional Jobber and Twilio account-name lookup only/);
 });
 
 test('connection switches edit draft integration config, with blocking warnings and no provider calls', () => {
@@ -92,7 +92,7 @@ test('Verify and SMS remain visible unconfigured; provider selection and API cos
 test('rendered controls preserve other integration flags and decline disabling without changing drafts', () => {
   const toggles = [], fields = [], changes = []; let providerCalls = 0;
   const part = source.slice(source.indexOf('const when ='), source.indexOf('/** Edits are saved'));
-  const prelude = `const {useState}=require('react'); const {useDashboard,api,Toggle,Field,Section,Dot,ErrorNote,Link2}=require('ui-test'); const inputClass='',subtleButton='',primaryButton='';`;
+  const prelude = `const {useState}=require('react'); const {useDashboard,api,Toggle,Field,Section,Dot,ErrorNote,Link2}=require('ui-test'); const inputClass='',subtleButton='',primaryButton='',secondaryButton='';`;
   const code = ts.transpileModule(`${prelude}\n${part}\nexport {Connections};`, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS } }).outputText;
   const stubs = {
     useDashboard: () => ({ data: {integrations:{assistant:{providers:{gemini:{configured:true,model:'test'},openai:{configured:false}}}}}, refresh:()=>{providerCalls++;}, mutate:()=>{providerCalls++;}, showToast:()=>{}, loading:false }),
@@ -168,4 +168,42 @@ test('active failure takes precedence over successful operations and missing con
   const missing=render({configured:false,health:{status:'unknown',operations:{routes:healthyOperation,places:{status:'unknown'}}}});
   assert.match(missing,/Configuration missing/);assert.match(missing,/Driving routes:<\/span> configuration missing; unverified/);
   assert.doesNotMatch(missing,/Some recorded checks succeeded|last recorded check succeeded/);
+});
+
+function renderConnections(config, integrations) {
+  const part = source.slice(source.indexOf('const when ='), source.indexOf('/** Edits are saved'));
+  const prelude = `const {useState}=require('react'); const {useDashboard,api,Toggle,Field,Section,Dot,ErrorNote,Link2}=require('status-test'); const inputClass='',subtleButton='',primaryButton='',secondaryButton='';`;
+  const code = ts.transpileModule(`${prelude}\n${part}\nexport {Connections};`, {compilerOptions:{jsx:ts.JsxEmit.ReactJSX,module:ts.ModuleKind.CommonJS}}).outputText;
+  const plain=({children,label,description})=>React.createElement('div',null,label,description,children);
+  const stubs={useDashboard:()=>({data:{config:{integrations:{jobber:true,sms:true,verification:true,email:true,maps:true},aiAssistant:true,aiProvider:'gemini'},integrations},refresh:()=>{throw Error('No automatic calls');},mutate:()=>{throw Error('No automatic calls');}}),api:()=>{throw Error('No automatic calls');},Toggle:()=>null,Field:plain,Section:plain,Dot:()=>null,ErrorNote:plain,Link2:()=>null};
+  const out={};new Function('require','exports',code)(id=>id==='status-test'?stubs:require(id),out);
+  return renderToStaticMarkup(React.createElement(out.Connections,{config,onChange:()=>{}}));
+}
+test('configured connections have textual setup status distinct from delivery and optional identity lookup',()=>{
+ const html=renderConnections({aiAssistant:true,aiProvider:'gemini'}, {jobber:{connected:true},verification:{configured:true},sms:{configured:true},email:{configured:true},assistant:{providers:{gemini:{configured:true}}},maps:{provider:'google'},database:'postgres'});
+ assert.match(html,/>Connected<\/span>/);assert.equal((html.match(/>Configured<\/span>/g)||[]).length,6);
+ assert.match(html,/not proven operation or delivery/);
+ assert.equal((html.match(/Account name not yet looked up/g)||[]).length,3,'identity only Jobber and the two Twilio rows');
+ assert.doesNotMatch(html,/Account identity not verified/);
+});
+test('off drafts and missing setup do not masquerade as working connections',()=>{
+ const html=renderConnections({integrations:{sms:false,email:false},aiAssistant:false},{});
+ assert.equal((html.match(/Off · unsaved draft/g)||[]).length,3);
+ assert.match(html,/>Setup required<\/span>/);
+ assert.doesNotMatch(html,/>Connected<\/span>|>Configured<\/span>/);
+ assert.match(source,/Object\.prototype\.hasOwnProperty\.call\(accounts, name\)/);
+});
+test('account lookup unavailable includes last check without asserting transport failure',()=>{
+ const html=renderToStaticMarkup(React.createElement(accountExports.AccountIdentity,{account:{status:'unavailable',checkedAt:1000}}));
+ assert.match(html,/Account name unavailable at the last lookup/);assert.match(html,/checked/);assert.match(html,/not a connection or delivery test/);
+});
+test('fresh observed operations can be green without claiming message delivery; stale and draft cannot',()=>{
+ const observed={sms:{status:'healthy',checkedAt:2000,lastSuccessAt:2000,stale:false},email:{status:'healthy',checkedAt:2000,lastSuccessAt:2000,stale:true},assistant:{status:'error',checkedAt:2000,stale:false}};
+ const html=renderConnections({aiAssistant:true,aiProvider:'gemini'}, {sms:{configured:true},email:{configured:true},assistant:{providers:{gemini:{configured:true}}},observed});
+ assert.equal((html.match(/Accepted recently — delivery unconfirmed/g)||[]).length,1);
+ assert.match(html,/Recent operation failed/);assert.match(html,/Last operation:/);
+ const draft=renderConnections({integrations:{sms:false}}, {sms:{configured:true},observed});
+ assert.doesNotMatch(draft,/Accepted recently/);
+ assert.match(source,/api\/admin\/connections\/refresh/);assert.match(source,/No test messages, AI requests or Maps calls/);
+ assert.match(source,/https:\/\/console.twilio.com\//);assert.match(source,/https:\/\/app.sendgrid.com\//);
 });

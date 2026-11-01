@@ -1,3 +1,5 @@
+import { validateHtmlTemplate, renderHtmlTemplate } from './email-html.mjs';
+import { MESSAGE_VARIABLES } from '../shared/message-templates.mjs';
 import { deliverConfirmationSmsOnce } from './sms-notification.mjs';
 import { createClientHub } from './client-hub.mjs';
 import { sanitizeDiagnostic } from "./integration-status.mjs";
@@ -75,7 +77,7 @@ async function readBody(req) {
 const APPROVAL_WINDOW = 30 * 60_000;
 const FAQ_STATUSES = ["approved", "draft"];
 
-export function createBobHandler({ store, jobber, geo, scheduler, assistant = null, twilio = null, sendgrid = null, integrationAccounts = null, env = process.env, clock = () => Date.now() }) {
+export function createBobHandler({ store, jobber, geo, scheduler, assistant = null, twilio = null, sendgrid = null, integrationAccounts = null, connectionHealth = null, env = process.env, clock = () => Date.now() }) {
   const clientHub = createClientHub({store,jobber,clock});
   const useTwilioVerify = env.BOOKING_VERIFICATION_PROVIDER === 'twilio';
   const verifyService = createVerification({ store, twilio, clock, fail });
@@ -216,6 +218,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     const c = await store.config(), ai = selectedAssistant(c);
     return {
       accounts: await integrationAccounts?.snapshot() || {},
+      observed: await connectionHealth?.snapshot() || {},
       clientHub: await clientHub.snapshot(),
       jobber: { enabled: enabled(c, 'jobber'), appConfigured: jobber.appConfigured, connected: enabled(c, 'jobber') && await jobber.connected() },
       verification: { enabled: enabled(c, 'verification'), provider: useTwilioVerify ? 'twilio' : 'none', configured: useTwilioVerify && Boolean(twilio?.verifyConfigured), channels: useTwilioVerify ? ['sms', 'email'] : [] },
@@ -1160,6 +1163,24 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           return send(200, await snapshot());
         }
 
+        if (method === 'POST' && pathname === '/api/admin/templates/preview') {
+          await rate(req, 'template-preview', 20, 60_000);
+          const body = await readBody(req);
+          const errors = validateHtmlTemplate(body?.template);
+          if (errors.length) fail(400, errors.join(' '));
+          const values = Object.fromEntries(MESSAGE_VARIABLES.map(v => [v.key, v.sample]));
+          // Fictional public company-login example, never a real client access token.
+          values.client_hub_url = 'https://clienthub.getjobber.com/client_hubs/00000000-0000-0000-0000-000000000000/login/new?source=share_login';
+          try { return send(200, renderHtmlTemplate(body.template, values)); }
+          catch { fail(400, 'Email HTML must produce readable content within the allowed size.'); }
+        }
+        if (method === 'POST' && pathname === '/api/admin/connections/refresh') {
+          await rate(req, 'connections-refresh', 5, 60_000);
+          if (!connectionHealth) fail(503, 'Connection checks are unavailable.');
+          await connectionHealth.refresh();
+          return send(200, await snapshot());
+        }
+
         if (method === "PATCH" && pathname === "/api/admin/config") {
           const body = await readBody(req), old = await store.config();
           if (body.version !== old.version) fail(409, "Settings were changed elsewhere. Refresh before saving.");
@@ -1168,6 +1189,14 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           next.version = old.version + 1;
           next.bundlePriceCents = BUNDLE_PRICE_CENTS;
           const errors = validateConfig(next), known = (await store.technicians()).map((t) => t.id);
+          if (next.messageEmailFormat === 'html' && next.messageTemplates?.confirmationEmailBody?.trim()) {
+            const htmlErrors = validateHtmlTemplate(next.messageTemplates.confirmationEmailBody);
+            errors.push(...htmlErrors);
+            if (!htmlErrors.length) {
+              try { renderHtmlTemplate(next.messageTemplates.confirmationEmailBody, Object.fromEntries(MESSAGE_VARIABLES.map(v => [v.key, v.sample]))); }
+              catch { errors.push('Email HTML must produce readable content within the allowed size.'); }
+            }
+          }
           if (next.activeTechnicianIds.some((id) => !known.includes(id))) errors.push("Select a known technician.");
           if (errors.length) fail(400, errors.join(" "));
           await store.set("config", next);

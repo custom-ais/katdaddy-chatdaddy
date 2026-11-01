@@ -1,3 +1,4 @@
+import { renderHtmlTemplate } from './email-html.mjs';
 import { renderMessageTemplate, messageTemplateValues, CUSTOMER_SMS_FOOTER, MESSAGE_TEMPLATE_FIELDS } from '../shared/message-templates.mjs';
 // Customer confirmation copy (sent through explicitly configured transports).
 
@@ -68,6 +69,7 @@ ${config.phone ? `<p style="margin:12px 0 0">Need to change your visit? Call or 
   const customSubject = config.messageTemplates?.confirmationEmailSubject;
   const customBody = config.messageTemplates?.confirmationEmailBody;
   const renderedSubject = customSubject?.trim() ? renderMessageTemplate(customSubject, values, MESSAGE_TEMPLATE_FIELDS[1]) : subject;
+  if (customBody?.trim() && config.messageEmailFormat === 'html') return { subject: renderedSubject, ...renderHtmlTemplate(customBody, values) };
   const renderedBody = customBody?.trim() ? renderMessageTemplate(customBody, values, MESSAGE_TEMPLATE_FIELDS[2]) : null;
   return { subject: renderedSubject, html: renderedBody === null ? html : '<!doctype html><html><body><p>' + esc(renderedBody).replace(/\r?\n/g, '<br>') + '</p></body></html>', text: renderedBody === null ? text : renderedBody };
 }

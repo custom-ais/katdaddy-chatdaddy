@@ -85,7 +85,8 @@ function RecordedHealth({ configured, health, legacyIssue }: { configured: boole
 
 function AccountIdentity({ account }: { account?: { status?: string; displayName?: string; checkedAt?: number } }) {
   const name = typeof account?.displayName === 'string' ? account.displayName : '';
-  return <p className="mt-2 text-xs text-slate-600">{account?.status === 'verified' && name ? <>Verified account: <span className="font-semibold">{name}</span></> : 'Account identity not verified'}{Number.isFinite(account?.checkedAt) ? ` · checked ${when(account!.checkedAt!)}` : ''}</p>;
+  const checked = Number.isFinite(account?.checkedAt) && account!.checkedAt! > 0;
+  return <p className="mt-2 text-xs text-slate-600">{account?.status === 'verified' && name ? <>Verified account name: <span className="font-semibold">{name}</span></> : account?.status === 'unavailable' ? 'Account name unavailable at the last lookup' : checked ? 'Account name not verified at the last lookup' : 'Account name not yet looked up'}{checked ? ` · checked ${when(account!.checkedAt!)}` : ''}. Optional name lookup only — not a connection or delivery test.</p>;
 }
 
 function Connections({ config, onChange }: { config: any; onChange: (key: string, value: any) => void }) {
@@ -93,6 +94,13 @@ function Connections({ config, onChange }: { config: any; onChange: (key: string
   const i = data.integrations || {};
   const accounts: Record<string, any> = { Jobber: i.accounts?.jobber, 'Twilio Verify': i.accounts?.twilio, 'Twilio appointment texts': i.accounts?.twilio };
   const [accountsBusy, setAccountsBusy] = useState(false), [accountsError, setAccountsError] = useState('');
+  const [checksBusy, setChecksBusy] = useState(false), [checksError, setChecksError] = useState('');
+  const refreshChecks = async () => {
+    if (checksBusy) return;
+    setChecksBusy(true); setChecksError('');
+    try { await mutate('/api/admin/connections/refresh', {}, 'POST', 'Connection status refreshed'); }
+    catch (error) { setChecksError((error as Error).message); } finally { setChecksBusy(false); }
+  };
   const refreshAccounts = async () => {
     if (accountsBusy) return;
     setAccountsBusy(true); setAccountsError('');
@@ -119,6 +127,29 @@ function Connections({ config, onChange }: { config: any; onChange: (key: string
   const aiProvider = config.aiProvider === 'openai' ? 'openai' : 'gemini';
   const ai = i.assistant?.providers?.[aiProvider];
   const aiName = aiProvider === 'openai' ? 'OpenAI (ChatGPT models)' : 'Gemini';
+  const statusFor = (name: string) => {
+    const key = ({ Jobber: 'jobber', 'Twilio Verify': 'verification', 'Twilio appointment texts': 'sms', 'SendGrid appointment emails': 'email', Maps: 'maps' } as Record<string, string>)[name];
+    const on = name === 'Smart chat' ? config.aiAssistant !== false : key ? enabled(key) : true;
+    const savedOn = name === 'Smart chat' ? data.config?.aiAssistant !== false : key ? data.config?.integrations?.[key] !== false : true;
+    const draft = on !== savedOn || (name === 'Smart chat' && aiProvider !== (data.config?.aiProvider === 'openai' ? 'openai' : 'gemini'));
+    let status = !on ? 'Off' : name === 'Jobber' ? (i.jobber?.connected ? 'Connected' : i.jobber?.appConfigured ? 'Configured — connect account' : 'Setup required') : name === 'Smart chat' ? (ai?.configured ? 'Configured' : 'Setup required') : name === 'Maps' ? (i.maps?.configured || i.maps?.provider === 'google' ? 'Configured' : 'Setup required — Census only') : name === 'Database' ? (['supabase-rest', 'postgres'].includes(i.database) ? 'Configured' : 'Local test storage') : name === 'Server error history' ? 'History' : i[key]?.configured ? 'Configured' : 'Setup required';
+    const observedKey = name === 'Smart chat' ? 'assistant' : name === 'Database' ? 'database' : key;
+    const observed = name === 'Maps' ? i.maps?.health : i.observed?.[observedKey];
+    const fresh = on && !draft && observed?.stale !== true && observed?.fresh !== false && Number.isFinite(observed?.checkedAt) && observed.checkedAt > 0;
+    const working = fresh && observed.status === 'healthy' && Number.isFinite(observed.lastSuccessAt) && observed.lastSuccessAt > 0;
+    if (working) status = ['sms', 'email'].includes(observedKey) ? 'Accepted recently — delivery unconfirmed' : 'API working — recent operation succeeded';
+    else if (fresh && observed.status === 'error') status = 'Recent operation failed';
+    return { label: status + (draft ? ' · unsaved draft' : ''), connected: status === 'Connected' || working, configured: status === 'Configured', checkedAt: fresh ? observed.checkedAt : null };
+  };
+  const configureLinks: Record<string, [string, string][]> = {
+    Jobber: [['Server environment', 'https://vercel.com/dashboard']],
+    'Twilio Verify': [['Twilio console', 'https://console.twilio.com/'], ['Server environment', 'https://vercel.com/dashboard']],
+    'Twilio appointment texts': [['Twilio console', 'https://console.twilio.com/'], ['Server environment', 'https://vercel.com/dashboard']],
+    'SendGrid appointment emails': [['SendGrid console', 'https://app.sendgrid.com/'], ['Server environment', 'https://vercel.com/dashboard']],
+    'Smart chat': [['Server environment', 'https://vercel.com/dashboard']],
+    Maps: [['Server environment', 'https://vercel.com/dashboard']],
+    Database: [['Server environment', 'https://vercel.com/dashboard']],
+  };
   const rows: [string, boolean, React.ReactNode, React.ReactNode?][] = [
     ['Jobber', enabled('jobber') && !!i.jobber?.connected,
       <>{!enabled('jobber') ? 'Off in these settings: online booking stays paused. Turning this off does not disconnect the saved account.' : i.jobber?.connected ? 'Account connected for the live calendar and scheduled visits.' : i.jobber?.appConfigured ? 'Not connected yet. Online booking stays off until it is.' : 'Unavailable: add JOBBER_CLIENT_ID, JOBBER_CLIENT_SECRET and JOBBER_REDIRECT_URI in the server environment.'}
@@ -141,17 +172,19 @@ function Connections({ config, onChange }: { config: any; onChange: (key: string
     ...(i.lastError ? [['Server error history', false, <details><summary className="cursor-pointer">Previous server error — not a current health check</summary><p>{when(i.lastError.at)} on {i.lastError.path}: {i.lastError.message}</p></details>] as [string, boolean, React.ReactNode]] : []),
   ];
   return (
-    <Section icon={<Link2 size={18} />} title="Connections" description="Switches and provider choice are drafts until Save. Keys stay server-side. Refresh reloads recorded status only; it does not run external provider checks." action={<button type="button" className={subtleButton} disabled={busy || loading} onClick={() => void refresh()}>{loading ? 'Refreshing recorded status…' : 'Refresh recorded status'}</button>}>
+    <Section icon={<Link2 size={18} />} title="Connections" description="Switches and provider choice are drafts until Save. Configured means server setup is present, not proven operation or delivery. Connected means Jobber account authorization is present. Keys stay server-side. Refresh recorded status reloads the snapshot only; it does not run external provider checks." action={<button type="button" className={subtleButton} disabled={busy || loading} onClick={() => void refresh()}>{loading ? 'Refreshing recorded status…' : 'Refresh recorded status'}</button>}>
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" className={subtleButton} disabled={accountsBusy || busy} onClick={() => void refreshAccounts()}>{accountsBusy ? 'Loading account names…' : 'Refresh account names'}</button>
-        <p className="text-xs text-slate-500">Reads account names only. Does not send messages or test routing. Google, Gemini and OpenAI account identity is not verified here.</p>
+        <p className="text-xs text-slate-500">Reads account names only. Does not send messages or test routing. Optional Jobber and Twilio account-name lookup only; unavailable names do not mean the integration failed.</p>
       </div>
+      <div className="flex flex-wrap items-center gap-3"><button type="button" className={secondaryButton} disabled={checksBusy || busy || loading} onClick={() => void refreshChecks()}>{checksBusy ? 'Checking connections…' : 'Refresh connection status'}</button><p className="text-xs text-slate-500">Checks database access and reads connected account names. Other statuses use recent recorded operations. No test messages, AI requests or Maps calls are made.</p></div>
+      {checksError && <ErrorNote>{checksError}</ErrorNote>}
       {accountsError && <ErrorNote>{accountsError}</ErrorNote>}
       <div className="divide-y divide-slate-100">
-        {rows.map(([name, ok, detail, action]) => (
+        {rows.map(([name, _ok, detail, action]) => (
           <div key={name} className="flex flex-col sm:flex-row items-start justify-between gap-3 py-3">
-            <div className="flex items-start gap-3"><Dot ok={ok} /><div><p className="text-sm font-extrabold text-slate-900">{name}</p><div className="text-xs text-slate-500 leading-snug max-w-xl">{detail}{name !== 'Server error history' && <AccountIdentity account={accounts[name]} />}</div></div></div>
-            {action}
+            <div className="flex items-start gap-3"><div><p className="text-sm font-extrabold text-slate-900">{name}</p><span className={`inline-flex my-1 rounded-full px-2 py-0.5 text-xs font-semibold ${statusFor(name).connected ? 'bg-emerald-50 text-emerald-800' : statusFor(name).configured ? 'bg-blue-50 text-blue-800' : 'bg-slate-100 text-slate-600'}`}>{statusFor(name).label}</span>{statusFor(name).checkedAt && <p className="text-xs text-slate-500">Last operation: {when(statusFor(name).checkedAt)}</p>}<div className="text-xs text-slate-500 leading-snug max-w-xl">{detail}{Object.prototype.hasOwnProperty.call(accounts, name) && <AccountIdentity account={accounts[name]} />}</div></div></div>
+            <div className="space-y-2">{action}{configureLinks[name] && <div className="flex flex-wrap gap-2">{configureLinks[name].map(([label, href]) => <a key={href} className={subtleButton} href={href} target="_blank" rel="noreferrer">Configure: {label}</a>)}</div>}</div>
           </div>
         ))}
       </div>

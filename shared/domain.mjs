@@ -36,6 +36,7 @@ export const DEFAULT_CONFIG = {
   nearbyFirst: true,
   // LeadConnector confirmations.
   messageTemplates: { ...DEFAULT_MESSAGE_TEMPLATES },
+  messageEmailFormat: 'plain',
   smsConfirmations: true,
   emailConfirmations: true,
   // Optional internal owner alert, separate from customer consent and approvals.
@@ -194,6 +195,7 @@ export function validateContact(data,{address=true}={}) {
 }
 export function validateConfig(c) {
  const errors=[...validateMessageTemplates(c.messageTemplates)];
+ if (!['plain','html'].includes(c.messageEmailFormat)) errors.push('Choose plain text or HTML for confirmation emails.');
  if(!['gemini','openai'].includes(c.aiProvider))errors.push('Choose Gemini or OpenAI as the AI provider.');
  if(!c.integrations||typeof c.integrations!=='object'||Array.isArray(c.integrations)||Object.keys(c.integrations).some(k=>!['jobber','maps','verification','sms','email'].includes(k)))errors.push('Invalid integration switches.');
  for(const k of ['jobber','maps','verification','sms','email'])if(typeof c.integrations?.[k]!=='boolean')errors.push(`Invalid integration switch: ${k}.`);
