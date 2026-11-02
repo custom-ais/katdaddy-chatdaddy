@@ -104,7 +104,7 @@ test("failed staff messages are saved and activity survives session cleanup and 
   h.twilio.failSms = true;
   const token = await h.fresh();
   const r = await h.chat(token, "Emergency Clog / Overheating");
-  assert.match(r.reply, /text could not be sent/);
+  assert.doesNotMatch(r.reply, /could not be sent|contact the office/, "the customer isn't told about an internal text that failed");
   assert.equal((await h.store.requests())[0].notification.status, "failed");
   h.advance(2 * 86_400_000); await h.store.cleanup();
   const reopened = createStore(h.db, { clock: () => baseTime + 2 * 86_400_000 });
