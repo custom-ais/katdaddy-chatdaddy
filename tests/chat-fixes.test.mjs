@@ -61,3 +61,33 @@ test("unanswered questions and blocked AI answers are logged as warnings for the
   assert.ok(kinds.includes("conversation.unanswered_question"), JSON.stringify(kinds));
   assert.equal(items.find((i) => i.kind === "conversation.unanswered_question").details.text, "are you guys licensed and insured");
 });
+
+test("the office's assessment description is used, its price is said once, and older saved wording switches over once", async () => {
+  const { withConfigDefaults } = await import("../shared/domain.mjs");
+  const migrated = withConfigDefaults({ assessmentProcess: "Older office wording. $119 for a 1-story home.", version: 3 });
+  assert.match(migrated.assessmentProcess, /^We'll start by asking what you've noticed/);
+  assert.equal(migrated.assessmentProcessVersion, 2);
+  assert.equal(withConfigDefaults({ assessmentProcess: "Office edit", assessmentProcessVersion: 2 }).assessmentProcess, "Office edit", "later edits stand");
+  const offer = run(["Repair / Reroute / Assessment", "85326", "Disconnected Duct in Wall/Attic", "1-Story Home", "Electric Dryer", "Standard Floor Setup", "Working Normal", "The vent is disconnected behind the dryer"]);
+  assert.equal(offer.session.stage, "offer");
+  assert.match(offer.reply, /Your technician will use a camera to look inside the duct and measure airflow at both ends/);
+  assert.equal(offer.reply.match(/\$119/g).length, 1);
+  assert.doesNotMatch(offer.reply, /\*\*Comprehensive Repair Assessment: \$119\.\*\*/);
+  const unpriced = turn("Repair / Reroute / Assessment", initialSession(), { ...config, pricesAcknowledged: false, serviceZips: ["85326"] }, INITIAL_FAQS);
+  let s = unpriced.session, r;
+  for (const m of ["85326", "Disconnected Duct in Wall/Attic", "1-Story Home", "Electric Dryer", "Standard Floor Setup", "Working Normal", "The vent is disconnected behind the dryer"]) { r = turn(m, s, { ...config, pricesAcknowledged: false, serviceZips: ["85326"] }, INITIAL_FAQS); s = r.session; }
+  assert.doesNotMatch(r.reply, /\$\d/, "unapproved prices are left out of the description too");
+});
+
+test("after three unresolved turns in a row the team is offered, then it resets", () => {
+  let s = run(["Dryer Vent Cleaning", "85326", "Have Dryer", "No"]).session, r;
+  for (const m of ["purple", "banana"]) { r = chat(m, s); s = r.session; assert.ok(!r.options.includes("Request a callback")); }
+  r = chat("whatever", s); s = r.session;
+  assert.match(r.reply, /If it's easier, the team can call you instead\./);
+  assert.ok(r.options.includes("Request a callback"));
+  r = chat("1-Story Home", s);
+  assert.equal(r.session.unresolved, 0);
+  assert.ok(!r.options.includes("Request a callback"));
+  const callback = chat("Request a callback", chat("whatever", chat("banana", chat("purple", run(["Dryer Vent Cleaning", "85326", "Have Dryer", "No"]).session).session).session).session);
+  assert.equal(callback.session.stage, "review", "the button reaches the team");
+});

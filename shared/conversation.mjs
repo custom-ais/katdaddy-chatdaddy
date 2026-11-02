@@ -631,7 +631,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   const approvedFaqs = (faqs || []).filter((f) => f && f.status !== "draft");
   s.history = [...(s.history || []).slice(-39), { role: "user", text: String(text).slice(0, 2000) }];
 
-  let ack = "", warn = "";
+  let ack = "", warn = "", unresolved = false;
   // What happens if a cleaning-only visit finds a problem: damage that prevents the cleaning turns the
   // visit into an assessment; otherwise the assessment can be added to the cleaning at the add-on price.
   const SWITCH_PROMISE = priced
@@ -640,6 +640,12 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   const respond = (reply, options = [], extra = {}) => {
     // The parts let the conversational layer replace the short acknowledgement with its own
     // reply while the warning and the required body (question, offer, summary) stay as written.
+    // Three unresolved turns in a row: offer the team, once in words and from then on as a button.
+    s.unresolved = unresolved ? (s.unresolved || 0) + 1 : 0;
+    if (s.unresolved >= 3 && !options.includes("Request a callback")) {
+      options = [...options, "Request a callback"];
+      if (s.unresolved === 3) reply = `${reply}\n\nIf it's easier, the team can call you instead.`;
+    }
     const parts = { ack, warn, body: reply };
     reply = [ack, warn, reply].filter(Boolean).join("\n\n");
     ack = "";
@@ -653,9 +659,11 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   const explain = (route) => {
     if (s.explained.includes(route)) return "";
     s.explained.push(route);
-    if (route === "cleaning") return config.cleaningProcess + "\n\n";
-    if (route === "assessment") return config.assessmentProcess + "\n\n";
-    return config.cleaningProcess + " " + config.assessmentProcess + "\n\n";
+    // Office-written descriptions may name a price; until prices are approved, those sentences are left out.
+    const said = (text) => (priced ? String(text || "") : String(text || "").replace(/[^.\n]*\$\d[^.\n]*\.?[ \t]*/g, "").replace(/\n{3,}/g, "\n\n").trim());
+    if (route === "cleaning") return said(config.cleaningProcess) + "\n\n";
+    if (route === "assessment") return said(config.assessmentProcess) + "\n\n";
+    return said(config.cleaningProcess) + " " + said(config.assessmentProcess) + "\n\n";
   };
   const quoteFor = (family) => serviceQuote(s.route === "bundle" && TIERS.includes(family) ? "bundle" : "cleaning", config, { package: family, property: s.property, addOns: s.addOns });
   /** Cleaning + Assessment price: the home's Premium 1-2-3 (or chosen tier) plus the assessment add-on.
@@ -904,10 +912,15 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     if (brief) return respond("Would you like to book the assessment?", options);
     const q = serviceQuote("assessment", config);
     const credit = config.assessmentCredited === false ? "" : " It's credited 100% toward the repair when you hire us for the work.";
-    const price = priced
-      ? `**Comprehensive Repair Assessment: ${money(q.priceCents)}.**${credit} This is the assessment, not the repair. Any repair work is quoted separately for your approval.`
-      : unverified;
-    return respond(`For a vent repair issue, we start with an assessment. ${explain("assessment")}${price}\n\nWould you like to book the assessment?`, options);
+    const process = explain("assessment");
+    // The office's description may already state the price and credit; don't say it twice.
+    const statesPrice = priced && process.includes(money(q.priceCents));
+    const price = !priced
+      ? unverified
+      : statesPrice
+        ? "This is the assessment, not the repair. Any repair work is quoted separately for your approval."
+        : `**Comprehensive Repair Assessment: ${money(q.priceCents)}.**${credit} This is the assessment, not the repair. Any repair work is quoted separately for your approval.`;
+    return respond(`For a vent repair issue, we start with an assessment. ${process}${price}\n\nWould you like to book the assessment?`, options);
   };
 
   const bundleOffer = () => {
@@ -1475,7 +1488,8 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       answer = price ? `The **Cleaning + Assessment** is **${price}**: our Premium 1-2-3 cleaning plus an assessment of the issue in one visit. Gas dryers and stacked or pedestal setups add their usual fee. Repairs are quoted separately.` : unverified;
     }
     else if (s.intent === "repair" || /\b(?:repair|assessment)\b/.test(t)) {
-      answer = priced ? `${bare ? "" : explain("assessment")}The dryer-vent assessment is **${money(config.assessmentPriceCents)}**. Repairs are quoted separately.` : unverified;
+      const process = bare ? "" : explain("assessment");
+      answer = !priced ? unverified : process.includes(money(config.assessmentPriceCents)) ? `${process}Repairs are quoted separately.` : `${process}The dryer-vent assessment is **${money(config.assessmentPriceCents)}**. Repairs are quoted separately.`;
     } else if (!priced) answer = unverified;
     else if (s.package) {
       const q = quoteFor(s.package);
@@ -1508,6 +1522,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     if (s.pending === "serviceAddress") return respond("Please enter the street address for the service location, including the city or ZIP code.", []);
     if (s.pending && !isQuestion) {
       ack = "Sorry, I didn't catch that.";
+      unresolved = true;
       return ask(s.pending);
     }
   }
@@ -1521,6 +1536,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond("Are you looking to schedule a routine cleaning, or is there a specific vent problem you need evaluated?", [WELCOME[1], WELCOME[3]]);
   }
   if (!s.intent && /^(?:hi|hello|hey|good (?:morning|afternoon|evening))[.!]?$/.test(t)) return welcome();
+  unresolved = true;
   return {
     ...resume(UNANSWERED),
     unanswered: true,

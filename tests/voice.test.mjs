@@ -121,3 +121,14 @@ test("'can someone come look at it' is a service request; asking for a person st
   assert.notEqual(classify("my dryer takes 2 or 3 loads to dry, can someone come look at it").route, "review");
   for (const t of ["can i talk to someone", "have someone call me", "can someone call me back", "i want to speak with a person"]) assert.equal(classify(t).route, "review", t);
 });
+
+test("the voice is calm, not eager; 'nothing is booked' comes from knowledge only when asked", async () => {
+  const { assistant, voiceCalls } = model({}, null);
+  await step("just looking for now", atStories(), assistant);
+  const { system } = voiceCalls()[0];
+  assert.match(system, /Never eager, salesy, or pleading/);
+  assert.match(system, /don't say things like "no pressure"/);
+  assert.doesNotMatch(system, /reassure them: there's no commitment/);
+  assert.match(system, /NO OBLIGATION: getting a price or chatting doesn't commit the customer to anything\./);
+  assert.match(system, /Q: Do I have to book to get a price\?\nA: No\. You can get your exact price first\./);
+});

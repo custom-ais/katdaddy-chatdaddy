@@ -113,7 +113,8 @@ The booking system has already decided what happens next. Its message is shown u
 
 Write "response": BOB's reply to the customer's latest message, placed before NEXT MESSAGE.
 - Respond to what they actually said. Acknowledge the details they shared so they know you understood. Answer their question if KNOWLEDGE covers it.
-- If they're unsure or not ready to book, reassure them: there's no commitment, nothing is booked until they approve the final summary, and you can share the price first.
+- Sound calm, confident and matter-of-fact, like someone who knows the work. Never eager, salesy, or pleading.
+- If they're unsure, just browsing, or asking about price, answer plainly and let NEXT MESSAGE continue. Don't push, don't over-reassure, and don't say things like "no pressure". Mention that nothing is booked until they approve the final summary only if they ask about commitment or booking.
 - If they're frustrated or confused, apologize briefly and make the next step clear.
 - If they say something off-topic, reply briefly and kindly, then let NEXT MESSAGE bring things back.
 - If they ask something KNOWLEDGE doesn't cover, say you'll make sure the team can answer it. Don't guess.
@@ -178,6 +179,7 @@ CLEANING + ASSESSMENT: suggested when a customer wants a cleaning but thinks som
 No dryer installed → the visit is Express Vent Cleaning (vent only).
 Emergency Same-Day Clog Relief needs approval from the team before it's confirmed.
 Before booking, the customer completes the verification method offered by the booking form, then picks a live time and approves the final summary. Email verification proves email ownership only, not phone ownership.
+NO OBLIGATION: getting a price or chatting doesn't commit the customer to anything. Nothing is booked until they pick a time and approve the final summary, which shows the full price. Say this only when they ask about commitment or booking.
 PREPARATION: ${config.preparation}
 
 APPROVED FAQ ANSWERS:
@@ -248,13 +250,13 @@ function parseJson(text) {
   return JSON.parse(raw.slice(start, end + 1));
 }
 
-export function createAssistant({ env = process.env, fetchImpl = globalThis.fetch, timeoutMs = 9000, generate } = {}) {
+export function createAssistant({ env = process.env, fetchImpl = globalThis.fetch, timeoutMs = 9000, voiceTimeoutMs = 6000, generate } = {}) {
   const key = env.GEMINI_API_KEY || "";
   const model = env.GEMINI_MODEL || "gemini-3.8-flash";
   const openaiKey = env.OPENAI_API_KEY || "";
   const openaiModel = env.OPENAI_MODEL || "gpt-4.1-mini";
 
-  async function callGemini(system, prompt, jsonSchema = schema) {
+  async function callGemini(system, prompt, jsonSchema = schema, limitMs = timeoutMs) {
     let useSchema = true, useThinking = true;
     const body = (schemaOn, thinkingOn) => ({
       systemInstruction: { parts: [{ text: system }] },
@@ -272,7 +274,7 @@ export function createAssistant({ env = process.env, fetchImpl = globalThis.fetc
         redirect: "error",
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify(body(useSchema, useThinking)),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(limitMs),
       });
       const data = await r.json().catch(() => ({}));
       if (r.ok) {
@@ -299,7 +301,7 @@ export function createAssistant({ env = process.env, fetchImpl = globalThis.fetc
   strictSchema.properties.facts.required = Object.keys(strictSchema.properties.facts.properties);
   const strictVoice = { ...structuredClone(voiceSchema), additionalProperties: false };
 
-  async function callOpenAI(system, prompt, jsonSchema = schema) {
+  async function callOpenAI(system, prompt, jsonSchema = schema, limitMs = timeoutMs) {
     const voice = jsonSchema === voiceSchema;
     const r = await fetchImpl("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -312,7 +314,7 @@ export function createAssistant({ env = process.env, fetchImpl = globalThis.fetc
         response_format: { type: "json_schema", json_schema: { name: voice ? "booking_reply" : "booking_interpretation", strict: true, schema: voice ? strictVoice : strictSchema } },
         max_completion_tokens: 1024,
       }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(limitMs),
     });
     if (!r.ok) throw new Error("OpenAI request failed.");
     const data = await r.json();
@@ -346,7 +348,8 @@ export function createAssistant({ env = process.env, fetchImpl = globalThis.fetc
           const system = `${VOICE_RULES}\n\nKNOWLEDGE:\n${kb}`;
           const known = Object.entries(session.property || {}).map(([k, v]) => `${k}=${Array.isArray(v) ? v.join("+") : v}`).join(", ");
           const prompt = `CONVERSATION STATE: stage=${session.stage}; service=${session.route || session.intent || "not chosen"}; package=${session.package || "none"}; known home details: ${known || "none"}.\nCONVERSATION SO FAR:\n${transcript(session, 12) || "(none)"}\n\nCUSTOMER'S LATEST MESSAGE:\n"""${String(text).slice(0, 2000)}"""\n\nNEXT MESSAGE (shown right after your response, unchanged):\n"""${String(next || "").slice(0, 3000)}"""\n\nReturn the JSON object only.`;
-          const out = injected ? await injected({ system, prompt, schema: voiceSchema }) : await call(system, prompt, voiceSchema);
+          // The voice is optional polish, so it gets a tighter time limit than reading the message.
+          const out = injected ? await injected({ system, prompt, schema: voiceSchema }) : await call(system, prompt, voiceSchema, voiceTimeoutMs);
           return normalizeVoice(out, { config, faqs, kb, next });
         } catch {
           throw Object.assign(new Error("Selected AI provider could not write a reply."), { code: "AI_PROVIDER_FAILED" });

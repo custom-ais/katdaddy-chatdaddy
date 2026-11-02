@@ -10,6 +10,8 @@ export const BUNDLE_PRICE_CENTS = 24800;
 // Cleaning + Assessment: the Premium 1-2-3 cleaning for the home plus a fixed assessment add-on.
 // $179 + $60 = $239 for a 1-story home; 2-story homes follow their cleaning price ($259 / $279).
 export const BUNDLE_ASSESSMENT_CENTS = 6000;
+// Nov 2 2026: the office's assessment description (camera, airflow, photos, itemized estimate).
+export const ASSESSMENT_PROCESS_VERSION = 2;
 export const bundleAssessmentCents = (config) => (Number.isInteger(config?.bundleAssessmentCents) ? config.bundleAssessmentCents : BUNDLE_ASSESSMENT_CENTS);
 export const DEFAULT_CONFIG = {
   version: 1,
@@ -87,7 +89,9 @@ export const DEFAULT_CONFIG = {
   activeTechnicianIds: ['tech-ryan'],
   preparation: 'Please make the laundry area accessible and secure pets before the visit. Do not move or disconnect the dryer yourself. Let the team know about access restrictions.',
   cleaningProcess: 'Every See-It-Clean visit is a full vent cleaning with a live camera inspection during service, and we verify airflow before and after so you can see the difference.',
-  assessmentProcess: 'We evaluate the vent issue, document our findings, and explain the recommended repair options so the work can be quoted appropriately.',
+  assessmentProcess: "We'll start by asking what you've noticed, then inspect the vent from the connection behind your dryer to the outlet on your wall or roof.\n\nYour technician will use a camera to look inside the duct and measure airflow at both ends. That helps us pinpoint problems like a blockage, a crushed section, or a loose connection. We'll show you photos of what we find, explain what needs attention, and give you an itemized estimate so you can review your options before approving any work.\n\nAssessments start at $119. If you choose us for the repair, we'll apply the full assessment fee toward it.",
+  // Bumped when the office supplies new default wording; older saved settings switch to it once.
+  assessmentProcessVersion: ASSESSMENT_PROCESS_VERSION,
   // Rules manual: the $119 assessment is credited 100% toward the repair when the customer hires DVS for it.
   assessmentCredited: true,
 };
@@ -151,6 +155,8 @@ export const withConfigDefaults = saved => {
  const gates=saved?.integrations;
  c.integrations=gates===undefined?{...DEFAULT_CONFIG.integrations}:gates&&typeof gates==='object'&&!Array.isArray(gates)?{...DEFAULT_CONFIG.integrations,...gates}:gates;
  // Settings saved before the office's coverage list switch to it once; later edits in Settings stand.
+ // The office's Nov 2 2026 assessment description replaces older saved wording once; later edits stand.
+ if((saved?.assessmentProcessVersion||0)<ASSESSMENT_PROCESS_VERSION){c.assessmentProcess=DEFAULT_CONFIG.assessmentProcess;c.assessmentProcessVersion=ASSESSMENT_PROCESS_VERSION;}
  if((saved?.coverageVersion||0)<COVERAGE_VERSION){c.serviceZips=[...COVERAGE_IN];c.travelZips=[...COVERAGE_TRAVEL];c.coverageVersion=COVERAGE_VERSION;}
  if(Array.isArray(saved?.services)){const ids=new Set(saved.services.map(x=>x.id));c.services=[...saved.services.map(x=>RETIRED_FAMILIES.has(x.family)?{...x,active:false}:x),...SERVICE_CATALOG.filter(x=>!ids.has(x.id))];}
  return c;
@@ -211,6 +217,7 @@ export function validateConfig(c) {
  if(!Array.isArray(c.serviceZips)||c.serviceZips.length>1000||c.serviceZips.some(z=>!/^\d{5}$/.test(z)))errors.push('Coverage must contain five-digit ZIP codes.');
  if(!Array.isArray(c.travelZips)||c.travelZips.length>1000||c.travelZips.some(z=>!/^\d{5}$/.test(z)))errors.push('Just-outside ZIPs must be five-digit ZIP codes.');
  if(c.coverageVersion!=null&&!Number.isInteger(c.coverageVersion))errors.push('Invalid coverageVersion.');
+ if(c.assessmentProcessVersion!=null&&!Number.isInteger(c.assessmentProcessVersion))errors.push('Invalid assessmentProcessVersion.');
  if(!Number.isInteger(c.travelZoneFeeCents)||c.travelZoneFeeCents<0||c.travelZoneFeeCents>50000)errors.push('The just-outside travel charge must be $0–$500.');
  if(!Array.isArray(c.blockedDates)||c.blockedDates.length>1000||c.blockedDates.some(d=>!/^\d{4}-\d{2}-\d{2}$/.test(d)||Number.isNaN(Date.parse(d))))errors.push('Invalid blocked dates.');
  if(!Array.isArray(c.activeTechnicianIds)||!c.activeTechnicianIds.every(id=>typeof id==='string'&&id.length<80))errors.push('Invalid technician selection.');
