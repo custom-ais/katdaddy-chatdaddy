@@ -58,8 +58,11 @@ export async function captureAvailabilityRequest({ store, sendStaffSms = null, c
     }
     await store.updateRequest(request);
     data.availabilityRequestId = request.id;
+    // A staff text that couldn't go out is the office's problem, not the customer's: the request is in
+    // the Inbox and the failure is logged, and the emergency offer already says same-day depends on
+    // availability. So the customer only hears about it when the team was actually asked.
     return request.notification.status === "accepted"
       ? `I’ve asked ${recipient} to check technician availability for ${requested}. Your appointment will be confirmed separately. We can continue collecting the details while the team checks.`
-      : "I saved your availability request for the team, but the staff text could not be sent. Please contact the office directly for urgent availability while we collect the remaining details.";
+      : "";
   } finally { await store.unlock(key); }
 }

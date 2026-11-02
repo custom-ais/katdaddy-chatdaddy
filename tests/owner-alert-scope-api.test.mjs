@@ -149,7 +149,8 @@ test('owner-only scope prevents early staff availability SMS without interruptin
   const token = await h.fresh();
   const first = await h.chat(token, 'Emergency Clog / Overheating');
   assert.equal(first.session.pending, 'safetyCheck');
-  assert.match(first.reply, /saved your availability request/);
+  assert.doesNotMatch(first.reply, /availability request|could not be sent|contact the office/, "the customer isn't told about an internal text that couldn't go out");
+  assert.match(first.reply, /^🚨 Got it/, "straight to the emergency safety question");
   await h.chat(token, 'Can a tech come today at 5pm?');
   await h.chat(token, 'Can a tech come today at 5pm?');
   const requests = await h.store.requests();

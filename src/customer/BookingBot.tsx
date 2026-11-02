@@ -1,5 +1,6 @@
 import { PhoneInput } from '../components/PhoneInput';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bird, Bot, Building, Calendar, Check, CheckCircle, ChevronDown, ChevronRight, Clock,
   Download, Droplet, Flame, HelpCircle, Home, Layers, List, Loader2, MapPin, MessageCircle, Minus, MoreHorizontal, Plus, Pencil, Phone, RotateCcw,
@@ -464,42 +465,117 @@ function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { t
   );
 }
 
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+const LOADING_STEPS = ['Checking the schedule for openings…', 'Calculating routes…', 'Assigning a technician…', 'Gathering optional alternatives…'];
+const BOOKING_STEPS = ['Creating your account…', 'Assigning your technician…', 'Adding your visit to the schedule…', 'Sending your confirmation…'];
+
+/**
+ * A small popup while BOB loads openings or books the visit: steps check off one by one. It's shown
+ * on <body> so it covers the chat however the page is scrolled or animated.
+ */
+function ProgressPopup({ title, steps, done, every = 1000 }: { title: string; steps: string[]; done: boolean; every?: number }) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setI((n) => Math.min(n + 1, steps.length - 1)), every);
+    return () => clearInterval(t);
+  }, [steps.length, every]);
+  const current = done ? steps.length : i;
+  return createPortal(
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/45 backdrop-blur-[2px] p-4 animate-in" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="w-full max-w-sm rounded-3xl bg-white shadow-2xl border border-slate-200 p-6">
+        <div className="flex items-center gap-4">
+          <div className="relative size-16 shrink-0 flex items-center justify-center" aria-hidden="true">
+            <span className="absolute inset-0 rounded-full bg-orange-400/25 motion-safe:animate-ping" style={{ animationDuration: '1.8s' }} />
+            <span className="relative"><BobFace size={52} /></span>
+          </div>
+          <h3 className="font-extrabold text-slate-900 text-lg leading-snug">{title}</h3>
+        </div>
+        <ul className="mt-5 space-y-3" role="status" aria-live="polite">
+          {steps.map((step, k) => (
+            <li key={step} className={`flex items-center gap-3 text-sm font-semibold transition-colors ${k < current ? 'text-slate-700' : k === current ? 'text-slate-900' : 'text-slate-400'}`}>
+              {k < current ? <CheckCircle size={20} className="text-emerald-500 shrink-0" />
+                : k === current ? <Loader2 size={20} className="text-orange-500 animate-spin shrink-0" />
+                : <span className="size-5 shrink-0 rounded-full border-2 border-slate-200" aria-hidden="true" />}
+              {step}
+            </li>
+          ))}
+        </ul>
+        <div className="mt-5 h-1.5 rounded-full bg-slate-100 overflow-hidden" aria-hidden="true">
+          <div className="h-full bg-gradient-to-r from-orange-400 to-emerald-500 transition-[width] duration-700 ease-out" style={{ width: `${Math.max(8, (current / steps.length) * 100)}%` }} />
+        </div>
+        <p className="mt-4 text-xs font-bold text-slate-500 text-center">Please do not navigate away from this screen.</p>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** Shows a popup for at least `min` ms (so it never just flashes), then checks every step off before closing. */
+function useProgress(min: number) {
+  const [state, setState] = useState<'off' | 'on' | 'done'>('off');
+  const started = useRef(0);
+  const start = useCallback(() => { started.current = Date.now(); setState('on'); }, []);
+  const finish = useCallback(async () => {
+    await sleep(Math.max(0, min - (Date.now() - started.current)));
+    setState('done');
+    await sleep(450);
+    setState('off');
+  }, [min]);
+  const stop = useCallback(() => setState('off'), []);
+  return { state, start, finish, stop };
+}
+
 function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, onEdit }: { token: string; session: any; config: any; onBooked: (r: any, pending: boolean) => void; onApproval: (a: any) => void; onRequest: () => void; onEdit: () => void }) {
   const [slots, setSlots] = useState<any[]>([]), [cursor, setCursor] = useState<number | null>(0), [date, setDate] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [hold, setHold] = useState<any>(null), [approved, setApproved] = useState(false), [enabled, setEnabled] = useState(true), [now, setNow] = useState(Date.now()), [quote, setQuote] = useState<any>(null);
   const idem = useRef(crypto.randomUUID()), generation = useRef(0), busyRef = useRef(false);
+  const loading = useProgress(2400), booking = useProgress(2600);
+  // The pressed time: outlined and filling while it's held, then solid green.
+  const [picking, setPicking] = useState<string | null>(null), [held, setHeld] = useState<string | null>(null);
+  const [confirmState, setConfirmState] = useState<'idle' | 'working' | 'done'>('idle');
+  const { start: startLoading, finish: finishLoading } = loading;
   const load = useCallback(async (nextCursor = 0, searchDate = '') => {
     const n = ++generation.current;
     setBusy(true); setError('');
+    startLoading();
     try {
       const r = await api(`/api/availability?cursor=${nextCursor}&date=${encodeURIComponent(searchDate)}`, { token });
       if (n !== generation.current) return;
       setSlots(r.slots); setCursor(r.nextCursor); setEnabled(r.enabled); if (r.quote) setQuote(r.quote);
-    } catch (err) { if (n === generation.current) setError((err as Error).message); } finally { if (n === generation.current) setBusy(false); }
-  }, [token]);
+    } catch (err) { if (n === generation.current) setError((err as Error).message); } finally {
+      if (n === generation.current) { setBusy(false); void finishLoading(); }
+    }
+  }, [token, startLoading, finishLoading]);
   useEffect(() => { void load(); return () => { generation.current++; }; }, [load]);
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
   const seconds = hold ? Math.max(0, Math.ceil((hold.expiresAt - now) / 1000)) : 0;
 
   const choose = async (slot: any) => {
     if (busyRef.current) return;
-    busyRef.current = true; setBusy(true); setError('');
+    busyRef.current = true; setBusy(true); setError(''); setPicking(slot.scheduledAt);
     try {
       const r = await api('/api/holds', { method: 'POST', token, body: { scheduledAt: slot.scheduledAt } });
-      setHold(r.hold); setApproved(false); setNow(Date.now()); idem.current = crypto.randomUUID();
-    } catch (err) { setError((err as Error).message); void load(0, date); } finally { setBusy(false); busyRef.current = false; }
+      setHeld(slot.scheduledAt);
+      await sleep(800); // let the customer see the time turn green before the review screen
+      setHold(r.hold); setApproved(false); setNow(Date.now()); idem.current = crypto.randomUUID(); setConfirmState('idle');
+    } catch (err) { setError((err as Error).message); void load(0, date); } finally { setPicking(null); setHeld(null); setBusy(false); busyRef.current = false; }
   };
   const confirm = async () => {
     if (!hold || !approved || seconds <= 0 || busyRef.current) return;
-    busyRef.current = true; setBusy(true); setError('');
+    busyRef.current = true; setBusy(true); setError(''); setConfirmState('working');
     try {
       if (hold.approvalRequired) {
         const r = await api('/api/approvals', { method: 'POST', token, body: { holdId: hold.id, approved: true } });
         onApproval(r.approval);
       } else {
+        booking.start();
         const r = await api('/api/bookings', { method: 'POST', token, body: { holdId: hold.id, idempotencyKey: idem.current, approved: true } });
+        await booking.finish();
+        setConfirmState('done');
+        await sleep(1000); // the button shows Confirmed before the receipt
         onBooked(r.receipt, Boolean(r.pending));
       }
     } catch (err) {
+      booking.stop(); setConfirmState('idle');
       setError((err as Error).message);
       if (err instanceof ApiError && err.status === 409) { setHold(null); setApproved(false); void load(0, date); }
     } finally { setBusy(false); busyRef.current = false; }
@@ -511,13 +587,15 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
     catch (err) { setError((err as Error).message); } finally { setBusy(false); }
   };
 
-  if (busy && !slots.length && !hold && !error) {
-    return <WorkingScreen title="Finding your openings" steps={['Checking the live schedule…', 'Finding technicians near you…', 'Lining up the soonest openings…', 'Almost there…']} loop={1} every={2500} />;
-  }
+  const popups = <>
+    {loading.state !== 'off' && <ProgressPopup title="Finding your openings" steps={LOADING_STEPS} done={loading.state === 'done'} every={650} />}
+    {booking.state !== 'off' && <ProgressPopup title="Booking your visit" steps={BOOKING_STEPS} done={booking.state === 'done'} every={850} />}
+  </>;
 
   if (!enabled) {
     return (
       <Card>
+        {popups}
         <h3 className="font-extrabold text-slate-800 text-lg">Online booking is paused</h3>
         <p className="text-sm text-slate-500 mt-1 mb-4">The office can still get you on the schedule. Send your preferred day and time and they'll confirm it with you.</p>
         <button className="w-full bg-gradient-to-r from-orange-500 to-orange-600 text-white font-extrabold py-3.5 rounded-2xl" onClick={onRequest}>Send a booking request</button>
@@ -530,6 +608,7 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
     const c = session.contact || {};
     return (
       <Card>
+        {popups}
         <div className="flex justify-between items-center mb-4 gap-3">
           <h3 className="font-extrabold text-slate-800 flex items-center gap-2.5 text-lg"><CheckCircle size={22} className="text-orange-500" />Review your visit</h3>
           <span role="timer" className={`text-xs font-mono px-3 py-1.5 rounded-full flex items-center gap-1.5 font-bold border ${seconds > 0 ? 'bg-orange-50 text-orange-700 border-orange-200/50' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
@@ -554,8 +633,18 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
           <span>The service, price, address, and arrival window are correct.</span>
         </label>
         {error && <div role="alert" className="mt-3 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">{error}</div>}
-        <button className="w-full mt-5 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-extrabold py-4 rounded-2xl shadow-lg shadow-orange-500/30 flex justify-center items-center gap-2 disabled:opacity-60 text-base" disabled={!approved || busy || seconds <= 0} onClick={confirm}>
-          {busy ? <><Loader2 className="animate-spin" size={20} />{hold.approvalRequired ? 'Sending for approval…' : 'Booking your visit…'}</> : hold.approvalRequired ? 'Request approval' : 'Confirm & book'}
+        <button
+          className={`relative overflow-hidden w-full mt-5 font-extrabold py-4 rounded-2xl flex justify-center items-center gap-2 text-base transition-colors ${
+            confirmState === 'done' ? 'bg-emerald-500 text-white border-2 border-emerald-500 shadow-lg shadow-emerald-500/30'
+            : confirmState === 'working' ? 'bg-white text-emerald-800 border-2 border-emerald-500'
+            : 'bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white border-2 border-transparent shadow-lg shadow-orange-500/30 disabled:opacity-60'}`}
+          disabled={!approved || busy || seconds <= 0} onClick={confirm} aria-live="polite">
+          {confirmState === 'working' && <span className="bob-fill absolute inset-0 bg-emerald-200/70" aria-hidden="true" />}
+          <span className="relative flex items-center gap-2">
+            {confirmState === 'done' ? <><CheckCircle size={20} />Confirmed</>
+              : confirmState === 'working' ? <><Loader2 className="animate-spin" size={20} />{hold.approvalRequired ? 'Sending for approval…' : 'Booking your visit…'}</>
+              : hold.approvalRequired ? 'Request approval' : 'Confirm & book'}
+          </span>
         </button>
         <div className="mt-3 flex justify-center gap-5 text-sm font-bold text-slate-500">
           <button onClick={release} disabled={busy} className="hover:text-slate-800">{seconds > 0 ? 'Pick a different time' : 'See open times again'}</button>
@@ -567,6 +656,7 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
 
   return (
     <Card>
+      {popups}
       <div className="flex justify-between items-center mb-3">
         <h3 className="font-extrabold text-slate-800 flex items-center gap-2.5 text-lg"><Calendar size={22} className="text-orange-500" />Select a time</h3>
         <span className="text-xs font-bold text-slate-400">Arizona time</span>
@@ -581,11 +671,17 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
       <div className="space-y-3" aria-busy={busy}>
         {slots.map((slot) => {
           const w = windowParts(slot.scheduledAt);
+          const isHeld = held === slot.scheduledAt, isPicking = picking === slot.scheduledAt && !isHeld;
           return (
-            <button key={slot.scheduledAt} onClick={() => choose(slot)} disabled={busy} className="w-full flex items-center justify-between gap-3 p-4 rounded-2xl border-2 text-left bg-white border-slate-100 hover:border-orange-300 hover:bg-orange-50/30 active:scale-[0.99] transition-all disabled:opacity-60">
-              <span>
-                <span className="block font-extrabold text-slate-800">{w.day}</span>
-                <span className="block text-sm font-semibold text-slate-500">{w.time}</span>
+            <button key={slot.scheduledAt} onClick={() => choose(slot)} disabled={busy} aria-pressed={isPicking || isHeld}
+              className={`relative overflow-hidden w-full flex items-center justify-between gap-3 p-4 rounded-2xl border-2 text-left transition-all ${
+                isHeld ? 'bg-emerald-500 border-emerald-500 text-white shadow-lg shadow-emerald-500/25'
+                : isPicking ? 'bg-white border-emerald-500 ring-4 ring-emerald-100'
+                : 'bg-white border-slate-100 hover:border-orange-300 hover:bg-orange-50/30 active:scale-[0.99] disabled:opacity-60'}`}>
+              {isPicking && <span className="bob-fill absolute inset-0 bg-emerald-100" aria-hidden="true" />}
+              <span className="relative">
+                <span className={`block font-extrabold ${isHeld ? 'text-white' : 'text-slate-800'}`}>{w.day}</span>
+                <span className={`block text-sm font-semibold ${isHeld ? 'text-emerald-50' : 'text-slate-500'}`}>{w.time}</span>
                 <span className="flex flex-wrap gap-1.5 mt-1.5">
                   {slot.bestFit && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">Best fit for our route</span>}
                   {slot.nearby && !slot.bestFit && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 flex items-center gap-1"><MapPin size={11} />We're nearby that day</span>}
@@ -593,12 +689,13 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
                   {slot.approval && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">Needs team approval</span>}
                 </span>
               </span>
-              <ChevronRight size={20} className="text-slate-300 shrink-0" />
+              {isHeld ? <span className="relative flex items-center gap-1.5 text-sm font-extrabold shrink-0"><CheckCircle size={20} />Held for you</span>
+                : isPicking ? <Loader2 size={20} className="relative text-emerald-600 animate-spin shrink-0" />
+                : <ChevronRight size={20} className="text-slate-300 shrink-0" />}
             </button>
           );
         })}
       </div>
-      {busy && <p role="status" className="mt-3 text-sm font-semibold text-slate-400 flex items-center gap-2"><Loader2 size={16} className="animate-spin" />Checking the live schedule…</p>}
       {!busy && slots.length === 0 && <p className="text-sm text-slate-500 mt-2">No openings match. Try another date, or send the team a request.</p>}
       <div className="mt-4 flex flex-wrap gap-2">
         <button className="px-4 py-2 rounded-xl text-sm font-extrabold bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-50" onClick={() => load(cursor || 0, date)} disabled={busy || cursor === null}>More times</button>
