@@ -16,6 +16,7 @@ const routes = [
   ['POST', /^\/api\/admin\/password$/, ['account.password']],
   ['GET', /^\/api\/admin\/owner-sms-consent$/, ['ownerSms.manage']],
   ['POST', /^\/api\/admin\/owner-sms-consent$/, ['ownerSms.manage']],
+  ['POST', /^\/api\/admin\/booking-report\/test$/, ['integrations.manage']],
   ['GET', /^\/api\/admin\/integration-accounts$/, ['settings.connections.view']],
   ['POST', /^\/api\/admin\/(?:integration-accounts|connections\/refresh)$/, ['integrations.manage']],
   ['GET', /^\/api\/admin\/jobber\/(?:connect|users)$/, ['integrations.manage']],
@@ -44,6 +45,8 @@ export function requireAdminRoute(principal, method, path) {
   if (!validPrincipal(principal) || typeof path !== 'string') throw forbidden();
   // A shared-password session cannot identify the owner who records or withdraws consent.
   if (path === '/api/admin/owner-sms-consent' && !isMaster(principal)) throw forbidden();
+  // The booking report goes to the ChatDaddy operator; only the Master Admin can send a test.
+  if (path === '/api/admin/booking-report/test' && !isMaster(principal)) throw forbidden();
   const route = routes.find(([verb,pattern]) => verb === method && pattern.test(path));
   if (!route || !hasAll(principal,route[2])) throw forbidden();
   return true;
@@ -318,6 +321,7 @@ export function projectAdminResponse(principal,method,path,body) {
   // These routes return privileged records and are master-only in the registry.
   if (hasPermission(principal,'users.manage') && /^\/api\/admin\/(?:users|invitations)(?:\/|$)/.test(path)) return clone(body);
   if (hasPermission(principal,'ownerSms.manage') && path === '/api/admin/owner-sms-consent') return clone(body);
+  if (isMaster(principal) && path === '/api/admin/booking-report/test') return pick(body,['status','to']);
   if (hasPermission(principal,'integrations.manage') && /^\/api\/admin\/(?:integration-accounts|jobber\/)/.test(path)) return clone(body);
   if (path === '/api/admin/status') return pick(body,['authenticated','setupRequired','passwordFromEnv','namedUsersEnabled']);
   if (path === '/api/admin/logout') return pick(body,['signedOut']);

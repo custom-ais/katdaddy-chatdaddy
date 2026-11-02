@@ -115,3 +115,40 @@ test("the report doesn't depend on customer email confirmations, and a booking s
   const r = await h2.book("cleaning");
   assert.equal(r.status, 201, "a failed report never undoes a booking");
 });
+
+test("only the Master Admin can send a test report, and it says whether SendGrid accepted it", async (t) => {
+  const { createAdminAuth } = await import("../server/admin-auth.mjs");
+  const password = "Synthetic-local-account-password-2026";
+  const sendgrid = mailer();
+  const h = await harness(t, { sendgrid, env: { BOOKING_EMAIL_PROVIDER: "sendgrid", BOOKING_REPORT_EMAIL: undefined } });
+  const legacy = await h.login();
+  const auth = createAdminAuth({ store: h.store, clock: h.store.clock });
+  const claim = await auth.prepareOwnerBootstrap({ email: "owner@example.test", name: "Synthetic Owner" });
+  assert.equal((await h.call("/api/admin/owner-bootstrap/accept", { method: "POST", body: { token: claim.token, password } })).status, 200);
+  const login = await h.call("/api/admin/login", { method: "POST", body: { email: "owner@example.test", password } });
+  await auth.activateNamedMode({ ownerId: claim.user.id });
+  const master = login.cookie;
+  const issued = await h.call("/api/admin/users/invite", { method: "POST", cookie: master, body: { email: "office@example.test", name: "Office", permissions: ["appointments.view", "settings.connections.view"] } });
+  await h.call("/api/admin/invite/accept", { method: "POST", body: { token: issued.data.token, password } });
+  const member = (await h.call("/api/admin/login", { method: "POST", body: { email: "office@example.test", password } })).cookie;
+
+  assert.equal((await h.call("/api/admin/booking-report/test", { method: "POST", cookie: member, body: {} })).status, 403, "office users can't send it");
+  assert.equal((await h.call("/api/admin/booking-report/test", { method: "POST", cookie: legacy, body: {} })).status, 401, "the old shared password no longer works once named accounts are on");
+  const r = await h.call("/api/admin/booking-report/test", { method: "POST", cookie: master, body: {} });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.deepEqual(r.data, { status: "accepted", to: "bookings@custom-ais.com" });
+  const [mail] = reports(sendgrid);
+  assert.match(mail.subject, /^\[TEST\] ChatDaddy booking #1 in /);
+  assert.match(mail.text, /No appointment was booked/);
+  assert.equal((await h.store.appointments()).length, 0, "a test books nothing");
+
+  const bare = await harness(t, { env: { BOOKING_REPORT_EMAIL: undefined } });
+  const auth2 = createAdminAuth({ store: bare.store, clock: bare.store.clock });
+  await bare.login();
+  const claim2 = await auth2.prepareOwnerBootstrap({ email: "owner@example.test", name: "Synthetic Owner" });
+  await bare.call("/api/admin/owner-bootstrap/accept", { method: "POST", body: { token: claim2.token, password } });
+  const login2 = await bare.call("/api/admin/login", { method: "POST", body: { email: "owner@example.test", password } });
+  await auth2.activateNamedMode({ ownerId: claim2.user.id });
+  const none = await bare.call("/api/admin/booking-report/test", { method: "POST", cookie: login2.cookie, body: {} });
+  assert.deepEqual(none.data, { status: "not_configured", to: "bookings@custom-ais.com" }, "no SendGrid: says so instead of pretending");
+});

@@ -30,7 +30,8 @@ export function bookingTotals(appointments, appt, { commissionCents = COMMISSION
   const mine = periods(at);
   const counted = (appointments || []).filter((a) => a && a.source === "ai_bot" && (a.id === appt.id || COUNTED.has(a.status)) && Number.isFinite(Date.parse(a.createdAt)));
   if (!counted.some((a) => a.id === appt.id)) counted.push(appt);
-  const upToThis = counted.filter((a) => Date.parse(a.createdAt) < at || (Date.parse(a.createdAt) === at && a.id <= appt.id));
+  // Up to and including this booking; bookings made at the same moment count together.
+  const upToThis = counted.filter((a) => Date.parse(a.createdAt) <= at);
   const out = { commissionCents, jobCents: cents(appt), weekStart: mine.week, yearLabel: mine.year };
   for (const key of ["week", "month", "year"]) {
     const same = upToThis.filter((a) => periods(Date.parse(a.createdAt))[key] === mine[key]);

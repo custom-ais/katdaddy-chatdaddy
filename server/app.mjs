@@ -1279,6 +1279,30 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         if (method === 'POST' && /^\/api\/admin\/invitations\/[^/]+\/revoke$/.test(pathname)) {
           return send(200, await adminAuth.revokeInvite(req.adminPrincipal, decodeURIComponent(pathname.split('/')[4])));
         }
+        if (method === "POST" && pathname === "/api/admin/booking-report/test") {
+          await rate(req, "booking-report-test", 5, 600_000);
+          const to = bookingReportTo();
+          if (!to) return send(200, { status: "off", to: "" });
+          if (!(useSendGrid && sendgrid?.configured)) return send(200, { status: "not_configured", to });
+          const c = await store.config();
+          const now = new Date(clock()).toISOString();
+          const sample = {
+            id: "TEST-REPORT", createdAt: now, price: 179, source: "ai_bot", status: "confirmed",
+            customerName: "Test Customer", phone: "6235550100", email: "test@example.com", address: "123 W Test St", city: "Buckeye", zip: "85326",
+            package: "Premium 1-2-3 See-It-Clean", lineItems: [{ name: "Premium 1-2-3 See-It-Clean", cents: 17900 }],
+            scheduledAt: new Date(clock() + 2 * 86_400_000).toISOString(), durationMins: 60, technicianName: "Test Technician",
+            concerns: ["This is a test email from the ChatDaddy dashboard. No appointment was booked."],
+          };
+          const email = bookingReportEmail(sample, bookingTotals(await store.appointments(), sample, { commissionCents }), c);
+          try {
+            const r = await sendgrid.sendEmail(to, { ...email, subject: `[TEST] ${email.subject}` });
+            await record(req, "booking_report.test", { status: r?.status === "accepted" ? "accepted" : "uncertain" });
+            return send(200, { status: r?.status === "accepted" ? "accepted" : "uncertain", to });
+          } catch (error) {
+            await record(req, "booking_report.test", { status: error?.code === "SENDGRID_REJECTED" ? "rejected" : "failed" }, "warning");
+            return send(200, { status: error?.code === "SENDGRID_REJECTED" ? "rejected" : "failed", to });
+          }
+        }
         if(pathname==='/api/admin/owner-sms-consent'&&['GET','POST'].includes(method)) {
           if(method==='GET')return send(200,await ownerConsent.snapshot());
           const body=await readBody(req);
