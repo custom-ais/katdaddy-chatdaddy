@@ -632,9 +632,22 @@ function ApprovalWait({ token, initial, onBooked, onEnded, onCancelled }: { toke
   );
 }
 
-function Receipt({ receipt, pending, onRestart, business }: { receipt: any; pending: boolean; onRestart: () => void; business?: { businessName?: string; phone?: string; email?: string } }) {
+const AUTO_CLOSE_SECONDS = 20;
+/** Where the standalone chat page goes back to (and returns to after a booking). */
+const SITE_URL = 'https://dryerventsquadaz.com';
+
+function Receipt({ receipt, pending, onRestart, business, autoClose, closeLabel, onAutoClose, onStay }: { receipt: any; pending: boolean; onRestart: () => void; business?: { businessName?: string; phone?: string; email?: string }; autoClose?: boolean; closeLabel?: string; onAutoClose?: () => void; onStay?: () => void }) {
   const w = windowParts(receipt.scheduledAt);
   const [saving, setSaving] = useState(false);
+  // After a confirmed booking the chat closes itself shortly; it pauses while the card is saved.
+  const [left, setLeft] = useState(AUTO_CLOSE_SECONDS);
+  const closeRef = useRef(onAutoClose); closeRef.current = onAutoClose;
+  useEffect(() => {
+    if (!autoClose || saving) return;
+    const t = setInterval(() => setLeft((n) => Math.max(0, n - 1)), 1000);
+    return () => clearInterval(t);
+  }, [autoClose, saving]);
+  useEffect(() => { if (autoClose && left === 0) closeRef.current?.(); }, [autoClose, left]);
   const items = receipt.lineItems?.length ? receipt.lineItems : [{ name: receipt.service, cents: receipt.priceCents }];
   const text = () =>
     [receipt.id, `${w.day}, ${w.time} (Arizona time)`, ...items.map((l: any) => `${l.name}: ${money(l.cents)}`), `Total: ${money(receipt.priceCents)}`, receipt.name, receipt.address, `${receipt.city}, AZ ${receipt.zip}`, receipt.route !== 'cleaning' ? 'Repairs and parts are quoted separately.' : '', '', receipt.preparation].join('\n');
@@ -681,6 +694,15 @@ function Receipt({ receipt, pending, onRestart, business }: { receipt: any; pend
         <button className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 font-extrabold text-sm rounded-xl flex items-center gap-2 disabled:opacity-60" onClick={() => void save()} disabled={saving}>{saving ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}Save confirmation</button>
         <button className="px-4 py-2.5 text-slate-500 font-extrabold text-sm rounded-xl" onClick={onRestart}>Start over</button>
       </div>
+      {autoClose && !pending && (
+        <div className="rounded-2xl bg-white/80 border border-emerald-200 px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <p role="timer" aria-live="off" className="text-sm font-semibold text-slate-600">{closeLabel || 'This chat will close'} in {left}s{saving ? ' (paused)' : ''}.</p>
+            <button type="button" className="shrink-0 whitespace-nowrap text-sm font-extrabold text-emerald-700 hover:text-emerald-900" onClick={onStay}>Stay open</button>
+          </div>
+          <div className="mt-2 h-1 rounded-full bg-emerald-100 overflow-hidden" aria-hidden="true"><div className="h-full bg-emerald-500 transition-[width] duration-1000 ease-linear" style={{ width: `${(left / AUTO_CLOSE_SECONDS) * 100}%` }} /></div>
+        </div>
+      )}
     </div>
   );
 }
@@ -689,6 +711,7 @@ function Receipt({ receipt, pending, onRestart, business }: { receipt: any; pend
 
 export function BookingBot({ embedded = false, preview = false }: { embedded?: boolean; preview?: boolean }) {
   const [token, setToken] = useState(''), [session, setSession] = useState<any>(null), [config, setConfig] = useState<any>(null);
+  const [autoClose, setAutoClose] = useState(false);
   const [minimized, setMinimized] = useState(() => { try { return sessionStorage.getItem(preview ? 'bob.preview.minimized' : 'bob.minimized') === '1'; } catch { return false; } });
   const expandRef = useRef<HTMLButtonElement>(null);
   const changeMinimized = (value: boolean) => {
@@ -727,7 +750,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const storageKey = preview ? 'bob.preview.session' : 'bob.session';
 
   const initialize = useCallback(async (fresh = false) => {
-    setReady(false); setError(''); setReceipt(null); setPending(false); setRequestId(''); setAction(''); setContactStep(null); setVerification(null); setApproval(null);
+    setReady(false); setError(''); setReceipt(null); setPending(false); setAutoClose(false); setRequestId(''); setAction(''); setContactStep(null); setVerification(null); setApproval(null);
     try {
       let stored = '';
       try { stored = fresh ? '' : sessionStorage.getItem(storageKey) || ''; } catch {}
@@ -798,7 +821,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   }, [messages, busy, action, receipt, requestId, contactStep, options.length]);
 
   const say = (role: Msg['role'], t: string, extra: Partial<Msg> = {}) => setMessages((m) => [...m, { role, text: t, local: true, ...extra }]);
-  const onApprovalBooked = useCallback((r: any, p: boolean) => { setReceipt(r); setPending(p); setAction(''); }, []);
+  const onApprovalBooked = useCallback((r: any, p: boolean) => { setReceipt(r); setPending(p); setAction(''); setAutoClose(!p && !preview); }, [preview]);
   /** Back to the package choices after a same-day request is cancelled or can't happen. */
   const showChoices = useCallback((r: any, lead = '') => {
     setApproval(null);
@@ -1163,7 +1186,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
 
             <div className="pl-9 sm:pl-10 space-y-4">
               {!receipt && !requestId && action === 'verify' && verification && <VerifyPhone token={token} verification={verification} onVerified={(s) => { setSession(s); setVerification(null); setAction('slots'); say('model', `Thanks — your ${s.verifiedContact?.channel === 'email' ? 'email' : 'phone'} is confirmed. Here are the soonest openings for the full visit.`); }} onEdit={editDetails} onRequest={() => setAction('request')} />}
-              {!receipt && !requestId && action === 'slots' && <SlotPicker token={token} session={session} config={config} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
+              {!receipt && !requestId && action === 'slots' && <SlotPicker token={token} session={session} config={config} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); setAutoClose(!p && !preview); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
               {!receipt && !requestId && action === 'approval' && approval && <ApprovalWait token={token} initial={approval} onBooked={onApprovalBooked} onEnded={onApprovalEnded} onCancelled={onApprovalCancelled} />}
               {!receipt && !requestId && action === 'request' && <RequestForm token={token} session={session} onDone={(id) => { setRequestId(id); setAction(''); setOptions([]); }} />}
               {requestId && (
@@ -1173,7 +1196,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
                   <button className="mt-4 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl font-extrabold text-sm text-slate-700" onClick={restart}>Start a new conversation</button>
                 </Card>
               )}
-              {receipt && <Receipt receipt={receipt} pending={pending} onRestart={restart} business={config} />}
+              {receipt && <Receipt receipt={receipt} pending={pending} onRestart={restart} business={config} autoClose={autoClose} closeLabel={embedded ? 'This chat will close' : 'Returning to dryerventsquadaz.com'} onStay={() => setAutoClose(false)} onAutoClose={() => { setAutoClose(false); if (embedded) changeMinimized(true); else window.location.assign(SITE_URL); }} />}
             </div>
           </>
         )}
@@ -1237,7 +1260,7 @@ export function CustomerPage() {
   return (
     <div className="min-h-dvh bg-slate-100 px-4 py-4 sm:py-8">
       <div className="max-w-3xl mx-auto mb-3 flex items-center justify-between text-sm">
-        <a href="https://dryerventsquadaz.com" className="font-bold text-slate-600 hover:text-slate-900 flex items-center gap-1.5"><ArrowLeft size={16} />Dryer Vent Squad West Valley</a>
+        <a href={SITE_URL} className="font-bold text-slate-600 hover:text-slate-900 flex items-center gap-1.5"><ArrowLeft size={16} />Dryer Vent Squad West Valley</a>
         <span className="text-slate-400 font-semibold hidden sm:inline">Veteran-owned · West Valley, AZ</span>
       </div>
       <BookingBot />
