@@ -892,3 +892,45 @@ test("stale approval for an ordinary slot cannot execute even when its old appro
   assert.equal(await h.count("appointments"), 0);
   assert.equal(await h.count("holds"), 0);
 });
+
+test("a customer can cancel a waiting same-day request and book a regular package instead", async (t) => {
+  const h = await harness(t, { config: { emergencyLeadHours: 1, leadHours: 24, approver: { name: "Seth", phone: "6235559999", email: "" } } });
+  const token = await h.prepare("emergency");
+  const [first] = await h.slots(token);
+  const held = await h.hold(token, first.scheduledAt);
+  const asked = await h.call("/api/approvals", { method: "POST", token, body: { holdId: held.data.hold.id, approved: true } });
+  assert.equal(asked.status, 201, JSON.stringify(asked.data));
+  assert.equal((await h.call("/api/chat", { method: "POST", token, body: { message: "hello" } })).status, 409, "the chat waits while the request is open");
+  const cancelled = await h.call("/api/approvals/current/cancel", { method: "POST", token, body: {} });
+  assert.equal(cancelled.status, 200, JSON.stringify(cancelled.data));
+  assert.equal(cancelled.data.session.stage, "offer");
+  assert.equal(cancelled.data.session.package, null);
+  assert.match(cancelled.data.reply, /^No problem, that package is canceled\./);
+  assert.deepEqual(cancelled.data.card.picks.map((p) => p.family), ["emergency", "premium", "ultimate"]);
+  const [saved] = await h.store.approvals();
+  assert.equal(saved.status, "cancelled");
+  assert.equal(await h.store.countActiveHolds(), 0, "the held time is freed");
+  const cookie = await h.login();
+  const late = await h.call(`/api/admin/approvals/${asked.data.approval.id}`, { method: "POST", cookie, body: { decision: "approve", approverName: "Seth" } });
+  assert.equal(late.status, 409, "a cancelled request can't be approved");
+  assert.match(late.data.error, /cancelled/);
+  assert.equal(await h.count("appointments"), 0);
+  let r;
+  for (const m of ["Premium 1-2-3 · $179", "Standard Floor Setup", "Accept"]) r = await h.chat(token, m);
+  assert.equal(r.session.package, "premium");
+  assert.equal(r.action, "contact", r.reply);
+});
+
+test("when the team declines same-day, the customer is offered the regular packages", async (t) => {
+  const h = await harness(t, { config: { emergencyLeadHours: 1, leadHours: 24, approver: { name: "Seth", phone: "6235559999", email: "" } } });
+  const token = await h.prepare("emergency");
+  const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
+  const asked = await h.call("/api/approvals", { method: "POST", token, body: { holdId: held.data.hold.id, approved: true } });
+  const cookie = await h.login();
+  assert.equal((await h.call(`/api/admin/approvals/${asked.data.approval.id}`, { method: "POST", cookie, body: { decision: "decline", approverName: "Seth" } })).status, 200);
+  const r = await h.call("/api/approvals/current/cancel", { method: "POST", token, body: {} });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.match(r.data.reply, /^We couldn't get a technician to you today\./);
+  assert.deepEqual(r.data.card.picks.map((p) => p.family), ["premium", "ultimate"]);
+  assert.equal((await h.store.approvals())[0].status, "declined", "the office's decision stays on record");
+});

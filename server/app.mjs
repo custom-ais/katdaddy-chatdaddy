@@ -32,7 +32,7 @@ import {
   DEFAULT_CONFIG, INITIAL_FAQS, bookingQuote, travelFeeFor, validateContact,
   validateConfig, normalizePhone, isBookable, BUNDLE_PRICE_CENTS, phoenixDate, areaFor, drivingAreaFor,
 } from "../shared/domain.mjs";
-import { initialSession, WELCOME, detectSafety } from "../shared/conversation.mjs";
+import { initialSession, WELCOME, detectSafety, turn } from "../shared/conversation.mjs";
 import { territoryFor, WEST_VALLEY_ZIPS } from "../shared/territory.mjs";
 import { chatTurn } from "./chat.mjs";
 import { confirmationEmail, confirmationSms, approvalRequestText } from "./messages.mjs";
@@ -1093,6 +1093,31 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         await store.updateApproval(a);
         await store.audit("approval.requested", a.id);
         return send(201, { approval: publicApproval(a, c) });
+      }
+      // The customer changed their mind while a same-day request waits: cancel it, free the held time,
+      // and go back to the choices so they can book a regular package instead.
+      if (method === "POST" && pathname === "/api/approvals/current/cancel") {
+        const { token, data } = await session(req);
+        if (!data.approvalId) fail(404, "There's no approval request in this conversation.");
+        const [a] = await sweepApprovals([await store.approval(data.approvalId)].filter(Boolean));
+        if (!a) fail(404, "There's no approval request in this conversation.");
+        if (["booked", "action_needed"].includes(a.status)) fail(409, "This visit was already approved and booked.");
+        const c = await store.config();
+        let result;
+        if (a.status === "pending") {
+          a.status = "cancelled";
+          a.cancelledAt = clock();
+          await store.updateApproval(a);
+          await store.releaseHold(a.holdId);
+          await store.audit("approval.cancelled", a.id);
+          await record(req, "approval.cancelled_by_customer", { approvalId: a.id, service: a.service });
+          result = turn("Cancel package", { ...data, approvalId: null, stage: "details", serviceAccepted: false }, c, await store.get("faqs"));
+        } else {
+          // Declined, timed out or couldn't be booked: same-day isn't happening, so offer the regular packages.
+          result = turn("Back to packages", { ...data, approvalId: null, stage: "details", serviceAccepted: false, sameDayUnavailable: true }, c, await store.get("faqs"));
+        }
+        await store.saveSession(token, result.session);
+        return send(200, { ...result, via: "rules" });
       }
       if (method === "GET" && pathname === "/api/approvals/current") {
         const { data } = await session(req);

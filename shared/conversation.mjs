@@ -148,6 +148,8 @@ const normalize = (t) => String(t || "").toLowerCase().replace(/[’‘]/g, "'")
 export const FIRE_SAFE = "Everyone is safe & fire/smoke is handled";
 /** The rules engine's reply when it has no approved answer; the conversational layer may replace it. */
 export const UNANSWERED = "I don't have a verified answer to that yet. I can send the question to the team, or we can keep going with your booking.";
+/** Same-day isn't promised: it depends on whether a technician can get there today. */
+export const EMERGENCY_PENDING = "**Emergency Same-Day Clog Relief** depends on availability. If you're interested, we'll check whether a technician can get to you today, and nothing is booked until we confirm.";
 /** The reply when the customer doesn't know an answer: it's fine, and the technician checks it on site. */
 export const NOTED = "That's okay. I'll make a note, and your technician will double-check it when they get there.";
 // The answer each question records, so "Not sure" can be recognized when acknowledging it.
@@ -484,7 +486,8 @@ export function questionOrder(s) {
   }
   if (s.intent === "emergency") {
     // Safety comes first on the emergency path; the address follows what's happening.
-    return ["safetyCheck", s.dryerHot && "powerOff", "triage", "serviceAddress", ...layout, hasDryer(s) && "power"].filter(Boolean);
+    // A regular package picked from the emergency offer also needs the dryer setup for its price.
+    return ["safetyCheck", s.dryerHot && "powerOff", "triage", "serviceAddress", ...layout, hasDryer(s) && "power", TIERS.includes(s.package) && hasDryer(s) && "mount"].filter(Boolean);
   }
   // nest: what price and access depend on
   return ["serviceAddress", "hasDryer", ...layout, hasDryer(s) && "power"].filter(Boolean);
@@ -690,6 +693,8 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       if (s.unresolved === 3) reply = `${reply}\n\nIf it's easier, the team can call you instead.`;
     }
     const parts = { ack, warn, body: reply };
+    // A card replaces the message text on screen, so it carries the acknowledgement and any warning.
+    if (extra.card && (ack || warn)) extra = { ...extra, card: { ...extra.card, intro: [ack, warn].filter(Boolean).join("\n\n") } };
     reply = [ack, warn, reply].filter(Boolean).join("\n\n");
     ack = "";
     warn = "";
@@ -838,7 +843,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       case "mount": {
         if (p.mount !== "Stacked" && p.mount !== "Pedestal") return "Got it.";
         const key = p.mount === "Stacked" ? "stacked" : "pedestal";
-        const fee = s.intent === "cleaning" ? feeLabel(key).replace(/[ ()+]/g, "") : "";
+        const fee = s.intent === "cleaning" || TIERS.includes(s.package) ? feeLabel(key).replace(/[ ()+]/g, "") : "";
         const why = SETUP_WHY[key].replace(/^./, (c) => c.toUpperCase());
         return p.mount === "Stacked"
           ? `Got it, a stacked setup. ${fee ? `The ${fee} stacked setup fee covers moving it with air sleds, so the washer and dryer slide out safely and go back into place.` : `${why}.`}`
@@ -981,13 +986,17 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
 
   const offer = (brief = false) => {
     if (s.intent === "repair") return assessmentOffer(brief);
+    if (s.intent === "emergency" && s.sameDayUnavailable) {
+      return specialOffer(["premium", "ultimate"], "premium", "We couldn't get a technician to you today. You can book **Premium 1-2-3** or **Ultimate Protection** on our regular schedule. Please keep the dryer off until then.", brief, ["Request a callback"]);
+    }
     if (s.intent === "emergency") {
+      // Same-day depends on who's free today, so the regular packages are offered alongside it.
       return specialOffer(
-        ["emergency"],
+        ["emergency", "premium", "ultimate"],
         "emergency",
-        "For an urgent blockage, our **Emergency Same-Day Clog Relief** is the right service: urgent blockage removal and airflow restoration. Same-day visits need a quick approval from our team before they're confirmed. You'll pick a time and we'll ask them right away. Keep the dryer off until the technician arrives.",
+        `${EMERGENCY_PENDING} You can also book **Premium 1-2-3** or **Ultimate Protection** on our regular schedule. Please keep the dryer off until then.`,
         brief,
-        ["Schedule regular cleaning", "Ask a question"],
+        ["Ask a question"],
       );
     }
     if (s.intent === "nest" || s.property.animals === "Yes") {
@@ -1027,7 +1036,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     // Cleaning + Assessment is one simple choice: accept it, or switch to just the cleaning.
     const options = bundle
       ? ["Accept", "Just the cleaning", "Ask a question"]
-      : ["Accept", s.intent === "cleaning" && TIERS.includes(q.package) && s.property.hasDryer !== "No" ? "Compare Packages" : "Back to options", "Ask a question"];
+      : ["Accept", ...(s.intent === "cleaning" && TIERS.includes(q.package) && s.property.hasDryer !== "No" ? ["Compare Packages"] : []), "Cancel package", "Ask a question"];
     const title = `**${q.name}${priced ? ` — ${money(q.priceCents)}` : ""}**`;
     if (brief) return respond(`Ready to continue with ${title}?`, options);
     const switched =
@@ -1057,7 +1066,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
         : ""
       : `\n\n${unverified}`;
     const note = q.priceNote && priced ? `\n\n${q.priceNote}` : "";
-    const approval = needsApproval(q.package) ? "\n\nThis service needs approval from our team before it's confirmed." : "";
+    const approval = q.package === "emergency" ? `\n\n${EMERGENCY_PENDING}` : needsApproval(q.package) ? "\n\nThis service needs approval from our team before it's confirmed." : "";
     return respond(`${switched}${title}\n${bullets}${total}${note}${approval}\n\n**Transparent Pricing Promise**\nMost dryer vent cleanings are completed at the package price selected.`, options, { info: ["pricing"] });
   };
 
@@ -1393,11 +1402,15 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.serviceAccepted = false;
     return respond("Here are our other services:\n" + MORE.map((f) => line(f)).join("\n"), [...MORE.map(label), "Back to packages"]);
   }
-  if (/^(?:back to (?:packages|options))$/.test(t)) {
+  const cancelPick = /^(?:cancel(?: (?:this|the|my|that))? (?:package|selection)|change (?:my |the )?package)$/.test(t);
+  if (cancelPick || /^(?:back to (?:packages|options))$/.test(t)) {
+    // Cancelling on the emergency path goes back to the same-day and regular choices.
+    const emergencyChoices = s.intent === "emergency" && ((s.offerFamilies || []).includes("emergency") || s.sameDayUnavailable);
+    if (cancelPick && s.package) ack = "No problem, that package is canceled.";
     s.package = null;
     s.serviceAccepted = false;
     if (!s.intent || s.intent === "repair") s.intent = "cleaning";
-    if (s.intent === "emergency" || s.intent === "nest") s.intent = "cleaning";
+    if ((s.intent === "emergency" && !emergencyChoices) || s.intent === "nest") s.intent = "cleaning";
     if (!s.bundleAccepted) s.route = "cleaning"; // an accepted Cleaning + Assessment stays
     return next();
   }

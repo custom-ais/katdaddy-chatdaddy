@@ -173,6 +173,7 @@ function PackageCard({ p, onChoose, disabled }: { p: any; onChoose: (option: str
 function RecommendationCard({ card, onChoose, active }: { card: any; onChoose: (option: string) => void; active: boolean }) {
   return (
     <div className="space-y-3 w-full">
+      {card.intro && <div className="p-4 rounded-2xl bg-white text-slate-800 border border-slate-200/90 text-sm sm:text-[15px] leading-relaxed whitespace-pre-wrap shadow-xs"><Rich text={card.intro} /></div>}
       {card.airflow && <AirflowGauge a={card.airflow} />}
       {card.savings && <SavingsTile s={card.savings} />}
       {card.summary ? (
@@ -204,7 +205,7 @@ function iconFor(label: string) {
   if (l.includes('roof')) return <ArrowUp size={18} className={`${c} text-amber-500`} />;
   if (l.includes('side wall')) return <ArrowRight size={18} className={`${c} text-emerald-500`} />;
   if (/one normal cycle|1 normal cycle|no signs|have dryer|^yes|no gate code|no special notes|cleaning only|just the cleaning|dryer is off|turned off|everyone is safe/.test(l)) return <Check size={18} className={`${c} text-emerald-500`} />;
-  if (/^no$|no dryer|^no thanks|^no,/.test(l)) return <X size={18} className={`${c} text-rose-500`} />;
+  if (/^no$|no dryer|^no thanks|^no,|^cancel package/.test(l)) return <X size={18} className={`${c} text-rose-500`} />;
   if (l.includes('express')) return <Timer size={18} className={`${c} text-teal-500`} />;
   if (l.includes('premium')) return <Star size={18} className={`${c} text-orange-500`} />;
   if (l.includes('ultimate')) return <Shield size={18} className={`${c} text-indigo-500`} />;
@@ -434,6 +435,10 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
     catch (err) { setError((err as Error).message); } finally { setBusy(false); }
   };
 
+  if (busy && !slots.length && !hold && !error) {
+    return <WorkingScreen title="Finding your openings" steps={['Checking the live schedule…', 'Finding technicians near you…', 'Lining up the soonest openings…', 'Almost there…']} loop={1} every={2500} />;
+  }
+
   if (!enabled) {
     return (
       <Card>
@@ -535,14 +540,57 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
   );
 }
 
-function ApprovalWait({ token, initial, onBooked, onEnded }: { token: string; initial: any; onBooked: (r: any, pending: boolean) => void; onEnded: (status: string) => void }) {
-  const [approval, setApproval] = useState<any>(initial), [error, setError] = useState('');
+/**
+ * A waiting screen that shows BOB is working: a pulsing animation and short updates that change
+ * every few seconds. After the last update it keeps rotating the final "still waiting" lines.
+ */
+function WorkingScreen({ title, steps, loop = 2, every = 4500, children }: { title: string; steps: string[]; loop?: number; every?: number; children?: React.ReactNode }) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setI((n) => n + 1), every);
+    return () => clearInterval(t);
+  }, [every]);
+  const tail = Math.max(1, Math.min(loop, steps.length));
+  const index = i < steps.length ? i : steps.length - tail + ((i - steps.length) % tail);
+  const progress = Math.min(i, steps.length - 1);
+  return (
+    <Card>
+      <div className="flex flex-col items-center text-center py-2">
+        <div className="relative size-24 flex items-center justify-center" aria-hidden="true">
+          <span className="absolute inset-0 rounded-full bg-orange-400/20 motion-safe:animate-ping" style={{ animationDuration: '2.2s' }} />
+          <span className="absolute inset-3 rounded-full bg-orange-400/25 motion-safe:animate-ping" style={{ animationDuration: '2.2s', animationDelay: '0.6s' }} />
+          <span className="relative"><BobFace size={64} /></span>
+        </div>
+        <h3 className="font-extrabold text-slate-800 text-lg mt-4">{title}</h3>
+        <p key={index} role="status" aria-live="polite" className="text-sm font-semibold text-slate-600 mt-1.5 min-h-[2.5rem] animate-in">{steps[index]}</p>
+        <div className="flex gap-1.5 mt-3" aria-hidden="true">
+          {steps.map((_, k) => <span key={k} className={`h-1.5 rounded-full transition-all duration-500 ${k <= progress ? 'w-6 bg-orange-500' : 'w-3 bg-slate-200'}`} />)}
+        </div>
+        {children}
+      </div>
+    </Card>
+  );
+}
+
+const SAME_DAY_STEPS = [
+  'Sending your request to the team…',
+  'The team is checking which technician can get to you today…',
+  "Looking at today's route and drive times…",
+  'Waiting for a technician to confirm…',
+  'Still working on it. Thanks for waiting.',
+  'Keep this page open. The answer will show up here.',
+];
+
+function ApprovalWait({ token, initial, onBooked, onEnded, onCancelled }: { token: string; initial: any; onBooked: (r: any, pending: boolean) => void; onEnded: (status: string) => void; onCancelled: (r: any) => void }) {
+  const [approval, setApproval] = useState<any>(initial), [error, setError] = useState(''), [confirming, setConfirming] = useState(false), [cancelling, setCancelling] = useState(false);
+  const stopped = useRef(false);
   useEffect(() => {
     let stop = false;
     const tick = async () => {
+      if (stopped.current) return;
       try {
         const r = await api('/api/approvals/current', { token });
-        if (stop) return;
+        if (stop || stopped.current) return;
         setApproval(r.approval);
         if (r.receipt) return onBooked(r.receipt, Boolean(r.pending));
         if (['declined', 'expired', 'failed'].includes(r.approval.status)) return onEnded(r.approval.status);
@@ -552,19 +600,35 @@ function ApprovalWait({ token, initial, onBooked, onEnded }: { token: string; in
     let timer = setTimeout(tick, 4000);
     return () => { stop = true; clearTimeout(timer); };
   }, [token, onBooked, onEnded]);
+  const cancel = async () => {
+    setCancelling(true); setError('');
+    try {
+      stopped.current = true;
+      onCancelled(await api('/api/approvals/current/cancel', { method: 'POST', token, body: {} }));
+    } catch (err) {
+      stopped.current = false;
+      setError((err as Error).message); setConfirming(false);
+    } finally { setCancelling(false); }
+  };
   const w = windowParts(approval.scheduledAt);
+  const closes = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' }).format(approval.expiresAt);
   return (
-    <Card>
-      <div className="flex items-start gap-4">
-        <div className="size-11 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center shrink-0"><Loader2 className="animate-spin" size={22} /></div>
-        <div>
-          <h3 className="font-extrabold text-slate-800 text-lg">Waiting for approval</h3>
-          <p className="text-sm text-slate-500 mt-1">{approval.approverName || 'Our team'} has your request for <b className="text-slate-700">{approval.service}</b> on <b className="text-slate-700">{w.day}, {w.time}</b>. Keep this page open — you'll see the answer here.</p>
-          <p className="text-xs text-slate-400 mt-2">Reference {approval.id}. Not booked yet. The request closes at {new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' }).format(approval.expiresAt)} if there's no answer.</p>
-          {error && <p className="text-xs text-rose-600 mt-2">{error}</p>}
-        </div>
+    <WorkingScreen title="Checking same-day availability" steps={SAME_DAY_STEPS}>
+      <div className="mt-4 w-full rounded-2xl bg-slate-50 border border-slate-200 p-3.5 text-left">
+        <p className="text-sm text-slate-700"><b className="text-slate-900">{approval.service}</b></p>
+        <p className="text-sm text-slate-600">{w.day}, {w.time}</p>
+        <p className="text-xs text-slate-500 mt-1">Not booked yet. Reference {approval.id}. If there's no answer by {closes}, the request closes and you can book a regular visit.</p>
       </div>
-    </Card>
+      {error && <p className="text-xs text-rose-600 mt-2">{error}</p>}
+      {confirming ? (
+        <div className="mt-3 w-full flex flex-col sm:flex-row gap-2">
+          <button className="flex-1 px-4 py-2.5 rounded-xl text-sm font-extrabold bg-slate-900 text-white disabled:opacity-60" onClick={() => void cancel()} disabled={cancelling}>{cancelling ? 'Cancelling…' : 'Yes, cancel same-day'}</button>
+          <button className="flex-1 px-4 py-2.5 rounded-xl text-sm font-extrabold bg-slate-100 text-slate-700" onClick={() => setConfirming(false)} disabled={cancelling}>Keep waiting</button>
+        </div>
+      ) : (
+        <button className="mt-3 text-sm font-bold text-slate-500 hover:text-slate-800" onClick={() => setConfirming(true)}>Cancel request</button>
+      )}
+    </WorkingScreen>
   );
 }
 
@@ -735,16 +799,25 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
 
   const say = (role: Msg['role'], t: string, extra: Partial<Msg> = {}) => setMessages((m) => [...m, { role, text: t, local: true, ...extra }]);
   const onApprovalBooked = useCallback((r: any, p: boolean) => { setReceipt(r); setPending(p); setAction(''); }, []);
-  const onApprovalEnded = useCallback((status: string) => {
+  /** Back to the package choices after a same-day request is cancelled or can't happen. */
+  const showChoices = useCallback((r: any, lead = '') => {
     setApproval(null);
-    setAction('request');
-    setMessages((m) => [...m, {
-      role: 'model', local: true,
-      text: status === 'declined' ? "The team couldn't approve that visit. Send a request below and they'll find another option with you."
-        : status === 'expired' ? "The approval request timed out before the team answered. Send a request and they'll reach out."
-        : 'That time is no longer available. Send a request and the team will find another time.',
-    }]);
+    setAction('');
+    setSession(r.session);
+    setMessages((m) => [...m, ...(lead ? [{ role: 'model' as const, local: true, text: lead }] : []), { role: 'model', text: r.reply, info: r.info, ...(r.card ? { card: r.card } : {}) }]);
+    setOptions(r.options || []); setMulti(false); setSuggested(r.suggested || '');
   }, []);
+  const onApprovalCancelled = useCallback((r: any) => showChoices(r), [showChoices]);
+  const onApprovalEnded = useCallback(async (status: string) => {
+    const lead = status === 'expired' ? "The team didn't answer in time, so the same-day request closed." : status === 'failed' ? "That time couldn't be booked after all." : '';
+    try {
+      showChoices(await api('/api/approvals/current/cancel', { method: 'POST', token, body: {} }), lead);
+    } catch {
+      setApproval(null);
+      setAction('request');
+      setMessages((m) => [...m, { role: 'model', local: true, text: `${lead ? `${lead} ` : ''}Send a request below and the team will find another option with you.` }]);
+    }
+  }, [token, showChoices]);
   const addOnLabels = (s: any) =>
     (config?.addOns || [])
       .filter((a: any) => !(a.key === 'fogging' && s?.package === 'restoration'))
@@ -1091,7 +1164,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
             <div className="pl-9 sm:pl-10 space-y-4">
               {!receipt && !requestId && action === 'verify' && verification && <VerifyPhone token={token} verification={verification} onVerified={(s) => { setSession(s); setVerification(null); setAction('slots'); say('model', `Thanks — your ${s.verifiedContact?.channel === 'email' ? 'email' : 'phone'} is confirmed. Here are the soonest openings for the full visit.`); }} onEdit={editDetails} onRequest={() => setAction('request')} />}
               {!receipt && !requestId && action === 'slots' && <SlotPicker token={token} session={session} config={config} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
-              {!receipt && !requestId && action === 'approval' && approval && <ApprovalWait token={token} initial={approval} onBooked={onApprovalBooked} onEnded={onApprovalEnded} />}
+              {!receipt && !requestId && action === 'approval' && approval && <ApprovalWait token={token} initial={approval} onBooked={onApprovalBooked} onEnded={onApprovalEnded} onCancelled={onApprovalCancelled} />}
               {!receipt && !requestId && action === 'request' && <RequestForm token={token} session={session} onDone={(id) => { setRequestId(id); setAction(''); setOptions([]); }} />}
               {requestId && (
                 <Card>

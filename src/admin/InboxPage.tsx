@@ -9,6 +9,7 @@ const APPROVAL_STATUS: Record<string, [string, string]> = {
   booked: ['Approved and booked', 'bg-emerald-50 text-emerald-800 border-emerald-300'],
   action_needed: ['Approved — check Jobber', 'bg-rose-50 text-rose-800 border-rose-300'],
   declined: ['Declined', 'bg-slate-100 text-slate-600 border-slate-300'],
+  cancelled: ['Cancelled by customer', 'bg-slate-100 text-slate-600 border-slate-300'],
   expired: ['Expired', 'bg-slate-100 text-slate-500 border-slate-200'],
   failed: ["Approved, couldn't book", 'bg-rose-50 text-rose-800 border-rose-300'],
 };
