@@ -138,13 +138,13 @@ async function decide({ message, session, config, faqs, assistant, place = null 
     result = restoreWords(turn("continue", working, config, faqs), message);
   } else {
     // Gemini added nothing usable: the rules engine handles the raw text, and the voice answers it.
-    return { ...turn(message, working, config, faqs), via: "rules", voiceable: true };
+    return { ...turn(message, working, config, faqs), via: "rules", voiceable: true, aiRejected: ai.rejected };
   }
   // An approved FAQ answer is already conversational; anything else gets the voice, with the
   // interpreter's short lead kept only as the fallback when the voice can't be used.
-  if (ai.answer) return { ...result, via: "ai" };
+  if (ai.answer) return { ...result, via: "ai", aiRejected: ai.rejected };
   const fallback = ai.lead && !["emergency", "review"].includes(result.session.stage) ? prepend(result, ai.lead) : result;
-  return { ...fallback, parts: result.parts, via: "ai", voiceable: true };
+  return { ...fallback, parts: result.parts, via: "ai", voiceable: true, aiRejected: ai.rejected };
 }
 
 const COMMAND_CONCERN = "I want a cleaning and I also have a vent repair concern";

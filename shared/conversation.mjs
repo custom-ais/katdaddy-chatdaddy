@@ -234,7 +234,21 @@ function parseField(key, t) {
       if (/^(?:have dryer|yes|yep|yeah|i have (?:a |one)|dryer is installed|it's installed)/.test(t)) return "Yes";
       if (/^(?:no dryer|no|nope|just the vent|vent only|not installed)/.test(t)) return "No";
       return null;
-    case "recentService":
+    case "recentService": {
+      if (/^(?:yes|yep|yeah)\b/.test(t)) return "Yes";
+      if (/^(?:no|nope|never|no signs)\b/.test(t)) return "No";
+      // "Purchased or serviced in the last 90 days?" answered with a time: within about 3 months is yes.
+      const n = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, few: 3, couple: 2, several: 4 };
+      const m = t.match(/\b(\d+|an?|one|two|three|four|five|six|few|couple|several)\s*(?:of\s*)?(days?|weeks?|wks?|months?|mos?|years?|yrs?)\b/);
+      if (m) {
+        const count = /^\d+$/.test(m[1]) ? Number(m[1]) : n[m[1]] ?? 1;
+        const unit = m[2][0];
+        return unit === "y" || (unit === "m" && count > 3) ? "No" : "Yes";
+      }
+      if (/\b(?:last (?:week|month)|this (?:week|month)|recently|just (?:got|bought|installed|serviced))\b/.test(t)) return "Yes";
+      if (/\b(?:last year|long time|ages|years ago|not (?:recently|that i know)|don't think so|do not think so)\b/.test(t)) return "No";
+      return null;
+    }
     case "animals":
       if (/^(?:yes|yep|yeah)\b/.test(t)) return "Yes";
       if (/^(?:no|nope|never|no signs)\b/.test(t)) return "No";
@@ -305,7 +319,9 @@ function learnSymptoms(t, s, clarifying) {
 /** Learn property facts from what the customer said. Questions and hypotheticals teach nothing. */
 function learn(text, s) {
   const t = normalize(text), p = s.property;
-  const hypothetical = QUESTION.test(t) || t.endsWith("?") || /\b(?:what if|if i|if we|would it|suppose)\b/.test(t);
+  // A real question or a hypothetical teaches nothing; a tentative answer with a trailing "?"
+  // ("maybe 3 years ago?", "gas?") is still an answer.
+  const hypothetical = QUESTION.test(t) || /\b(?:what if|if i|if we|would it|suppose)\b/.test(t);
   if (s.pending && QUESTIONS[s.pending] && !hypothetical) {
     const key = s.pending;
     // "Other" on any question: note it, then ask for a short description in the next message.
@@ -397,8 +413,8 @@ function learn(text, s) {
   }
   if (!p.hasDryer && /\b(?:no dryer|don't have a dryer|do not have a dryer|dryer (?:was )?removed|dryer is not installed|vent only|just the vent)\b/.test(t)) p.hasDryer = "No";
   else if (!p.hasDryer && /\b(?:have (?:a |an )?(?:gas |electric )?dryer|dryer installed|have dryer|my dryer)\b/.test(t)) p.hasDryer = "Yes";
-  if (!p.exit && /\b(?:roof vent|exits? (?:through|on|out) the roof)\b/.test(t)) p.exit = "Roof";
-  if (!p.exit && /\b(?:side wall|wall vent|exits? (?:through|out) the (?:side )?wall)\b/.test(t)) p.exit = "Wall";
+  if (!p.exit && /\b(?:roof vent|(?:exits?|goes|vents?|comes|runs?)\b[\w' ]{0,20}\b(?:through|out|on|up|to) (?:the |our |my )?roof|through the roof|on the roof|out the roof)\b/.test(t)) p.exit = "Roof";
+  if (!p.exit && /\b(?:side wall|wall vent|(?:exits?|goes|vents?|comes|runs?)\b[\w' ]{0,20}\b(?:through|out) (?:the |a |our )?(?:side |outside |exterior )?wall|side of the house|out the wall)\b/.test(t)) p.exit = "Wall";
   if (!s.zip) {
     const m = t.match(/\b(?:zip(?: code)?|in|at)\s*:?\s*(\d{5})\b/) || (s.pending === "zip" ? t.match(/\b(\d{5})\b/) : null);
     if (m) s.zip = m[1];
@@ -1408,7 +1424,9 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond(
       intent.route === "appliance"
         ? "That may be an appliance issue rather than a dryer-vent issue, so I won't promise a vent service will fix it. Send the details below and the team will help find the right next step."
-        : "I can send your request to the team. Include the appointment reference for a change or cancellation. A request doesn't change an existing appointment by itself.",
+        : /\b(?:reschedul\w*|cancel\w*|change (?:my |the )?(?:appointment|booking|visit|time)|move (?:my |the )?(?:appointment|booking|visit))\b/.test(t)
+          ? "I can send your request to the team. Include the appointment reference for a change or cancellation. A request doesn't change an existing appointment by itself."
+          : "I can have the team reach out to you. Send your details below and they'll follow up. A request doesn't book an appointment by itself.",
       [],
       { action: "request" },
     );
