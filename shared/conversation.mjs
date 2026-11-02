@@ -1518,8 +1518,8 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   // -- answers to the pending question ---------------------------------------------------------
   if (s.stage === "evaluating" || (s.intent && !s.serviceAccepted && !["offer", "details", "bundle_offer"].includes(s.stage))) {
     if (changed(current) !== changed(s)) return next();
-    if (s.pending === "zip") return respond("Please enter the five-digit ZIP code for the service address.", []);
-    if (s.pending === "serviceAddress") return respond("Please enter the street address for the service location, including the city or ZIP code.", []);
+    if (s.pending === "zip") { unresolved = true; return respond("Please enter the five-digit ZIP code for the service address.", []); }
+    if (s.pending === "serviceAddress") { unresolved = true; return respond("Please enter the street address for the service location, including the city or ZIP code.", []); }
     if (s.pending && !isQuestion) {
       ack = "Sorry, I didn't catch that.";
       unresolved = true;

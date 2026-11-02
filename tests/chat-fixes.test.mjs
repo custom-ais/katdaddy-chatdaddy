@@ -91,3 +91,25 @@ test("after three unresolved turns in a row the team is offered, then it resets"
   const callback = chat("Request a callback", chat("whatever", chat("banana", chat("purple", run(["Dryer Vent Cleaning", "85326", "Have Dryer", "No"]).session).session).session).session);
   assert.equal(callback.session.stage, "review", "the button reaches the team");
 });
+
+test("three unusable answers to the address (or a saved session's ZIP) question also offer the team", () => {
+  const atAddress = chat("Dryer Vent Cleaning").session;
+  assert.equal(atAddress.pending, "serviceAddress");
+  const atZip = { ...structuredClone(atAddress), pending: "zip" };
+  for (const start of [atAddress, atZip]) {
+    let s = structuredClone(start), r;
+    for (const m of ["purple", "banana"]) { r = chat(m, s); s = r.session; assert.ok(!r.options.includes("Request a callback"), start.pending); }
+    r = chat("whatever", s); s = r.session;
+    assert.equal(s.pending, start.pending, "the question is still pending");
+    assert.match(r.reply, /If it's easier, the team can call you instead\./, start.pending);
+    assert.ok(r.options.includes("Request a callback"), start.pending);
+    assert.equal(chat("Request a callback", s).session.stage, "review", `${start.pending}: the button reaches the team`);
+  }
+});
+
+test("the voice doesn't pretend to understand a message that made no sense", async () => {
+  let system = "";
+  const assistant = createAssistant({ env: {}, generate: async (req) => { system = req.system; return { response: null }; } });
+  await assistant.speak({ text: "purple", session: initialSession(), config, faqs: INITIAL_FAQS, next: "Please enter the street address." });
+  assert.match(system, /don't pretend it did: no "Got it" or "Thanks"/);
+});
