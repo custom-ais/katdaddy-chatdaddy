@@ -50,7 +50,7 @@ export function requireAdminRoute(principal, method, path) {
 }
 
 const nestedFields = new Set(Object.keys(CONFIG_FIELD_PERMISSIONS).filter(key => key.includes('.')).map(key => key.split('.')[0]));
-const monetaryFields = new Set(['services','travelFeeTiers','travelZoneFeeCents','dailyRevenueTargetCents','cleaningPriceCents','assessmentPriceCents','bundlePriceCents','overflow.minTicketCents']);
+const monetaryFields = new Set(['services','travelFeeTiers','travelZoneFeeCents','dailyRevenueTargetCents','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','bundlePriceCents','overflow.minTicketCents']);
 const textFields = new Set(['messageTemplates.confirmationSms','messageTemplates.confirmationEmailSubject','messageTemplates.confirmationEmailBody']);
 const arraySchemas = {
   services:['id','family','variant','name','description','category','priceCents','minutes','active'],
@@ -159,11 +159,11 @@ const configReadGroups = {
   'integrations.manage':['approver.phone','approver.email'],
   'ownerSms.manage':['bookingOwnerSmsEnabled','ownerErrorSmsEnabled','bookingOwnerSmsPhone','messageTemplates.ownerBookingSms'],
   'settings.templates.view':['messageTemplates.confirmationSms','messageTemplates.confirmationEmailSubject','messageTemplates.confirmationEmailBody','messageEmailFormat'],
-  'settings.services.view':['pricesAcknowledged','services','cleaningPriceCents','assessmentPriceCents','bundlePriceCents','cleaningMinutes','assessmentMinutes','bundleMinutes','assessmentCredited'],
+  'settings.services.view':['pricesAcknowledged','services','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','bundlePriceCents','cleaningMinutes','assessmentMinutes','bundleMinutes','assessmentCredited'],
   'settings.coverage.view':['baseAddress','baseLocation.lat','baseLocation.lng','customServiceAreas','serviceAreaMode','serviceAreaMiles','travelAreaMiles','serviceZips','travelZips','coverageVersion','travelZoneFeeCents','travelFeeTiers'],
   'settings.schedule.view':['maxDriveFromBaseMin','maxDriveBetweenJobsMin','nearbyFirst','routeScoring','sameDay.enabled','sameDay.cutoffHour','sameDay.minNoticeHours','sameDay.requireNearby','overflow.enabled','overflow.start','overflow.maxDurationMins','overflow.minTicketCents','overflow.requireNearby','dailyRevenueTargetCents','bufferMinutes','maxJobsPerDay','leadHours','horizonDays','weekdayStarts','weekdayClose','saturdayStarts','saturdayClose','blockedDates','activeTechnicianIds'],
   'appointments.view':['scheduleSource'],
-  'appointments.manage':['services','serviceZips','scheduleSource','cleaningPriceCents','assessmentPriceCents','cleaningMinutes','assessmentMinutes','bundleMinutes'],
+  'appointments.manage':['services','serviceZips','scheduleSource','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','cleaningMinutes','assessmentMinutes','bundleMinutes'],
   'inbox.view':['approver.name'],
   'analytics.view':['dailyRevenueTargetCents'],
 };

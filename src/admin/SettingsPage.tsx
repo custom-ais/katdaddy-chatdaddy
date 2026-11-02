@@ -651,7 +651,7 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
           <Dollars label="Assessment" value={c.assessmentPriceCents} onChange={(n) => update('assessmentPriceCents', n)} />
           <Num label="Assessment" suffix="min" value={c.assessmentMinutes} onChange={(n) => update('assessmentMinutes', n)} />
-          <Dollars label="Assessment with a cleaning" value={Math.round(c.assessmentPriceCents / 2)} onChange={() => {}} disabled hint="Always 50% off the assessment, added to the cleaning package's price." />
+          <Dollars label="Assessment added to a cleaning" value={c.bundleAssessmentCents ?? 6000} onChange={(n) => update('bundleAssessmentCents', n)} hint="Cleaning + Assessment = the Premium 1-2-3 price for the home plus this amount ($179 + $60 = $239 for a 1-story home)." />
           <Num label="Emergency notice" suffix="hours" value={c.emergencyLeadHours} disabled={!editable('emergencyLeadHours')} onChange={(n) => update('emergencyLeadHours', n)} />
         </div>
         <Toggle checked={c.pricesAcknowledged} onChange={(v) => update('pricesAcknowledged', v)} label="These prices are approved for customers to see and book" />

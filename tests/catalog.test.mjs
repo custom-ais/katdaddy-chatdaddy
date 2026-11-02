@@ -89,12 +89,15 @@ test("unreviewed prices are not shown in the package menu", () => {
   assert.match(r.reply, /verify/);
 });
 
-test("the $119 assessment stays fixed, and is half off when added to a cleaning", () => {
+test("the $119 assessment stays fixed, and is $60 when added to a cleaning", () => {
   const gas = { power: "Gas", stories: "1-story", hasDryer: "Yes" };
   assert.equal(serviceQuote("assessment", config, { property: gas }).priceCents, 11900, "no gas fee on a standalone assessment");
   const both = serviceQuote("bundle", config, { package: "premium", property: gas });
-  assert.equal(both.priceCents, 17900 + 4900 + 5950, "the cleaning keeps its gas fee; the assessment is $59.50");
-  assert.equal(both.lineItems.find((l) => l.id === "assessment-with-cleaning").cents, 5950);
+  assert.equal(both.priceCents, 17900 + 4900 + 6000, "the cleaning keeps its gas fee; the assessment is $60");
+  assert.equal(both.lineItems.find((l) => l.id === "assessment-with-cleaning").cents, 6000);
+  for (const [property, total] of [[{ stories: "1-story" }, 23900], [{ stories: "2-story", laundryFloor: "2nd floor" }, 25900], [{ stories: "2-story", laundryFloor: "1st floor" }, 27900]]) {
+    assert.equal(serviceQuote("bundle", config, { package: "premium", property }).priceCents, total, "Cleaning + Assessment by home size");
+  }
   const q = bookingQuote("cleaning", config, { package: "restoration", property: gas, addOns: { fogging: true, toolRetrieval: true }, travelFeeCents: 2500 });
   assert.deepEqual(q.lineItems.map((l) => l.id), ["restoration", "addon-gas", "addon-tool", "travel-fee"], "fogging already included in Restoration");
   assert.equal(q.totalCents, 59900 + 4900 + 6900 + 2500);

@@ -168,7 +168,7 @@ function RecommendationCard({ card, onChoose, active }: { card: any; onChoose: (
 function iconFor(label: string) {
   const l = label.toLowerCase();
   const c = 'shrink-0';
-  if (/^accept|book this|book assessment|include assessment/.test(l)) return <CheckCircle size={18} className={`${c} text-emerald-500`} />;
+  if (/^accept|book this|book assessment|include assessment|cleaning \+ assessment/.test(l)) return <CheckCircle size={18} className={`${c} text-emerald-500`} />;
   if (l.includes('compare')) return <List size={18} className={`${c} text-purple-500`} />;
   if (/question|faq/.test(l)) return <MessageCircle size={18} className={`${c} text-blue-500`} />;
   if (/edit|gate code|back to/.test(l)) return <Pencil size={18} className={`${c} text-slate-400`} />;
@@ -181,7 +181,7 @@ function iconFor(label: string) {
   if (l.includes('2nd floor')) return <ArrowUp size={18} className={`${c} text-orange-500`} />;
   if (l.includes('roof')) return <ArrowUp size={18} className={`${c} text-amber-500`} />;
   if (l.includes('side wall')) return <ArrowRight size={18} className={`${c} text-emerald-500`} />;
-  if (/one normal cycle|1 normal cycle|no signs|have dryer|^yes|no gate code|no special notes|cleaning only|dryer is off|turned off|everyone is safe/.test(l)) return <Check size={18} className={`${c} text-emerald-500`} />;
+  if (/one normal cycle|1 normal cycle|no signs|have dryer|^yes|no gate code|no special notes|cleaning only|just the cleaning|dryer is off|turned off|everyone is safe/.test(l)) return <Check size={18} className={`${c} text-emerald-500`} />;
   if (/^no$|no dryer|^no thanks|^no,/.test(l)) return <X size={18} className={`${c} text-rose-500`} />;
   if (l.includes('express')) return <Timer size={18} className={`${c} text-teal-500`} />;
   if (l.includes('premium')) return <Star size={18} className={`${c} text-orange-500`} />;
@@ -1026,7 +1026,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
                   <div className="flex flex-wrap gap-2">
                     {options.filter((o) => !(last?.card?.picks || []).some((p: any) => p.option === o)).map((o) => {
                       const star = suggested && o === suggested;
-                      const primary = /^(accept|accept & continue|book assessment|include assessment|yes, let's schedule)$/i.test(o);
+                      const primary = /^(accept|accept & continue|book assessment|include assessment|cleaning \+ assessment|yes, let's schedule)$/i.test(o);
                       return (
                         <button key={o} onClick={() => send(o)} disabled={!ready} className={`flex items-center gap-2 px-4 py-3 rounded-2xl font-extrabold text-xs sm:text-sm transition-all border-2 active:scale-95 ${primary ? 'bg-gradient-to-r from-orange-500 to-orange-600 border-orange-500 text-white shadow-md shadow-orange-500/20' : star ? 'bg-orange-50 border-orange-500 text-orange-900 shadow-sm' : 'bg-white border-slate-200 text-slate-700 hover:border-orange-400 hover:bg-orange-50/20'}`}>
                           {primary ? <CheckCircle size={18} className="text-white" /> : iconFor(o)}

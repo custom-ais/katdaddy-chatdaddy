@@ -105,9 +105,9 @@ export const INITIAL_FAQS = [
   f("faq-repair", "Service", "Repairs", "Do you repair dryer vents?",
     "Yes. For a repair concern, we start with an assessment to evaluate the issue and recommend options. Repair work is quoted separately.",
     ["do you repair", "do repairs", "rerouting", "repair vents"]),
-  f("faq-bundle", "Pricing", "Cleaning + assessment", "Is the assessment cheaper with a cleaning?",
-    "Yes. Added to a cleaning, the assessment is 50% off. It covers evaluating the issue and recommending repair options; repairs, parts, and replacement work are quoted separately for your approval.",
-    ["includes repairs", "include repairs", "248", "discount assessment", "half off", "50% off", "assessment with cleaning"]),
+  f("faq-bundle", "Pricing", "Cleaning + assessment", "Can I get a cleaning and an assessment together?",
+    "Yes. Our Cleaning + Assessment is $239 for a 1-story home ($259 for a 2-story home with upstairs laundry, $279 with first-floor laundry): the Premium 1-2-3 cleaning plus an assessment of the issue in one visit. Gas dryers and stacked or pedestal setups add their usual fee. If you book just a cleaning and our technician finds a problem: if the damage keeps us from cleaning, your visit becomes an assessment ($119) instead; if we can still clean, you can add an assessment for an upgrade, reroute, or minor damage for just $60. Repairs, parts, and replacement work are quoted separately for your approval.",
+    ["includes repairs", "include repairs", "239", "248", "cleaning and assessment", "cleaning + assessment", "assessment with cleaning", "discount assessment", "half off", "50% off", "something broken", "add an assessment", "can't clean"]),
   f("faq-prepare", "Booking", "Preparation", "How should I prepare for the visit?",
     "Please make the laundry area accessible and secure pets before the visit. Don't move or disconnect the dryer yourself, and let the team know about any access restrictions.",
     ["prepare", "preparation", "before you arrive", "get ready"]),
@@ -144,17 +144,22 @@ const REVISED = {
   "question": "Do you show me a camera inspection or photos?",
   "answer": "Yes. Every See-It-Clean visit includes a live camera inspection during service, so you can see inside the vent. Performance and Total System also include before-and-after photos for your records."
  },
- "faq-bundle": {
+ "faq-bundle": [{
   "question": "Does the $248 include repairs?",
   "answer": "The $248 covers cleaning and assessment; the assessment is 50% off with cleaning. Repairs, parts, and replacement work are quoted separately for your approval."
- }
+ }, {
+  // Nov 2 2026: the half-off assessment became Cleaning + Assessment ($239 for a 1-story home).
+  "question": "Is the assessment cheaper with a cleaning?",
+  "answer": "Yes. Added to a cleaning, the assessment is 50% off. It covers evaluating the issue and recommending repair options; repairs, parts, and replacement work are quoted separately for your approval."
+ }]
 };
 export function refreshFaqs(saved) {
   if (!Array.isArray(saved)) return saved;
   const latest = new Map(INITIAL_FAQS.map((x) => [x.id, x]));
   return saved.map((x) => {
-    const old = REVISED[x?.id];
-    if (!old || x.answer !== old.answer) return x;
+    // An entry can list several earlier default wordings; any of them is refreshed.
+    const old = [].concat(REVISED[x?.id] || []).find((o) => o.answer === x?.answer);
+    if (!old) return x;
     const now = latest.get(x.id);
     return { ...x, question: x.question === old.question ? now.question : x.question, answer: now.answer, keywords: now.keywords };
   });

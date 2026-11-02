@@ -100,13 +100,13 @@ test("complete standalone assessment workflow uses $119", async (t) => {
   assert.equal(r.data.receipt.priceCents, 11900);
   assert.equal(r.data.receipt.durationMins, 60);
 });
-test("complete combined workflow is the cleaning package plus the assessment at 50% off, for both services' time", async (t) => {
+test("complete Cleaning + Assessment workflow is $239 for a 1-story home, for both services' time", async (t) => {
   const h = await harness(t);
   const r = await h.book("bundle");
   assert.equal(r.status, 201);
-  assert.equal(r.data.receipt.priceCents, 17900 + 5950);
+  assert.equal(r.data.receipt.priceCents, 23900, "Premium 1-2-3 $179 + assessment $60");
   assert.equal(r.data.receipt.durationMins, 60 + 60);
-  assert.deepEqual(h.jobber.jobs[0].lineItems.map((i) => [i.name, i.cents]), [["Premium 1-2-3 See-It-Clean", 17900], ["Comprehensive Repair Assessment (50% off with cleaning)", 5950]]);
+  assert.deepEqual(h.jobber.jobs[0].lineItems.map((i) => [i.name, i.cents]), [["Premium 1-2-3 See-It-Clean", 17900], ["Repair Assessment (with cleaning)", 6000]]);
   assert.equal((await h.store.appointments())[0].assessmentAccepted, true);
 });
 test("customer cannot alter price, technician, or route in booking payload", async (t) => {
@@ -114,7 +114,7 @@ test("customer cannot alter price, technician, or route in booking payload", asy
   const token = await h.prepare("bundle");
   const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
   const r = await h.confirm(token, held.data.hold, { priceCents: 0, price: 0, route: "free", technicianId: "fake" });
-  assert.equal(r.data.receipt.priceCents, 23850);
+  assert.equal(r.data.receipt.priceCents, 23900);
   const [a] = await h.store.appointments();
   assert.equal(a.technicianId, "tech-ryan");
   assert.equal(a.route, "bundle");
@@ -270,7 +270,7 @@ test("admin office booking uses the same schedule checks", async (t) => {
   const cookie = await h.login();
   const r = await h.call("/api/admin/appointments", { method: "POST", cookie, body: { ...contact, route: "bundle", scheduledAt: "2026-09-22T16:00:00Z" } });
   assert.equal(r.status, 201, JSON.stringify(r.data));
-  assert.equal(r.data.appointment.price, 238.5, "Premium 1-2-3 by default, plus the assessment at 50% off");
+  assert.equal(r.data.appointment.price, 239, "Premium 1-2-3 by default, plus the $60 assessment");
   assert.equal(r.data.appointment.jobber.jobNumber, 101, "office booking lands in Jobber");
   assert.equal((await h.call("/api/admin/appointments", { method: "POST", cookie, body: { ...contact, route: "cleaning", scheduledAt: "2026-09-22T18:00:00Z" } })).status, 409);
 });

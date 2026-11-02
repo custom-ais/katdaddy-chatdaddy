@@ -14,7 +14,10 @@
 //     or a burning smell is explained as a significant airflow restriction (don't use the dryer
 //     until it's cleaned; Ultimate Protection suggested) and the booking carries on
 //   • a repair-first visit starts with an assessment; repairs are quoted separately
-//   • cleaning + a repair concern gets the assessment at 50% off with the cleaning, added only on a yes
+//   • cleaning + a possible problem is offered Cleaning + Assessment ($239 for a 1-story home), added
+//     only on a yes; just the cleaning stays available: if damage keeps the technician from cleaning,
+//     the visit becomes an assessment instead; if the cleaning can still be done, an assessment for an
+//     upgrade, reroute or minor damage can be added on site at the add-on price ($60)
 //   • appliance problems, commercial work, complaints and "talk to a person" go to the team
 //   • facts already given are reused, "Not sure" is accepted, and a question asked mid-booking
 //     is answered before returning to the unfinished step
@@ -22,7 +25,7 @@
 // The AI layer (server/assistant.mjs) only translates free text into the commands and
 // facts below; every decision about price and booking happens here or on the server.
 
-import { DEFAULT_CONFIG, money, serviceQuote, halfAssessmentCents, areaFor } from "./domain.mjs";
+import { DEFAULT_CONFIG, money, serviceQuote, areaFor, bundleAssessmentCents } from "./domain.mjs";
 import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant, noDryerNeedsPremium } from "./catalog.mjs";
 import { restrictionScore, restrictionLevel } from "./airflow.mjs";
 
@@ -143,6 +146,8 @@ const normalize = (t) => String(t || "").toLowerCase().replace(/[’‘]/g, "'")
 
 // Smoke or fire: safety first, then — only once the customer says everyone is safe — the booking.
 export const FIRE_SAFE = "Everyone is safe & fire/smoke is handled";
+/** The rules engine's reply when it has no approved answer; the conversational layer may replace it. */
+export const UNANSWERED = "I don't have a verified answer to that yet. I can send the question to the team, or we can keep going with your booking.";
 const FIRE_ALERT =
   "⚠️ **SAFETY ALERT:** If there is active smoke or fire, please prioritize your safety immediately!\n\n" +
   "1. **Evacuate the area** if needed and call **911** or your local fire department right away.\n" +
@@ -152,9 +157,9 @@ const FIRE_ALERT =
 const SAFE_AGAIN = /^(?:yes[,.!]? *)?(?:everyone(?:'s| is) (?:safe|ok(?:ay)?|fine)|we(?:'re| are) (?:all )?(?:safe|ok(?:ay)?|fine)|all safe|(?:the )?fire(?:'s| is) out|(?:the )?(?:fire|smoke)(?:'s| is) (?:gone|handled|out)|it'?s (?:out|handled|under control)|(?:it'?s )?all handled|handled)\b/;
 const FIRE_NOTE = "Customer reported smoke or fire; they confirmed everyone is safe and it's handled. Inspect before the dryer is used again.";
 const ACCEPT = /^(?:accept(?: & continue| and continue)?|book this service|book (?:the )?assessment|book it|yes(?:,? please)?|yep|yeah|sure|sounds good|ok(?:ay)?|let'?s do it|continue with (?:this|it))[.!]?$/;
-const ACCEPT_BUNDLE = /^(?:yes|yeah|yep|sure|please|sounds good|okay|ok|include (?:it|the assessment|assessment)|schedule both|add (?:the )?assessment|book (?:both|it)|yes[, ]+(?:include (?:the )?assessment|both|please))[.!]?$/;
+const ACCEPT_BUNDLE = /^(?:yes|yeah|yep|sure|please|sounds good|okay|ok|both|cleaning (?:\+|and|&) assessment|include (?:it|the assessment|assessment)|schedule both|add (?:the )?assessment|book (?:both|it)|yes[, ]+(?:include (?:the )?assessment|both|please|cleaning (?:\+|and|&) assessment))[.!]?$/;
 const NO = /^(no|nope|no thanks|not now|decline|just (?:the )?cleaning|cleaning only|skip assessment)[.!]?$/;
-const PRICE = /\b(how much|price|prices|pricing|cost|costs|charge|total|quote|\$248|248|half off|50% off)\b/;
+const PRICE = /\b(how much|price|prices|pricing|cost|costs|charge|total|quote|\$239|239|\$248|248|half off|50% off)\b/;
 const QUESTION = /^(how|what|when|where|why|who|can|could|do|does|is|are|will|would|should|tell me|explain|if)\b/;
 const CLEAN = /\b(clean(?:ing)?|cleaned|maintenance|annual|routine)\b/;
 const REPAIR = /\b(repair|fix|replac\w*|rerout\w*|disconnect\w*|crush\w*|damag\w*|came (?:apart|off)|fallen|fell off|broken|loose|hole|leak\w*|install\w*|upgrade)\b/;
@@ -200,7 +205,7 @@ export function classify(text, session = initialSession()) {
   const t = normalize(text), s = detectSafety(t);
   if (s === "gas" || s === "fire") return { route: "emergency", safety: s };
   if (/\b(?:kitchen ventilation|kitchen exhaust|chimney|hvac|air ducts)\b/.test(t)) return { route: "review" };
-  if (/\b(?:human|person|someone|representative|callback|call me|call back|talk to (?:the )?team|complaint|warranty|refund|reschedule|cancel (?:my |the )?(?:appointment|booking)|commercial|hoa|apartments|multi-unit)\b/.test(t)) return { route: "review" };
+  if (/\b(?:human|person|(?:talk|speak|chat) (?:to|with) (?:someone|somebody)|(?:have|get) (?:someone|somebody) (?:to )?call|someone (?:to )?call me|representative|callback|call me|call back|talk to (?:the )?team|complaint|warranty|refund|reschedule|cancel (?:my |the )?(?:appointment|booking)|commercial|hoa|apartments|multi-unit)\b/.test(t)) return { route: "review" };
   if (/\b(dryer|machine|appliance)\b/.test(t) && /\b(won't (?:turn on|start|spin|heat)|will not (?:turn on|start|spin|heat)|not (?:turning on|starting|spinning|heating)|motor|drum|control board|dryer is broken|broken dryer|repair my dryer)\b/.test(t) && !VENT.test(t)) return { route: "appliance" };
   if (NO_CLEAN.test(t)) return { route: "assessment", explicitSwitch: true };
   if (NEST.test(t)) return { route: "nest_offer" };
@@ -229,7 +234,21 @@ function parseField(key, t) {
       if (/^(?:have dryer|yes|yep|yeah|i have (?:a |one)|dryer is installed|it's installed)/.test(t)) return "Yes";
       if (/^(?:no dryer|no|nope|just the vent|vent only|not installed)/.test(t)) return "No";
       return null;
-    case "recentService":
+    case "recentService": {
+      if (/^(?:yes|yep|yeah)\b/.test(t)) return "Yes";
+      if (/^(?:no|nope|never|no signs)\b/.test(t)) return "No";
+      // "Purchased or serviced in the last 90 days?" answered with a time: within about 3 months is yes.
+      const n = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, few: 3, couple: 2, several: 4 };
+      const m = t.match(/\b(\d+|an?|one|two|three|four|five|six|few|couple|several)\s*(?:of\s*)?(days?|weeks?|wks?|months?|mos?|years?|yrs?)\b/);
+      if (m) {
+        const count = /^\d+$/.test(m[1]) ? Number(m[1]) : n[m[1]] ?? 1;
+        const unit = m[2][0];
+        return unit === "y" || (unit === "m" && count > 3) ? "No" : "Yes";
+      }
+      if (/\b(?:last (?:week|month)|this (?:week|month)|recently|just (?:got|bought|installed|serviced))\b/.test(t)) return "Yes";
+      if (/\b(?:last year|long time|ages|years ago|not (?:recently|that i know)|don't think so|do not think so)\b/.test(t)) return "No";
+      return null;
+    }
     case "animals":
       if (/^(?:yes|yep|yeah)\b/.test(t)) return "Yes";
       if (/^(?:no|nope|never|no signs)\b/.test(t)) return "No";
@@ -300,7 +319,9 @@ function learnSymptoms(t, s, clarifying) {
 /** Learn property facts from what the customer said. Questions and hypotheticals teach nothing. */
 function learn(text, s) {
   const t = normalize(text), p = s.property;
-  const hypothetical = QUESTION.test(t) || t.endsWith("?") || /\b(?:what if|if i|if we|would it|suppose)\b/.test(t);
+  // A real question or a hypothetical teaches nothing; a tentative answer with a trailing "?"
+  // ("maybe 3 years ago?", "gas?") is still an answer.
+  const hypothetical = QUESTION.test(t) || /\b(?:what if|if i|if we|would it|suppose)\b/.test(t);
   if (s.pending && QUESTIONS[s.pending] && !hypothetical) {
     const key = s.pending;
     // "Other" on any question: note it, then ask for a short description in the next message.
@@ -392,8 +413,8 @@ function learn(text, s) {
   }
   if (!p.hasDryer && /\b(?:no dryer|don't have a dryer|do not have a dryer|dryer (?:was )?removed|dryer is not installed|vent only|just the vent)\b/.test(t)) p.hasDryer = "No";
   else if (!p.hasDryer && /\b(?:have (?:a |an )?(?:gas |electric )?dryer|dryer installed|have dryer|my dryer)\b/.test(t)) p.hasDryer = "Yes";
-  if (!p.exit && /\b(?:roof vent|exits? (?:through|on|out) the roof)\b/.test(t)) p.exit = "Roof";
-  if (!p.exit && /\b(?:side wall|wall vent|exits? (?:through|out) the (?:side )?wall)\b/.test(t)) p.exit = "Wall";
+  if (!p.exit && /\b(?:roof vent|(?:exits?|goes|vents?|comes|runs?)\b[\w' ]{0,20}\b(?:through|out|on|up|to) (?:the |our |my )?roof|through the roof|on the roof|out the roof)\b/.test(t)) p.exit = "Roof";
+  if (!p.exit && /\b(?:side wall|wall vent|(?:exits?|goes|vents?|comes|runs?)\b[\w' ]{0,20}\b(?:through|out) (?:the |a |our )?(?:side |outside |exterior )?wall|side of the house|out the wall)\b/.test(t)) p.exit = "Wall";
   if (!s.zip) {
     const m = t.match(/\b(?:zip(?: code)?|in|at)\s*:?\s*(\d{5})\b/) || (s.pending === "zip" ? t.match(/\b(\d{5})\b/) : null);
     if (m) s.zip = m[1];
@@ -611,13 +632,21 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   s.history = [...(s.history || []).slice(-39), { role: "user", text: String(text).slice(0, 2000) }];
 
   let ack = "", warn = "";
+  // What happens if a cleaning-only visit finds a problem: damage that prevents the cleaning turns the
+  // visit into an assessment; otherwise the assessment can be added to the cleaning at the add-on price.
+  const SWITCH_PROMISE = priced
+    ? `If damage keeps us from cleaning when we arrive, we'll switch your visit to an assessment (${money(config.assessmentPriceCents ?? 11900)}) instead. If we can still clean, you can add an assessment for an upgrade, reroute, or minor damage for just ${money(bundleAssessmentCents(config))}.`
+    : "If damage keeps us from cleaning when we arrive, we'll switch your visit to an assessment instead. If we can still clean, you can add an assessment for an upgrade, reroute, or minor damage at the lower add-on price.";
   const respond = (reply, options = [], extra = {}) => {
+    // The parts let the conversational layer replace the short acknowledgement with its own
+    // reply while the warning and the required body (question, offer, summary) stay as written.
+    const parts = { ack, warn, body: reply };
     reply = [ack, warn, reply].filter(Boolean).join("\n\n");
     ack = "";
     warn = "";
     s.history.push({ role: "assistant", text: reply, ...(extra.card ? { card: extra.card } : {}) });
     s.options = options;
-    return { session: s, reply, options, ...extra };
+    return { session: s, reply, options, ...extra, parts };
   };
 
   // -- copy helpers --------------------------------------------------------------------
@@ -629,7 +658,20 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return config.cleaningProcess + " " + config.assessmentProcess + "\n\n";
   };
   const quoteFor = (family) => serviceQuote(s.route === "bundle" && TIERS.includes(family) ? "bundle" : "cleaning", config, { package: family, property: s.property, addOns: s.addOns });
-  const halfOff = money(halfAssessmentCents(config)), fullAssessment = money(config.assessmentPriceCents ?? 11900);
+  /** Cleaning + Assessment price: the home's Premium 1-2-3 (or chosen tier) plus the assessment add-on.
+   * Before the home size is known, the 1-story price is quoted. Gas, pedestal and stacked fees are
+   * added in the final summary like any cleaning. */
+  const bundlePrice = () => {
+    const family = TIERS.includes(s.package) ? s.package : "premium";
+    const known = s.property.stories != null;
+    const home = known ? { stories: s.property.stories, laundryFloor: s.property.laundryFloor } : { stories: "1-story" };
+    try {
+      const amount = money(serviceQuote("bundle", config, { package: family, property: home }).priceCents);
+      return known ? amount : `${amount} for a 1-story home`;
+    } catch {
+      return "";
+    }
+  };
   const exact = (family) => {
     try {
       const q = quoteFor(family);
@@ -872,9 +914,10 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.stage = "bundle_offer";
     s.offered = true;
     s.pending = null;
+    const price = priced ? bundlePrice() : "";
     return respond(
-      `${explain("bundle")}For that additional concern, the assessment lets us evaluate the issue and explain the recommended repair options. Added to a cleaning, the assessment is **50% off: ${halfOff} instead of ${fullAssessment}**. You'll still choose your cleaning package. Any repair work is quoted separately.\n\nWould you like to include the assessment?`,
-      ["Include assessment", "Cleaning only", "Ask a question"],
+      `Since you'd like a cleaning but something may be broken, I'd suggest our **Cleaning + Assessment${price ? `: ${price}` : ""}**. In one visit we clean your vent and check the problem you mentioned, then explain any repair options. Repairs are quoted separately.\n\nPrefer to start with just the cleaning? That works too. ${SWITCH_PROMISE}`,
+      ["Cleaning + Assessment", "Just the cleaning", "Ask a question"],
     );
   };
 
@@ -922,7 +965,11 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       return respond("That service isn't available online right now. You can choose another option or send the team a request.", ["Back to packages", "Request a callback"]);
     }
     // With no dryer, Ultimate's DryerFlex upgrade has nothing to connect to, so there's no tier comparison.
-    const options = ["Accept", s.intent === "cleaning" && TIERS.includes(q.package) && s.property.hasDryer !== "No" ? "Compare Packages" : "Back to options", "Ask a question"];
+    const bundle = s.route === "bundle" && s.bundleAccepted;
+    // Cleaning + Assessment is one simple choice: accept it, or switch to just the cleaning.
+    const options = bundle
+      ? ["Accept", "Just the cleaning", "Ask a question"]
+      : ["Accept", s.intent === "cleaning" && TIERS.includes(q.package) && s.property.hasDryer !== "No" ? "Compare Packages" : "Back to options", "Ask a question"];
     const title = `**${q.name}${priced ? ` — ${money(q.priceCents)}` : ""}**`;
     if (brief) return respond(`Ready to continue with ${title}?`, options);
     const switched =
@@ -1027,7 +1074,10 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     if (s.stage === "review") return respond(body, [], { action: "request" });
     if (["emergency", "confirmed"].includes(s.stage)) return respond(body, []);
     if (["contact", "verify", "slots", "approval"].includes(s.stage)) return respond(`${body}\n\nWhen you're ready, continue with the booking below.`, [], { action: "resume" });
-    if (s.stage === "bundle_offer") return respond(`${body}\n\nWould you like to add the assessment to your cleaning at 50% off (${halfOff})?`, ["Include assessment", "Cleaning only"]);
+    if (s.stage === "bundle_offer") {
+      const price = priced ? bundlePrice() : "";
+      return respond(`${body}\n\nWould you like the Cleaning + Assessment${price ? ` (${price})` : ""}, or just the cleaning?`, ["Cleaning + Assessment", "Just the cleaning"]);
+    }
     return respond(`${body}\n\nWould you like to continue scheduling your service visit?`, ["Yes, let's schedule", "Ask another question"]);
   };
 
@@ -1290,7 +1340,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.serviceAccepted = false;
     if (!s.intent || s.intent === "repair") s.intent = "cleaning";
     if (s.intent === "emergency" || s.intent === "nest") s.intent = "cleaning";
-    if (!s.bundleAccepted) s.route = "cleaning"; // an added half-off assessment stays
+    if (!s.bundleAccepted) s.route = "cleaning"; // an accepted Cleaning + Assessment stays
     return next();
   }
 
@@ -1313,13 +1363,15 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   }
   if (s.stage === "bundle_offer") {
     if (ACCEPT_BUNDLE.test(t)) {
-      // The assessment rides along at 50% off; the customer still picks the cleaning package.
+      // Cleaning + Assessment is the Premium 1-2-3 cleaning (or the tier already chosen) plus the
+      // assessment, so there's no second package choice: the home questions lead to the summary.
       s.intent = "cleaning";
       s.route = "bundle";
       s.bundleAccepted = true;
       s.serviceAccepted = false;
+      if (!TIERS.includes(s.package)) s.package = "premium";
       s.stage = "evaluating";
-      ack = `Got it, the assessment is added at 50% off (${halfOff}).`;
+      ack = "Great, Cleaning + Assessment it is.";
       return next();
     }
     if (NO.test(t)) {
@@ -1334,10 +1386,19 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       }
       const r = next();
       s.history.pop();
-      const reply = `We'll keep this as cleaning only and note your concern. The assessment isn't included, and cleaning isn't a promise to resolve that issue.\n\n${r.reply}`;
+      const reply = `No problem, we'll book just the cleaning and note your concern. ${SWITCH_PROMISE}\n\n${r.reply}`;
       s.history.push({ role: "assistant", text: reply });
       return { ...r, reply };
     }
+  }
+
+  // -- switching Cleaning + Assessment to just the cleaning at the summary ----------------------
+  if (s.stage === "details" && s.route === "bundle" && s.bundleAccepted && /^(?:just (?:the )?cleaning|cleaning only)[.!]?$/.test(t)) {
+    s.route = "cleaning";
+    s.bundleAccepted = false;
+    s.bundleDeclined = true;
+    ack = `No problem, just the cleaning. ${SWITCH_PROMISE}`;
+    return details();
   }
 
   // -- accepting the offer -------------------------------------------------------------------
@@ -1363,7 +1424,9 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond(
       intent.route === "appliance"
         ? "That may be an appliance issue rather than a dryer-vent issue, so I won't promise a vent service will fix it. Send the details below and the team will help find the right next step."
-        : "I can send your request to the team. Include the appointment reference for a change or cancellation. A request doesn't change an existing appointment by itself.",
+        : /\b(?:reschedul\w*|cancel\w*|change (?:my |the )?(?:appointment|booking|visit|time)|move (?:my |the )?(?:appointment|booking|visit))\b/.test(t)
+          ? "I can send your request to the team. Include the appointment reference for a change or cancellation. A request doesn't change an existing appointment by itself."
+          : "I can have the team reach out to you. Send your details below and they'll follow up. A request doesn't book an appointment by itself.",
       [],
       { action: "request" },
     );
@@ -1401,13 +1464,16 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   }
   // -- prices and questions ------------------------------------------------------------------
   const bare = /\b(just (?:the )?(?:price|total|number)|only (?:the )?price)\b/.test(t);
-  if (PRICE.test(t) && /\b(includ\w*|covers?|replacing|replacement|repair work|repair itself)\b/.test(t) && (s.route === "bundle" || s.offered || /248/.test(t))) {
-    return resume(`The assessment covers evaluating the issue, not repairs, parts, or replacement work. Added to a cleaning it's 50% off (${halfOff}). Any repair work is quoted separately for your approval.`);
+  if (PRICE.test(t) && /\b(includ\w*|covers?|replacing|replacement|repair work|repair itself)\b/.test(t) && (s.route === "bundle" || s.offered || /\b(?:239|248)\b/.test(t))) {
+    return resume("The Cleaning + Assessment covers cleaning your vent and evaluating the issue, not repairs, parts, or replacement work. Any repair work is quoted separately for your approval.");
   }
   if (PRICE.test(t) && (QUESTION.test(t) || t.endsWith("?") || bare || /^(?:price|prices|pricing|cost)$/.test(t))) {
     if (intent.route === "cleaning" && !s.intent) startIntent("cleaning");
     let answer;
-    if (s.route === "bundle" || (s.offered && !s.bundleDeclined)) answer = `Added to a cleaning, the assessment is **50% off: ${halfOff}** on top of your cleaning package. Repairs are quoted separately.`;
+    if (s.route === "bundle" || (s.offered && !s.bundleDeclined)) {
+      const price = priced ? bundlePrice() : "";
+      answer = price ? `The **Cleaning + Assessment** is **${price}**: our Premium 1-2-3 cleaning plus an assessment of the issue in one visit. Gas dryers and stacked or pedestal setups add their usual fee. Repairs are quoted separately.` : unverified;
+    }
     else if (s.intent === "repair" || /\b(?:repair|assessment)\b/.test(t)) {
       answer = priced ? `${bare ? "" : explain("assessment")}The dryer-vent assessment is **${money(config.assessmentPriceCents)}**. Repairs are quoted separately.` : unverified;
     } else if (!priced) answer = unverified;
@@ -1456,7 +1522,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   }
   if (!s.intent && /^(?:hi|hello|hey|good (?:morning|afternoon|evening))[.!]?$/.test(t)) return welcome();
   return {
-    ...resume("I don't have a verified answer to that yet. I can send the question to the team, or we can keep going with your booking."),
+    ...resume(UNANSWERED),
     unanswered: true,
   };
 }

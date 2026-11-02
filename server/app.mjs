@@ -828,6 +828,11 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         }
         await store.saveSession(token, result.session);
         await record(req, "conversation.message", { role: "assistant", text: result.reply, stage: result.session.stage, via: result.via, availabilityRequestId: result.session.availabilityRequestId || "" });
+        // Questions BOB couldn't answer from approved knowledge, and AI answers the safety filter blocked,
+        // show under Activity → Warnings so the office can add the missing FAQ.
+        const asked = /^\s*\d{4,8}\s*$/.test(body.message) ? "[verification code omitted]" : String(body.message).slice(0, 500);
+        if (result.unanswered) await record(req, "conversation.unanswered_question", { text: asked, stage: data.stage, voiced: Boolean(result.voiced) }, "warning");
+        if (result.aiRejected?.includes("answer")) await record(req, "conversation.ai_answer_blocked", { text: asked, stage: data.stage }, "warning");
         // Keep the state before this answer so the customer can go back and change it.
         const { history: before = [], ...snapshot } = data;
         const undo = [...((await store.kvGet(`undo:${token}`)) || []).slice(-(UNDO_DEPTH - 1)), { ...snapshot, historyLen: before.length }];
