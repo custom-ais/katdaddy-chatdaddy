@@ -145,6 +145,8 @@ const normalize = (t) => String(t || "").toLowerCase().replace(/[’‘]/g, "'")
 
 // Smoke or fire: safety first, then — only once the customer says everyone is safe — the booking.
 export const FIRE_SAFE = "Everyone is safe & fire/smoke is handled";
+/** The rules engine's reply when it has no approved answer; the conversational layer may replace it. */
+export const UNANSWERED = "I don't have a verified answer to that yet. I can send the question to the team, or we can keep going with your booking.";
 const FIRE_ALERT =
   "⚠️ **SAFETY ALERT:** If there is active smoke or fire, please prioritize your safety immediately!\n\n" +
   "1. **Evacuate the area** if needed and call **911** or your local fire department right away.\n" +
@@ -202,7 +204,7 @@ export function classify(text, session = initialSession()) {
   const t = normalize(text), s = detectSafety(t);
   if (s === "gas" || s === "fire") return { route: "emergency", safety: s };
   if (/\b(?:kitchen ventilation|kitchen exhaust|chimney|hvac|air ducts)\b/.test(t)) return { route: "review" };
-  if (/\b(?:human|person|someone|representative|callback|call me|call back|talk to (?:the )?team|complaint|warranty|refund|reschedule|cancel (?:my |the )?(?:appointment|booking)|commercial|hoa|apartments|multi-unit)\b/.test(t)) return { route: "review" };
+  if (/\b(?:human|person|(?:talk|speak|chat) (?:to|with) (?:someone|somebody)|(?:have|get) (?:someone|somebody) (?:to )?call|someone (?:to )?call me|representative|callback|call me|call back|talk to (?:the )?team|complaint|warranty|refund|reschedule|cancel (?:my |the )?(?:appointment|booking)|commercial|hoa|apartments|multi-unit)\b/.test(t)) return { route: "review" };
   if (/\b(dryer|machine|appliance)\b/.test(t) && /\b(won't (?:turn on|start|spin|heat)|will not (?:turn on|start|spin|heat)|not (?:turning on|starting|spinning|heating)|motor|drum|control board|dryer is broken|broken dryer|repair my dryer)\b/.test(t) && !VENT.test(t)) return { route: "appliance" };
   if (NO_CLEAN.test(t)) return { route: "assessment", explicitSwitch: true };
   if (NEST.test(t)) return { route: "nest_offer" };
@@ -615,12 +617,15 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   let ack = "", warn = "";
   const SWITCH_PROMISE = "If our technician finds something broken when they arrive, we'll switch your visit to an assessment instead, so you never pay for both.";
   const respond = (reply, options = [], extra = {}) => {
+    // The parts let the conversational layer replace the short acknowledgement with its own
+    // reply while the warning and the required body (question, offer, summary) stay as written.
+    const parts = { ack, warn, body: reply };
     reply = [ack, warn, reply].filter(Boolean).join("\n\n");
     ack = "";
     warn = "";
     s.history.push({ role: "assistant", text: reply, ...(extra.card ? { card: extra.card } : {}) });
     s.options = options;
-    return { session: s, reply, options, ...extra };
+    return { session: s, reply, options, ...extra, parts };
   };
 
   // -- copy helpers --------------------------------------------------------------------
@@ -1494,7 +1499,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   }
   if (!s.intent && /^(?:hi|hello|hey|good (?:morning|afternoon|evening))[.!]?$/.test(t)) return welcome();
   return {
-    ...resume("I don't have a verified answer to that yet. I can send the question to the team, or we can keep going with your booking."),
+    ...resume(UNANSWERED),
     unanswered: true,
   };
 }

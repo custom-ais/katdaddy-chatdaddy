@@ -128,12 +128,13 @@ test("the smart chat is used through the API when configured, and can be switche
   assert.equal(r.via, "ai");
   assert.equal(r.session.intent, "repair");
   assert.equal(r.session.pending, "serviceAddress", "the customer's own words describe the issue, so the issue list is skipped");
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2, "one call reads the message, one writes BOB's reply");
+  assert.equal(calls[1].schema.properties.response.type[0], "string");
   assert.equal((await h.call("/api/public/config")).data.smartChat, true);
   await h.store.set("config", { ...(await h.store.config()), aiAssistant: false });
   const off = await h.chat(await h.fresh(), "my vent pipe in the attic fell apart, can someone come fix it");
   assert.equal(off.via, "rules");
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2, "switched off: no AI calls at all");
 });
 
 test("Gemini requests use the configured model, JSON output, and the API key header", async () => {
