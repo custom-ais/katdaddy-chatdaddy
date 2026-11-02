@@ -146,6 +146,82 @@ function SavingsTile({ s }: { s: { hoursPerWeek: number; dollarsPerYear: number 
   );
 }
 
+/** One selectable upsell option. */
+function Tile({ on, onClick, disabled, children, accent, label }: { on: boolean; onClick: () => void; disabled?: boolean; children: React.ReactNode; accent?: boolean; label: string }) {
+  return (
+    <button type="button" role="checkbox" aria-checked={on} aria-label={label} disabled={disabled} onClick={onClick}
+      className={`w-full text-left rounded-2xl border-2 p-4 transition-colors disabled:opacity-60 ${on ? 'border-orange-500 bg-orange-50/60' : accent ? 'border-orange-200 bg-white hover:border-orange-300' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
+      <div className="flex items-start gap-3">
+        <span className={`mt-0.5 size-5 shrink-0 rounded-md border-2 flex items-center justify-center ${on ? 'bg-orange-500 border-orange-500 text-white' : 'border-slate-300 bg-white'}`} aria-hidden="true">{on && <Check size={14} strokeWidth={3} />}</span>
+        <div className="min-w-0 flex-1">{children}</div>
+      </div>
+    </button>
+  );
+}
+
+/** End-of-booking upgrades: DryerFlex (promo), the sanitizing fog, a deal for both, and Ultimate for Premium. */
+function UpsellOffer({ upsell, onDone }: { upsell: any; onDone: (sel: { dryerflex: boolean; fogging: boolean; ultimate: boolean }) => void }) {
+  const [sel, setSel] = useState({ dryerflex: false, fogging: false, ultimate: false });
+  const flip = (k: 'dryerflex' | 'fogging' | 'ultimate') => setSel((x) => ({ ...x, [k]: !x[k] }));
+  const df = upsell.dryerflex, fog = upsell.fogging, up = upsell.ultimate;
+  const dfOn = Boolean(df && sel.dryerflex && !sel.ultimate);
+  const deal = dfOn && sel.fogging && upsell.bundleSavingsCents ? upsell.bundleSavingsCents : 0;
+  const extra = (sel.ultimate && up ? up.extraCents : 0) + (dfOn ? df.cents : 0) + (sel.fogging && fog ? fog.cents : 0) - deal;
+  const any = sel.ultimate || dfOn || sel.fogging;
+  return (
+    <Card className="!p-4 sm:!p-5">
+      <p className="text-xs font-extrabold uppercase tracking-wide text-orange-600">Optional add-ons</p>
+      <h3 className="font-extrabold text-slate-900 text-lg mt-0.5">Upgrade your visit</h3>
+      <div className="mt-3 space-y-2.5">
+        {df && (
+          <Tile on={dfOn} onClick={() => flip('dryerflex')} disabled={sel.ultimate} accent label={`DryerFlex hose upgrade, ${money(df.cents)}${df.wasCents ? `, was ${money(df.wasCents)}` : ''}${sel.ultimate ? ', included with Ultimate' : ''}`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-extrabold uppercase tracking-wide bg-orange-500 text-white rounded-full px-2.5 py-0.5">Online booking special</span>
+              {sel.ultimate && <span className="text-[11px] font-bold text-emerald-700">Included with Ultimate</span>}
+            </div>
+            <div className="mt-1.5 flex items-start justify-between gap-3">
+              <p className="font-extrabold text-slate-900 flex items-center gap-1.5"><Wind size={17} className="text-orange-500 shrink-0" />DryerFlex hose upgrade</p>
+              <p className="shrink-0 text-right leading-none">{df.wasCents ? <span className="block text-xs font-bold text-slate-400 line-through">{money(df.wasCents)}</span> : null}<span className="font-display text-2xl font-extrabold text-slate-900">{money(df.cents)}</span></p>
+            </div>
+            <ul className="mt-2 space-y-1 text-sm text-slate-600">
+              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Crush-resistant aluminum that keeps the full 4-inch airflow</li>
+              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Replaces thin foil or vinyl hoses that kink behind the dryer</li>
+              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Professionally installed with airtight clamps</li>
+            </ul>
+          </Tile>
+        )}
+        {fog && (
+          <Tile on={sel.fogging} onClick={() => flip('fogging')} label={`Sanitizing fog treatment, ${money(fog.cents)}`}>
+            <div className="flex items-start justify-between gap-3">
+              <p className="font-extrabold text-slate-900 flex items-center gap-1.5"><Sparkles size={17} className="text-sky-500 shrink-0" />Sanitizing fog treatment</p>
+              <p className="shrink-0 font-display text-2xl font-extrabold text-slate-900 leading-none">{money(fog.cents)}</p>
+            </div>
+            <p className="mt-1.5 text-sm text-slate-600">An antimicrobial fogging treatment inside the vent line. A good finishing step after pests, nests or musty smells.</p>
+          </Tile>
+        )}
+        {df && fog && upsell.bundleSavingsCents ? (
+          <p className={`rounded-xl px-3 py-2 text-sm font-bold ${deal ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-amber-50 text-amber-900 border border-amber-200'}`}>
+            {deal ? `Bundle deal applied: you save ${money(deal)}.` : sel.ultimate ? `Add the sanitizing fog to Ultimate for ${money(fog.cents)}.` : `Add both and save ${money(upsell.bundleSavingsCents)}.`}
+          </p>
+        ) : null}
+        {up && (
+          <Tile on={sel.ultimate} onClick={() => flip('ultimate')} label={`Upgrade to ${up.name}, ${money(up.extraCents)} more`}>
+            <div className="flex items-start justify-between gap-3">
+              <p className="font-extrabold text-slate-900 flex items-center gap-1.5"><Shield size={17} className="text-indigo-500 shrink-0" />Upgrade to {up.name}</p>
+              <p className="shrink-0 font-display text-xl font-extrabold text-slate-900 leading-none">+{money(up.extraCents)}</p>
+            </div>
+            <p className="mt-1.5 text-sm text-slate-600">Adds {up.pitch}.</p>
+          </Tile>
+        )}
+      </div>
+      <div className="mt-4 flex flex-col sm:flex-row gap-2">
+        <button type="button" disabled={!any} onClick={() => onDone(sel)} className="flex-1 py-3 rounded-xl font-extrabold text-sm bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-40">{any ? `Add to my visit · +${money(extra)}` : 'Choose an upgrade'}</button>
+        <button type="button" onClick={() => onDone({ dryerflex: false, fogging: false, ultimate: false })} className="sm:w-40 py-3 rounded-xl font-extrabold text-sm bg-slate-100 hover:bg-slate-200 text-slate-700">No thanks</button>
+      </div>
+    </Card>
+  );
+}
+
 function PackageCard({ p, onChoose, disabled }: { p: any; onChoose: (option: string) => void; disabled: boolean }) {
   const short = String(p.name).replace(/ See-It-Clean$/, '').replace(/^Dryer Vent /, '');
   return (
@@ -247,7 +323,7 @@ const contactPrompt = (step: ContactStep, d: any, cfg?: any): string => {
     case 'city': return 'And the city?';
     case 'notes': return `${d?.addressFromChat ? 'Got it.' : 'Thanks for providing that address.'} Are there any gate codes, parking instructions, or pets we should be aware of?`;
     case 'gate': return "What's the gate code, and anything else the technician should know?";
-    case 'addons': return 'Want to add anything to your visit?';
+    case 'addons': return cfg?.upsellReady ? 'Before we pick a time, here are a few upgrades for your visit.' : 'Want to add anything to your visit?';
   }
 };
 const INPUT_FOR: Partial<Record<ContactStep, { type: string; autoComplete: string; placeholder: string; inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'] }>> = {
@@ -844,6 +920,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const addOnLabels = (s: any) =>
     (config?.addOns || [])
       .filter((a: any) => !(a.key === 'fogging' && s?.package === 'restoration'))
+      .filter((a: any) => !(a.key === 'dryerflex' && (['ultimate', 'restoration', 'express', 'inspection'].includes(s?.package) || s?.property?.hasDryer === 'No')))
       .map((a: any) => `${a.name}${config?.pricesApproved ? ` · +${money(a.cents)}` : ''}`);
 
   const send = async (message = text) => {
@@ -897,14 +974,15 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   // The address from the first question isn't asked again (the summary still shows it, and Edit details can change it).
   const stepsFor = (s: any): ContactStep[] => [
     ...CONTACT_ORDER.filter((k) => !(k === 'address' && s?.serviceAddress?.street) && !(k === 'city' && s?.serviceAddress?.street && s?.serviceAddress?.city) && !(k === 'sms' && config?.textMessages === false)),
-    ...(s?.route === 'cleaning' && addOnLabels(s).length ? (['addons'] as ContactStep[]) : []),
+    ...(['cleaning', 'bundle'].includes(s?.route) && (s?.upsell || addOnLabels(s).length) ? (['addons'] as ContactStep[]) : []),
   ];
   const askContact = (step: ContactStep, d: any = draft) => {
     if (step === 'address') { addrSession.current = crypto.randomUUID(); addrPicked.current = ''; }
     setContactStep(step);
-    say('model', contactPrompt(step, d, config));
-    setOptions(step === 'email' ? ['Skip'] : step === 'notes' ? ['No special notes', 'Gate code required'] : step === 'sms' ? ['Yes, SMS updates are fine', 'No, call or email only'] : step === 'addons' ? [...addOnLabels(session), 'No add-ons'] : []);
-    setMulti(step === 'addons');
+    const upsell = step === 'addons' && session?.upsell;
+    say('model', contactPrompt(step, d, { ...config, upsellReady: Boolean(upsell) }));
+    setOptions(step === 'email' ? ['Skip'] : step === 'notes' ? ['No special notes', 'Gate code required'] : step === 'sms' ? ['Yes, SMS updates are fine', 'No, call or email only'] : step === 'addons' && !upsell ? [...addOnLabels(session), 'No add-ons'] : []);
+    setMulti(step === 'addons' && !upsell);
     setSuggested('');
   };
   function startContact(s: any) {
@@ -1015,6 +1093,16 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     setDraft(d);
     setPicked([]);
     nextContact(step, d);
+  };
+  /** The upsell panel's answer: DryerFlex, the sanitizing fog, and/or Ultimate in place of Premium. */
+  const chooseUpsell = (sel: { dryerflex: boolean; fogging: boolean; ultimate: boolean }) => {
+    remember('contact');
+    const d = { ...draft, addOns: { ...(draft.addOns || {}), dryerflex: sel.dryerflex && !sel.ultimate, fogging: sel.fogging, toolRetrieval: false }, upgrade: sel.ultimate ? 'ultimate' : undefined };
+    const chosen = [sel.ultimate && 'the Ultimate Protection upgrade', sel.dryerflex && !sel.ultimate && 'the DryerFlex upgrade', sel.fogging && 'the sanitizing fog treatment'].filter(Boolean);
+    say('user', chosen.length ? `Add ${chosen.join(' and ')}` : 'No thanks');
+    setDraft(d);
+    setPicked([]);
+    nextContact('addons', d);
   };
   const submitContact = async (d: any) => {
     setContactStep(null); setOptions([]); setMulti(false);
@@ -1185,6 +1273,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
             )}
 
             <div className="pl-9 sm:pl-10 space-y-4">
+              {!receipt && !requestId && contactStep === 'addons' && session?.upsell && !busy && <UpsellOffer upsell={session.upsell} onDone={chooseUpsell} />}
               {!receipt && !requestId && action === 'verify' && verification && <VerifyPhone token={token} verification={verification} onVerified={(s) => { setSession(s); setVerification(null); setAction('slots'); say('model', `Thanks — your ${s.verifiedContact?.channel === 'email' ? 'email' : 'phone'} is confirmed. Here are the soonest openings for the full visit.`); }} onEdit={editDetails} onRequest={() => setAction('request')} />}
               {!receipt && !requestId && action === 'slots' && <SlotPicker token={token} session={session} config={config} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); setAutoClose(!p && !preview); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
               {!receipt && !requestId && action === 'approval' && approval && <ApprovalWait token={token} initial={approval} onBooked={onApprovalBooked} onEnded={onApprovalEnded} onCancelled={onApprovalCancelled} />}

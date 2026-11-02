@@ -299,7 +299,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       textMessages: !ownerAlertsOnly && smsReady(c) && c.smsConfirmations !== false, // off: no SMS consent question and no texts to customers
       approverName: c.approver?.name || "",
       // Optional extras the customer can tick on the details form.
-      addOns: [["fogging", "fogging"], ["toolRetrieval", "tool"]].flatMap(([key, variant]) => {
+      addOns: [["dryerflex", "dryerflex"], ["fogging", "fogging"], ["toolRetrieval", "tool"]].flatMap(([key, variant]) => {
         const item = (c.services || []).find((x) => x.family === "addon" && x.variant === variant && x.active !== false);
         return item ? [{ key, name: item.name, description: item.description, cents: item.priceCents }] : [];
       }),
@@ -949,7 +949,11 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           const to = pending?.channel === 'email' ? data.contact.email.toLowerCase() : data.contact.phone;
           if (pending?.provider === 'twilio' && pending.to !== to) delete data.verification;
         }
-        data.addOns = data.route === "cleaning" ? { fogging: body.addOns?.fogging === true, toolRetrieval: body.addOns?.toolRetrieval === true } : {};
+        // End-of-booking upsell: Premium can move up to Ultimate (which already includes DryerFlex).
+        if (body.upgrade === "ultimate" && data.package === "premium" && ["cleaning", "bundle"].includes(data.route) && data.property?.hasDryer !== "No") data.package = "ultimate";
+        data.addOns = ["cleaning", "bundle"].includes(data.route)
+          ? { fogging: body.addOns?.fogging === true, toolRetrieval: body.addOns?.toolRetrieval === true, dryerflex: body.addOns?.dryerflex === true && data.package !== "ultimate" }
+          : {};
         data.zip = body.zip;
         data.location = where.location;
         data.driveFromBaseMin = where.driveFromBaseMin;

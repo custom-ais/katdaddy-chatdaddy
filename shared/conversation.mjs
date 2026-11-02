@@ -26,7 +26,7 @@
 // facts below; every decision about price and booking happens here or on the server.
 
 import { DEFAULT_CONFIG, money, serviceQuote, areaFor, bundleAssessmentCents } from "./domain.mjs";
-import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant, noDryerNeedsPremium } from "./catalog.mjs";
+import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant, noDryerNeedsPremium, ADDON_PROMOS, ADDON_BUNDLE_SAVINGS_CENTS, NO_DRYERFLEX } from "./catalog.mjs";
 import { restrictionScore, restrictionLevel } from "./airflow.mjs";
 
 export const initialSession = () => ({
@@ -1070,9 +1070,36 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond(`${switched}${title}\n${bullets}${total}${note}${approval}\n\n**Transparent Pricing Promise**\nMost dryer vent cleanings are completed at the package price selected.`, options, { info: ["pricing"] });
   };
 
+  /**
+   * The end-of-booking upsell, priced for this home and package: DryerFlex (promo), the sanitizing
+   * fog, the deal for both, and the Ultimate upgrade for Premium. Null when prices aren't approved
+   * or nothing applies, and the add-ons step falls back to its plain list.
+   */
+  const upsellFor = () => {
+    if (!priced || !["cleaning", "bundle"].includes(s.route) || s.property.hasDryer === "No" || !s.package) return null;
+    const find = (variant) => services.find((x) => x.family === "addon" && x.variant === variant && x.active !== false);
+    const out = {};
+    const df = find("dryerflex");
+    if (df && !NO_DRYERFLEX.has(s.package)) {
+      const was = ADDON_PROMOS.dryerflex?.wasCents;
+      out.dryerflex = { name: df.name, description: df.description, cents: df.priceCents, ...(was > df.priceCents ? { wasCents: was } : {}) };
+    }
+    const fog = find("fogging");
+    if (fog && s.package !== "restoration") out.fogging = { name: fog.name, description: fog.description, cents: fog.priceCents };
+    if (out.dryerflex && out.fogging) out.bundleSavingsCents = Math.min(ADDON_BUNDLE_SAVINGS_CENTS, out.fogging.cents);
+    if (s.package === "premium") {
+      try {
+        const now = quoteFor("premium"), up = quoteFor("ultimate");
+        if (up.priceCents > now.priceCents) out.ultimate = { name: PACKAGES.ultimate.label, extraCents: up.priceCents - now.priceCents, pitch: UPGRADES.ultimate };
+      } catch {}
+    }
+    return Object.keys(out).length ? out : null;
+  };
+
   const contactStep = () => {
     s.stage = "contact";
     s.pending = null;
+    s.upsell = upsellFor();
     let locked = "";
     try {
       const q = s.route === "assessment" ? serviceQuote("assessment", config) : quoteFor(s.package);
