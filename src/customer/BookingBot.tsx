@@ -5,7 +5,8 @@ import {
   Download, Droplet, Flame, HelpCircle, Home, Layers, List, Loader2, MapPin, MessageCircle, Minus, MoreHorizontal, Plus, Pencil, Phone, RotateCcw,
   Search, Send, Shield, ShieldCheck, Sparkles, Star, Thermometer, Timer, User, Wind, Wrench, X, Zap,
 } from 'lucide-react';
-import { api, ApiError, saveText } from '../lib/api';
+import { api, ApiError, saveBlob, saveText } from '../lib/api';
+import { renderAppointmentCard } from './appointmentCard';
 import { money, phoenixDate } from '../../shared/domain.mjs';
 import { CODE_DIGITS } from '../../shared/verification-code.mjs';
 
@@ -125,6 +126,28 @@ function AirflowGauge({ a }: { a: { score: number; level: string; headline: stri
   );
 }
 
+/** What a clear vent could save: an estimate from the customer's drying cycles and published averages. */
+function SavingsTile({ s }: { s: { hoursPerWeek: number; hoursPerYear: number; dollarsPerYear: number | null; gas: boolean; basis: string } }) {
+  const stat = (icon: React.ReactNode, value: string, unit: string, label: string) => (
+    <div className="rounded-xl bg-white border border-emerald-100 p-3">
+      <div className="flex items-center gap-1.5 text-emerald-700">{icon}<span className="text-[11px] font-extrabold uppercase tracking-wide">{label}</span></div>
+      <p className="mt-1.5 font-display text-2xl sm:text-[28px] font-extrabold text-slate-900 leading-none">{value}</p>
+      <p className="mt-1 text-xs font-bold text-slate-500">{unit}</p>
+    </div>
+  );
+  return (
+    <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-4 sm:p-5">
+      <p className="font-extrabold text-emerald-900 text-sm sm:text-[15px]">What a clear vent could save you</p>
+      <div className={`mt-3 grid gap-2.5 ${s.dollarsPerYear != null ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        {s.dollarsPerYear != null && stat(<Zap size={14} aria-hidden="true" />, `$${s.dollarsPerYear}`, 'a year', 'Electricity')}
+        {stat(<Timer size={14} aria-hidden="true" />, `${s.hoursPerWeek} hrs`, 'a week', 'Drying time')}
+      </div>
+      <p className="text-sm text-emerald-900 mt-3 leading-relaxed">If cleaning brings each load back to one cycle, that adds up to about {s.hoursPerYear} fewer hours of drying a year{s.gas ? ', plus the gas those extra cycles burn' : ''}.</p>
+      <p className="text-xs text-emerald-800/80 mt-1.5 leading-relaxed">{s.basis}</p>
+    </div>
+  );
+}
+
 function PackageCard({ p, onChoose, disabled }: { p: any; onChoose: (option: string) => void; disabled: boolean }) {
   const short = String(p.name).replace(/ See-It-Clean$/, '').replace(/^Dryer Vent /, '');
   return (
@@ -153,6 +176,7 @@ function RecommendationCard({ card, onChoose, active }: { card: any; onChoose: (
   return (
     <div className="space-y-3 w-full">
       {card.airflow && <AirflowGauge a={card.airflow} />}
+      {card.savings && <SavingsTile s={card.savings} />}
       {card.summary ? (
         <div className="p-4 rounded-2xl bg-white text-slate-800 border border-slate-200/90 text-sm sm:text-[15px] leading-relaxed shadow-xs"><Rich text={card.summary} /></div>
       ) : card.lead ? (
@@ -546,10 +570,36 @@ function ApprovalWait({ token, initial, onBooked, onEnded }: { token: string; in
   );
 }
 
-function Receipt({ receipt, pending, onRestart }: { receipt: any; pending: boolean; onRestart: () => void }) {
+function Receipt({ receipt, pending, onRestart, business }: { receipt: any; pending: boolean; onRestart: () => void; business?: { businessName?: string; phone?: string; email?: string } }) {
   const w = windowParts(receipt.scheduledAt);
+  const [saving, setSaving] = useState(false);
+  const items = receipt.lineItems?.length ? receipt.lineItems : [{ name: receipt.service, cents: receipt.priceCents }];
   const text = () =>
-    [receipt.id, `${w.day}, ${w.time} (Arizona time)`, ...(receipt.lineItems || []).map((l: any) => `${l.name}: ${money(l.cents)}`), `Total: ${money(receipt.priceCents)}`, receipt.name, receipt.address, `${receipt.city}, AZ ${receipt.zip}`, receipt.route !== 'cleaning' ? 'Repairs and parts are quoted separately.' : '', '', receipt.preparation].join('\n');
+    [receipt.id, `${w.day}, ${w.time} (Arizona time)`, ...items.map((l: any) => `${l.name}: ${money(l.cents)}`), `Total: ${money(receipt.priceCents)}`, receipt.name, receipt.address, `${receipt.city}, AZ ${receipt.zip}`, receipt.route !== 'cleaning' ? 'Repairs and parts are quoted separately.' : '', '', receipt.preparation].join('\n');
+  // A designed image of the appointment. iPhones get the share sheet ("Save Image"); everything
+  // else downloads the PNG. If drawing fails, the plain-text version is saved instead.
+  const save = async () => {
+    setSaving(true);
+    try {
+      const blob = await renderAppointmentCard({
+        businessName: business?.businessName || 'Dryer Vent Squad West Valley', phone: business?.phone, email: business?.email,
+        pending, reference: receipt.id, jobNumber: receipt.jobberJobNumber, day: w.day, time: w.time,
+        lineItems: items, totalCents: receipt.priceCents, repairsNote: receipt.route !== 'cleaning' ? 'Repairs and parts are quoted separately.' : '',
+        name: receipt.name, address: receipt.address, cityLine: `${receipt.city}, AZ ${receipt.zip}`, preparation: receipt.preparation,
+      });
+      const name = `${receipt.id}-appointment.png`;
+      const file = typeof File === 'function' ? new File([blob], name, { type: 'image/png' }) : null;
+      const ios = /iP(?:hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      if (ios && file && navigator.canShare?.({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: 'Your appointment' }); return; } catch (err) { if ((err as Error).name === 'AbortError') return; }
+      }
+      saveBlob(name, blob);
+    } catch {
+      saveText(`${receipt.id}.txt`, text());
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
     <div className={`border p-6 rounded-3xl space-y-4 animate-in ${pending ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
       <div className="text-center space-y-1">
@@ -566,7 +616,7 @@ function Receipt({ receipt, pending, onRestart }: { receipt: any; pending: boole
       <p className="text-sm text-slate-700"><b>Before we arrive:</b> {receipt.preparation}</p>
       <p className="text-xs text-slate-500">{receipt.notification}</p>
       <div className="flex flex-wrap gap-2 justify-center">
-        <button className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 font-extrabold text-sm rounded-xl flex items-center gap-2" onClick={() => saveText(`${receipt.id}.txt`, text())}><Download size={16} />Save confirmation</button>
+        <button className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 font-extrabold text-sm rounded-xl flex items-center gap-2 disabled:opacity-60" onClick={() => void save()} disabled={saving}>{saving ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}Save confirmation</button>
         <button className="px-4 py-2.5 text-slate-500 font-extrabold text-sm rounded-xl" onClick={onRestart}>Start over</button>
       </div>
     </div>
@@ -1052,7 +1102,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
                   <button className="mt-4 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl font-extrabold text-sm text-slate-700" onClick={restart}>Start a new conversation</button>
                 </Card>
               )}
-              {receipt && <Receipt receipt={receipt} pending={pending} onRestart={restart} />}
+              {receipt && <Receipt receipt={receipt} pending={pending} onRestart={restart} business={config} />}
             </div>
           </>
         )}

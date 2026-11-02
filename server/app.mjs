@@ -453,6 +453,13 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     };
   }
 
+  /** Answers the customer didn't know, as one line the technician can't miss. */
+  const UNSURE_LABELS = { hasDryer: "whether a dryer is installed", recentService: "recent dryer purchase or service", stories: "number of stories", laundryFloor: "laundry floor", power: "gas or electric", mount: "dryer setup (standard, pedestal or stacked)", exit: "where the vent exits", animals: "signs of animals", dryerWorking: "how the dryer is working" };
+  const unsureNote = (property) => {
+    const unsure = Object.keys(UNSURE_LABELS).filter((k) => property?.[k] === "Not sure").map((k) => UNSURE_LABELS[k]);
+    return unsure.length ? `Tech to double-check on site (customer wasn't sure): ${unsure.join("; ")}.` : "";
+  };
+
   /** Jobber: client + property + job + scheduled visit. Returns appointment.jobber details. */
   async function pushToJobber(appt, slot, notes) {
     if (!slot.jobberUserId || !jobber.verifyAssignment) throw new Error("The selected technician needs a verified Jobber user mapping before booking.");
@@ -469,6 +476,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     const instructions = [
       `Booked by BOB (${appt.source === "ai_bot" ? "website chat" : "office"}) · ref ${appt.id}`,
       appt.property && Object.keys(appt.property).length ? `Home: ${Object.entries(appt.property).map(([k, v]) => `${k} ${Array.isArray(v) ? v.join("+") : v}`).join(", ")}` : "",
+      unsureNote(appt.property),
       appt.concerns?.length ? `Customer concerns: ${appt.concerns.join(" | ")}` : "",
       notes ? `Access notes: ${notes}` : "",
       slot.nearestJobMin != null ? `Nearest job that day ~${slot.nearestJobMin} min away.` : "",

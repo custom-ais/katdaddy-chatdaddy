@@ -148,6 +148,15 @@ const normalize = (t) => String(t || "").toLowerCase().replace(/[’‘]/g, "'")
 export const FIRE_SAFE = "Everyone is safe & fire/smoke is handled";
 /** The rules engine's reply when it has no approved answer; the conversational layer may replace it. */
 export const UNANSWERED = "I don't have a verified answer to that yet. I can send the question to the team, or we can keep going with your booking.";
+/** The reply when the customer doesn't know an answer: it's fine, and the technician checks it on site. */
+export const NOTED = "That's okay. I'll make a note, and your technician will double-check it when they get there.";
+// The answer each question records, so "Not sure" can be recognized when acknowledging it.
+const ANSWER_FIELD = { hasDryer: "hasDryer", recentService: "recentService", stories: "stories", laundryFloor: "laundryFloor", power: "power", mount: "mount", animals: "animals", repairPerf: "dryerWorking" };
+/** True when the question pending in `before` is now recorded as "Not sure" in `after`. */
+export function answeredUnsure(before, after) {
+  const field = ANSWER_FIELD[before?.pending];
+  return Boolean(field) && before.property?.[field] !== "Not sure" && after?.property?.[field] === "Not sure";
+}
 const FIRE_ALERT =
   "⚠️ **SAFETY ALERT:** If there is active smoke or fire, please prioritize your safety immediately!\n\n" +
   "1. **Evacuate the area** if needed and call **911** or your local fire department right away.\n" +
@@ -169,7 +178,8 @@ const NO_CLEAN = /\b(no cleaning|not cleaning|don't (?:need|want) (?:a |the )?cl
 const NEST = /\b(nests?|birds?|rodents?|pests?|critters?|squirrels?|mouse|mice|rats?|chirping)\b/;
 const URGENT = /\b(emergency|urgent|urgently|asap|same[- ]day|right away|today|completely (?:clogged|blocked)|totally (?:clogged|blocked)|fully (?:clogged|blocked))\b/;
 const CLOG = /\b(clog\w*|blocked|blockage|no airflow|lint (?:buildup|build-up))\b/;
-const UNKNOWN = /^(?:i(?:'m| am)? )?(?:don't know|do not know|not sure|unsure|unknown|no idea|i don't know)[.!]?$/;
+// "I don't know" in the ways people type it: "idk", "i dont know", "honestly not sure", "no clue lol".
+const UNKNOWN = /^(?:(?:um+|uh+|hmm+|honestly|actually|sorry|oh)[,.]? )*(?:i(?:'m| am)? )?(?:(?:really |honestly |actually )?(?:don'?t|do not)(?: really)? know|dunno|idk|not (?:really |totally |100% |quite )?sure|unsure|unknown|no idea|i have no idea|no clue|not certain|beats me)(?: (?:to be honest|tbh|honestly|lol|sorry|either))?[.!?]*$/;
 const PICKS = [
   ["premium", /^premium(?: 1-2-3)?\b/],
   ["ultimate", /^ultimate(?: protection)?\b/],
@@ -528,6 +538,38 @@ export function dryingEfficiency(p = {}) {
   return null;
 }
 
+/**
+ * Averages behind the savings estimate: DOE / ENERGY STAR assume about 283 dryer loads a year (5.4 a
+ * week), a typical cycle is about 45 minutes and 2.5 kWh, and EIA puts Arizona's average residential
+ * electricity price at about 15¢ per kWh (2026). Rounded down where in doubt.
+ */
+export const SAVINGS_AVERAGES = Object.freeze({ loadsPerWeek: 5, minutesPerCycle: 45, kwhPerCycle: 2.5, centsPerKwh: 15 });
+
+/**
+ * What a clear vent could save, from how many cycles a load takes now: the extra cycles times average
+ * laundry, cycle length and Arizona electric rates. Gas dryers get the time only, since gas prices vary
+ * too much to estimate honestly. Null when loads already dry in one cycle or the cycles aren't known.
+ */
+export function savingsEstimate(p = {}, a = SAVINGS_AVERAGES) {
+  const sym = p.symptoms || [];
+  const extra = p.hasDryer === "No" ? 0 : sym.includes("three") ? 2 : sym.includes("two") ? 1 : 0;
+  if (!extra) return null;
+  const cyclesPerWeek = a.loadsPerWeek * extra;
+  const hoursPerWeek = Math.round(((cyclesPerWeek * a.minutesPerCycle) / 60) * 2) / 2;
+  const hoursPerYear = Math.round((cyclesPerWeek * 52 * a.minutesPerCycle) / 60 / 5) * 5;
+  const gas = p.power === "Gas";
+  const dollarsPerYear = gas ? null : Math.round((cyclesPerWeek * 52 * a.kwhPerCycle * a.centsPerKwh) / 100 / 5) * 5;
+  const hours = `${hoursPerWeek} hour${hoursPerWeek === 1 ? "" : "s"}`;
+  const sentence = gas
+    ? `If cleaning brings each load back to one cycle, that's an estimated ${hours} less drying time a week (about ${hoursPerYear} hours a year), plus the gas those extra cycles burn.`
+    : `If cleaning brings each load back to one cycle, that's an estimated $${dollarsPerYear} a year in electricity and ${hours} less drying time a week.`;
+  const basis =
+    `Estimate based on averages: ${a.loadsPerWeek} loads a week and ${a.minutesPerCycle}-minute cycles` +
+    (gas ? "." : `, about ${a.kwhPerCycle} kWh per cycle at ${a.centsPerKwh}¢ per kWh (typical Arizona rate)${p.power === "Electric" ? "" : ", for an electric dryer"}.`) +
+    " Your savings depend on your dryer and how much laundry you do.";
+  return { extraCyclesPerLoad: extra, hoursPerWeek, hoursPerYear, dollarsPerYear, gas, sentence, basis };
+}
+
 /** The airflow analysis shown under the prices: estimate, causes, energy cost, and why this package. */
 export function airflowAnalysis(p = {}, recommended = recommendTier(p)) {
   const sym = p.symptoms || [];
@@ -545,9 +587,10 @@ export function airflowAnalysis(p = {}, recommended = recommendTier(p)) {
   if (p.mount === "Stacked" || p.mount === "Pedestal") parts.push(`With a ${p.mount === "Stacked" ? "stacked" : "pedestal"} setup, the transition hose behind the dryer is often kinked or crushed, which the DryerFlex hose upgrade fixes.`);
   if (p.power === "Gas") parts.push("Gas dryers also get our Gas Appliance Safety Procedure: a safe disconnect and reconnect, plus a gas leak test before we leave.");
   paragraphs.push(parts.splice(0).join(" "));
+  const save = savingsEstimate(p);
   parts.push(
     eff
-      ? `At ${eff.percent} efficiency you're paying for ${eff.times} the drying time on every load. Restoring airflow brings that back down and saves energy and wear on the dryer.`
+      ? `At ${eff.percent} efficiency you're paying for ${eff.times} the drying time on every load. Restoring airflow brings that back down and saves energy and wear on the dryer.${save ? ` ${save.sentence}` : ""}`
       : sym.includes("overheat")
         ? "Restoring airflow lets the hot air escape again, so the dryer runs cooler and safer."
         : "A clear vent keeps drying times short, which saves energy and wear on the dryer.",
@@ -768,6 +811,9 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   };
   const ackFor = (key) => {
     const p = s.property;
+    // "I don't know" is a fine answer: say so, and the technician checks it on site.
+    if (p[ANSWER_FIELD[key]] === "Not sure" || (key === "stories" && p.laundryFloor === "Not sure")) return NOTED;
+    if ((key === "symptoms" || key === "symptomClarify") && !(p.symptoms || []).length) return NOTED;
     switch (key) {
       case "zip":
         return `Thanks, ZIP ${s.zip}.`;
@@ -780,7 +826,6 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
         return p.recentService === "Yes" ? "Thanks, a new or recently serviced dryer." : "Thanks.";
       case "stories":
       case "laundryFloor":
-        if (p.stories === "Not sure" || p.laundryFloor === "Not sure") return "No problem, your technician will confirm the layout.";
         if (p.stories === "2-story" && p.laundryFloor === "2nd floor") return "Understood, second-floor laundry setup.";
         return layoutPhrase() ? `Got it, ${layoutPhrase()} setup.` : "Got it.";
       case "power":
@@ -789,7 +834,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
           const fee = feeLabel("gas").replace(/[ ()+]/g, "");
           return `Got it, a gas dryer line. ${fee ? `The ${fee} Gas Appliance Safety Procedure means` : "For gas dryers,"} ${SETUP_WHY.gas}.`;
         }
-        return p.power === "Electric" ? "Understood, an electric dryer." : "No problem, your technician will confirm it on site.";
+        return p.power === "Electric" ? "Understood, an electric dryer." : "";
       case "mount": {
         if (p.mount !== "Stacked" && p.mount !== "Pedestal") return "Got it.";
         const key = p.mount === "Stacked" ? "stacked" : "pedestal";
@@ -803,7 +848,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       case "symptomClarify":
         return "Thanks, that helps me match the right service.";
       case "animals":
-        return p.animals === "Yes" ? "Got it, signs of animals at the vent." : p.animals === "No" ? "Good, no signs of animals." : "No problem.";
+        return p.animals === "Yes" ? "Got it, signs of animals at the vent." : p.animals === "No" ? "Good, no signs of animals." : "";
       case "safetyCheck":
         return s.dryerHot ? "" : "Good. That reduces risk.";
       case "powerOff":
@@ -882,6 +927,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     const card = {
       kind: "recommendation",
       airflow: { ...airflow, factors: airflowFactors(p) },
+      ...(savingsEstimate(p) ? { savings: savingsEstimate(p) } : {}),
       lead,
       summary: airflowSummary(p, suggested),
       question: "Which package would you like?",
