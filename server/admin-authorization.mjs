@@ -136,7 +136,7 @@ const safeService = (value,principal) => {
 };
 function blankConfig() {
   return {
-    version:0, businessName:'',phone:'',email:'',preparation:'',cleaningProcess:'',assessmentProcess:'',
+    version:0, businessName:'',phone:'',email:'',preparation:'',cleaningProcess:'',assessmentProcess:'',assessmentProcessVersion:0,
     bookingEnabled:false,scheduleAcknowledged:false,pricesAcknowledged:false,scheduleSource:'BOB',
     baseAddress:'',baseLocation:null,customServiceAreas:[],serviceAreaMode:'zip',serviceAreaMiles:0,travelAreaMiles:0,
     maxDriveFromBaseMin:0,maxDriveBetweenJobsMin:0,travelFeeTiers:[],nearbyFirst:false,
@@ -153,7 +153,7 @@ function blankConfig() {
 // Reading a status page never inherits every field controlled by its administrator.
 // This map is intentionally independent of write permissions and DEFAULT_CONFIG.
 const configReadGroups = {
-  'settings.business.view':['businessName','phone','email','preparation','cleaningProcess','assessmentProcess'],
+  'settings.business.view':['businessName','phone','email','preparation','cleaningProcess','assessmentProcess','assessmentProcessVersion'],
   'settings.booking.view':['bookingEnabled','scheduleAcknowledged','scheduleSource','requirePhoneVerification','aiAssistant','smsConfirmations','emailConfirmations','emergencyLeadHours','approvalServices','approver.name'],
   'settings.connections.view':['scheduleSource','requirePhoneVerification','aiAssistant','aiProvider','integrations.jobber','integrations.maps','integrations.verification','integrations.sms','integrations.email'],
   'integrations.manage':['approver.phone','approver.email'],

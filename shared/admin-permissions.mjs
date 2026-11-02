@@ -45,7 +45,7 @@ export function canViewTab(principal, tab) {
 // Leaf paths, intentionally independent of DEFAULT_CONFIG. New keys fail closed.
 export const CONFIG_FIELD_PERMISSIONS = Object.freeze({
   businessName:'settings.business.manage', phone:'settings.business.manage', email:'settings.business.manage',
-  preparation:'settings.business.manage', cleaningProcess:'settings.business.manage', assessmentProcess:'settings.business.manage',
+  preparation:'settings.business.manage', cleaningProcess:'settings.business.manage', assessmentProcess:'settings.business.manage', assessmentProcessVersion:'settings.business.manage',
   bookingEnabled:'settings.booking.manage', scheduleAcknowledged:'settings.booking.manage', pricesAcknowledged:'settings.services.manage',
   scheduleSource:'integrations.manage', requirePhoneVerification:'integrations.manage', aiAssistant:'integrations.manage', aiProvider:'integrations.manage',
   'integrations.jobber':'integrations.manage', 'integrations.maps':'integrations.manage', 'integrations.verification':'integrations.manage', 'integrations.sms':'integrations.manage', 'integrations.email':'integrations.manage',
