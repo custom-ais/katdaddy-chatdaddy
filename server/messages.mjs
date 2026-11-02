@@ -91,5 +91,25 @@ export function ownerBookingSms(appt, config) {
   if (custom?.trim()) return renderMessageTemplate(custom, messageTemplateValues(appt, config), { ...MESSAGE_TEMPLATE_FIELDS[3], maxRenderedLength: 1600 });
   const when = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Phoenix', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(appt.scheduledAt));
   const clean = value => String(value || '').replace(/[\r\n\t]+/g, ' ').slice(0, 180);
-  return `ChatDaddy booked an appointment: ${clean(appt.customerName)} — ${clean(appt.package)}. ${when} Arizona time. Ref ${clean(appt.id)}. This booking is confirmed; no approval is needed.`;
+  return `Custom-AIs ChatDaddy alert: booking confirmed for ${clean(appt.customerName)} — ${clean(appt.package)}. ${when} Arizona time. Ref ${clean(appt.id)}. No approval needed. Reply STOP to opt out.`;
+}
+
+/** Fixed owner-only error copy accepts identifiers and times, never provider errors or customer details. */
+export function ownerErrorSms(kind, details = {}) {
+  if (kind === 'booking_action_needed') {
+    const ref = details.appointmentId;
+    if (typeof ref !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(ref)) throw new Error('Invalid booking reference.');
+    return `Custom-AIs ChatDaddy alert: booking ${ref} needs your review. Jobber did not confirm the visit. Resolve it in your ChatDaddy dashboard. Reply STOP to opt out.`;
+  }
+  const at = details.at;
+  if (!Number.isFinite(at) || !Number.isFinite(new Date(at).getTime())) throw new Error('Invalid alert time.');
+  const time = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Phoenix', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(at));
+  switch (kind) {
+    case 'booking_jobber_failed': return `Custom-AIs ChatDaddy alert: a customer could not finish booking because Jobber returned an error at ${time} Arizona time. Check your ChatDaddy dashboard. Reply STOP to opt out.`;
+    case 'jobber': return `Custom-AIs ChatDaddy alert: online booking may be paused because the Jobber calendar connection failed at ${time} Arizona time. Check Settings > Connections in your ChatDaddy dashboard. Reply STOP to opt out.`;
+    case 'verification': return `Custom-AIs ChatDaddy alert: customers may not be able to verify their phone and book because the phone-code service failed at ${time} Arizona time. Check Settings > Connections in your ChatDaddy dashboard. Reply STOP to opt out.`;
+    case 'assistant': return `Custom-AIs ChatDaddy alert: the AI assistant connection failed at ${time} Arizona time, so the chat may not understand typed answers. Check Settings > Connections in your ChatDaddy dashboard. Reply STOP to opt out.`;
+    case 'email': return `Custom-AIs ChatDaddy alert: booking emails may not be sending because the email connection failed at ${time} Arizona time. Check Settings > Connections in your ChatDaddy dashboard. Reply STOP to opt out.`;
+    default: throw new Error('Unsupported owner alert.');
+  }
 }

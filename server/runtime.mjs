@@ -1,4 +1,6 @@
 import { createConnectionHealth, observeMessaging } from "./connection-health.mjs";
+import { createOwnerConsent } from "./owner-consent.mjs";
+import { notifyOwnerError } from "./owner-error-notification.mjs";
 import { createIntegrationAccounts } from "./integration-accounts.mjs";
 import { createSendGrid } from "./sendgrid.mjs";
 import { createTwilio } from "./twilio.mjs";
@@ -34,7 +36,13 @@ export async function bobRuntime(env = process.env) {
       if (config.aiAssistant === false || (config.aiProvider || 'gemini') !== provider) throw new Error('Smart chat is disabled or its selected provider changed.');
       return fetch(input, init);
     } });
-    const connectionHealth = createConnectionHealth({ store, env, jobber });
+    const ownerConsent = createOwnerConsent({ store });
+    const connectionHealth = createConnectionHealth({ store, env, jobber, onError: ({ name, at }) => {
+      if (!['jobber', 'verification', 'assistant', 'email'].includes(name)) return;
+      return notifyOwnerError({ store, kind: name, details: { at }, ownerConsent, env,
+        smsReady: c => c.integrations?.sms !== false && env.BOOKING_SMS_PROVIDER === 'twilio' && Boolean(twilio?.messagingConfigured),
+        sendSms: (phone, text, options) => twilio.sendSms(phone, text, options), provider: 'Twilio' });
+    } });
     const { twilio, sendgrid, assistant } = observeMessaging({ health: connectionHealth, twilio: gatedTwilio, sendgrid: gatedSendgrid, assistant: rawAssistant });
     const integrationAccounts = createIntegrationAccounts({ env, store, jobber });
     const handle = createBobHandler({ connectionHealth: { ...connectionHealth, refresh: () => connectionHealth.refresh({ integrationAccounts }) }, integrationAccounts, store, jobber, geo, scheduler, assistant, twilio, sendgrid, env });

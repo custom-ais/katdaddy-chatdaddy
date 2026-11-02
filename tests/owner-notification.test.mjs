@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { notifyBookingOwner } from '../server/owner-notification.mjs';
+import { createOwnerConsent } from '../server/owner-consent.mjs';
+import { OWNER_SMS_CONSENT_VERSION } from '../shared/owner-sms-consent.mjs';
 import { DEFAULT_CONFIG, validateConfig, withConfigDefaults } from '../shared/domain.mjs';
 
 function harness() {
@@ -73,15 +76,22 @@ test('claim failure sends nothing; post-send persistence failure retains pre-sen
 
 // Real HTTP/store pipeline, mocked external providers only.
 import { harness as appHarness, contact, fakeTwilio } from './helpers.mjs';
+async function grantOwnerConsent(h) {
+  const consent=createOwnerConsent({store:h.store});
+  const phone=(await h.store.config()).bookingOwnerSmsPhone;
+  await consent.record({action:'grant',revision:0,phone,consent:true,disclosureVersion:OWNER_SMS_CONSENT_VERSION,idempotencyKey:randomUUID()},'synthetic-owner-session');
+  assert.equal(await consent.allows(phone),true);
+}
 
 test('a normal confirmed booking sends one separate owner alert even without customer SMS consent', async t => {
   const calls = [];
   const twilio = { ...fakeTwilio(), messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner', status: 'queued' }; } };
   const h = await appHarness(t, { config: { bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100' }, twilio });
+  await grantOwnerConsent(h);
   const r = await h.book('cleaning', { ...contact, smsConsent: false });
   assert.equal(r.status, 201);
   assert.equal(calls.length, 1);
-  assert.match(calls[0].text, /ChatDaddy booked an appointment/);
+  assert.match(calls[0].text, /^Custom-AIs ChatDaddy alert: booking confirmed/);
   const [a] = await h.store.appointments();
   const claim = await h.store.kvGet(`owner-booking-sms:${a.id}`);
   assert.equal(claim.status, 'accepted');
@@ -92,6 +102,7 @@ test('uncertain Jobber appointment alerts only after office confirms it exists, 
   const calls = [];
   const twilio = { ...fakeTwilio(), messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner', status: 'queued' }; } };
   const h = await appHarness(t, { config: { bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100' }, twilio });
+  await grantOwnerConsent(h);
   h.jobber.failNext = 'timeout';
   const booked = await h.book('cleaning');
   assert.equal(booked.status, 202);
@@ -111,11 +122,12 @@ test('emergency booking owner alert waits for named approval and successful book
   const calls = [];
   const twilio = { ...fakeTwilio(), messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner', status: 'queued' }; } };
   const h = await appHarness(t, { config: { emergencyLeadHours: 1, bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100', approver: { name: 'Office', phone: '6235559999', email: '' } }, twilio });
+  await grantOwnerConsent(h);
   const token = await h.prepare('emergency');
   const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
   const asked = await h.call('/api/approvals', { method: 'POST', token, body: { holdId: held.data.hold.id, approved: true } });
   assert.equal(asked.status, 201);
-  const ownerCalls = () => calls.filter(c => /ChatDaddy booked an appointment/.test(c.text));
+  const ownerCalls = () => calls.filter(c => /^Custom-AIs ChatDaddy alert: booking confirmed/.test(c.text));
   assert.equal(ownerCalls().length, 0);
   const cookie = await h.login();
   const result = await h.call(`/api/admin/approvals/${asked.data.approval.id}`, { method: 'POST', cookie, body: { decision: 'approve', approverName: 'Office' } });

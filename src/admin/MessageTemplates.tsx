@@ -61,7 +61,7 @@ function TemplateEditor({ field, value, onChange, emailFormat = 'plain' }: { fie
     requestAnimationFrame(() => { element?.focus(); element?.setSelectionRange(next.caret, next.caret); });
   };
   return <div className="space-y-3 rounded-2xl border border-slate-200 p-4">
-    <Field label={field.label} hint={`${htmlMode ? 'HTML mode: unsupported elements, attributes and styles are removed. External images and active content are not supported.' : 'Plain text only.'} Blank uses the built-in default. Maximum ${field.maxLength} characters.`}>
+    <Field label={field.label} hint={<>{`${htmlMode ? 'HTML mode: unsupported elements, attributes and styles are removed. External images and active content are not supported.' : 'Plain text only.'} Blank uses the built-in default. Maximum ${field.maxLength} characters.`}{field.key === 'ownerBookingSms' && <span className="block mt-1">Start with "Custom-AIs ChatDaddy alert:" and end with "Reply STOP to opt out." to match the registered campaign.</span>}</>}>
       <textarea ref={editor} className={`${inputClass} min-h-24`} rows={field.subject ? 2 : 5} value={value} onChange={event => change(event.target.value)} aria-label={field.label} />
     </Field>
     <div className="flex flex-wrap items-end gap-2"><Field label={`Variable for ${field.label}`}><select className={inputClass} value={variable} onChange={event => setVariable(event.target.value)}>{variables.map((item: any) => <option key={item.key} value={item.key}>{item.label} — {`{{${item.key}}}`}</option>)}</select></Field><button type="button" className={secondaryButton} onClick={insert}>Insert at cursor</button><button type="button" className={secondaryButton} onClick={() => change('')} disabled={!value}>Reset to default</button></div>

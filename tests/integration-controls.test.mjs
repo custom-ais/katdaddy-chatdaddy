@@ -78,3 +78,22 @@ test('email defaults do not create a provider and email method/transport gates s
   assert.equal(await controls.enabled('verification'),true);assert.equal(calls,2);
   assert.ok(validateConfig({...config,integrations:{...config.integrations,email:'false'}}).some(x=>/email/.test(x)));
 });
+
+test('SMS dispatch guard runs after the provider integration read and blocks late revocation',async()=>{
+ let revoked=false,calls=0,checks=0;const events=[];
+ const controls=createIntegrationControls({store:{config:async()=>{events.push('config');revoked=true;return withConfigDefaults({});}}});
+ const options={beforeSend:async()=>{events.push('guard');checks++;if(revoked)throw new Error('Synthetic owner consent revoked');}};
+ const twilio=controlProviders({controls,twilio:{sendSms:async()=>{calls++;}}}).twilio;
+ await assert.rejects(twilio.sendSms('+16235550100','Synthetic owner alert',options),/consent revoked/);
+ assert.deepEqual(events,['config','guard']);assert.equal(calls,0);assert.equal(checks,1);
+});
+
+test('transport guard runs after integration reads and is never passed to actual fetch',async()=>{
+ const events=[];let revoked=false,calls=0;
+ const controls=createIntegrationControls({store:{config:async()=>{events.push('config');return withConfigDefaults({});}}});
+ const beforeSend=async()=>{events.push('guard');if(revoked)throw new Error('Synthetic owner consent revoked');};
+ const init={method:'POST',body:'synthetic'};
+ const guarded=controls.fetchFor('sms',async(...args)=>{events.push('fetch');calls++;assert.deepEqual(args,['https://example.test/messages',init]);return 'sent';});
+ assert.equal(await guarded('https://example.test/messages',init,beforeSend),'sent');assert.deepEqual(events,['config','guard','fetch']);
+ revoked=true;await assert.rejects(guarded('https://example.test/messages',init,beforeSend),/consent revoked/);assert.equal(calls,1);
+});

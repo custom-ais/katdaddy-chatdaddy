@@ -17,16 +17,17 @@ export function createTwilio({ env = process.env, fetchImpl = fetch } = {}) {
   // This is an operator attestation, not a claim that an API key proves sender approval.
   const messagingConfigured = credentials && isSid(messaging, "MG") && env.TWILIO_SMS_SENDER_APPROVED === "true";
 
-  async function post(url, values) {
+  async function post(url, values, beforeSend) {
     let response;
     try {
+      await beforeSend?.();
       response = await fetchImpl(url, {
         method: "POST",
         headers: { Authorization: `Basic ${Buffer.from(`${key}:${secret}`).toString("base64")}`, "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
         body: new URLSearchParams(values).toString(),
         signal: AbortSignal.timeout(10_000),
         redirect: "error",
-      });
+      }, beforeSend);
     } catch {
       // Never retry an uncertain send; never expose raw errors, URLs or credentials.
       throw error("TWILIO_UNAVAILABLE", "The messaging provider could not be reached. Please try again later.");
@@ -55,10 +56,10 @@ export function createTwilio({ env = process.env, fetchImpl = fetch } = {}) {
     return { sid, status: result.status };
   }
 
-  async function sendSms(to, message) {
+  async function sendSms(to, message, { beforeSend } = {}) {
     if (!messagingConfigured) throw error("TWILIO_NOT_CONFIGURED", "An approved SMS sender is not configured.");
     if (!phone(to) || typeof message !== "string" || !message.trim() || message.length > 1600) throw error("INVALID_SMS", "A valid recipient and message are required.");
-    const result = await post(`https://api.twilio.com/2010-04-01/Accounts/${account}/Messages.json`, { To: to, MessagingServiceSid: messaging, Body: message });
+    const result = await post(`https://api.twilio.com/2010-04-01/Accounts/${account}/Messages.json`, { To: to, MessagingServiceSid: messaging, Body: message }, beforeSend);
     if (!isSid(result.sid, "SM") || !["accepted", "queued", "sending", "sent", "delivered"].includes(result.status)) throw error("TWILIO_BAD_RESPONSE", "The SMS request was not accepted.");
     return { messageId: result.sid, status: result.status };
   }

@@ -1,4 +1,5 @@
 import { createOwnerConsent } from './owner-consent.mjs';
+import { notifyOwnerError } from './owner-error-notification.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createAdminAuth } from './admin-auth.mjs';
 import { requireAdminRoute, applyConfigPatch, projectSnapshot, projectAdminResponse, projectPrincipal } from './admin-authorization.mjs';
@@ -130,13 +131,16 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
   const verifyService = createVerification({ store, twilio, clock, fail });
   const verificationOn = (c) => useTwilioVerify || c.requirePhoneVerification !== false;
   const useTwilioSms = env.BOOKING_SMS_PROVIDER === 'twilio';
+  const ownerAlertsOnly = env.SMS_OWNER_ALERTS_ONLY === 'true';
   const useSendGrid = env.BOOKING_EMAIL_PROVIDER === 'sendgrid';
   const enabled = (c, name) => c.integrations?.[name] !== false;
   const emailReady = (c) => enabled(c, 'email') && useSendGrid && Boolean(sendgrid?.configured);
   const smsReady = (c) => enabled(c, 'sms') && useTwilioSms && Boolean(twilio?.messagingConfigured);
-  const sendSms = async (_contactId, phone, text) => {
+  const sendSms = async (_contactId, phone, text, beforeSend, purpose = 'other') => {
+    if (ownerAlertsOnly && purpose !== 'owner') throw new Error('sms_scope_owner_alerts_only');
     if (!smsReady(await store.config())) throw new Error('Appointment texting is disabled or an approved Twilio sender is not configured.');
-    return twilio.sendSms(phone, text);
+    await beforeSend?.();
+    return twilio.sendSms(phone, text, { beforeSend });
   };
   const deliverEmail = async (kind, id, to, message) => {
     const c = await store.config();
@@ -161,11 +165,20 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     try {
       if(!await ownerConsent.allows(config.bookingOwnerSmsPhone))return {status:'skipped',reason:'owner_consent_required'};
       return await notifyBookingOwner({ store, appointment, config, clock, provider: 'Twilio', sendSms: async (phone, text) => {
-        const latest=await store.config();
-        if(latest.bookingOwnerSmsEnabled!==true||normalizePhone(latest.bookingOwnerSmsPhone)!==normalizePhone(phone)||!await ownerConsent.allows(phone))throw new Error('Owner SMS consent is revoked or does not match this recipient.');
-        return sendSms(null, phone, text);
+        const beforeSend = async () => {
+          const latest=await store.config();
+          if(latest.bookingOwnerSmsEnabled!==true||!smsReady(latest)||normalizePhone(latest.bookingOwnerSmsPhone)!==normalizePhone(phone)||!await ownerConsent.allows(phone))throw new Error('Owner SMS consent is revoked or does not match this recipient.');
+        };
+        await beforeSend();
+        return sendSms(null, phone, text, beforeSend, 'owner');
       } });
     } catch { return { status: 'failed', reason: 'notification_unavailable' }; }
+  };
+  const notifyOwnerProblem = async (kind, appointment) => {
+    try {
+      return await notifyOwnerError({ store, kind, details: { appointmentId: appointment.id, at: clock() },
+        ownerConsent, smsReady, sendSms: (phone, text, options) => sendSms(null, phone, text, options?.beforeSend, 'owner'), provider: 'Twilio', env, clock });
+    } catch { return { status: 'skipped', reason: 'notification_unavailable' }; }
   };
   const publicOrigin = (env.PUBLIC_ORIGIN || env.NEXT_PUBLIC_APP_URL || env.APP_URL || "").replace(/\/$/, "");
   // ChatDaddy's existing admin password works as the dashboard password.
@@ -262,7 +275,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       smartChat: aiReady(c),
       phoneVerification: verificationOn(c),
       verificationChannels: useTwilioVerify ? ['sms', 'email'] : [],
-      textMessages: smsReady(c) && c.smsConfirmations !== false, // off: no SMS consent question and no texts to customers
+      textMessages: !ownerAlertsOnly && smsReady(c) && c.smsConfirmations !== false, // off: no SMS consent question and no texts to customers
       approverName: c.approver?.name || "",
       // Optional extras the customer can tick on the details form.
       addOns: [["fogging", "fogging"], ["toolRetrieval", "tool"]].flatMap(([key, variant]) => {
@@ -485,7 +498,11 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     try { c=await store.config(); } catch { return {...result, ...(appt.notifications || {}), reason:'configuration_unavailable'}; }
     try {
       const current=await store.config();
-      const smsEligible=appt.status==='confirmed' && current.smsConfirmations===true && smsReady(current) && appt.smsConsent===true && Boolean(appt.phone) && !['sent','accepted','failed','failed_or_uncertain','rejected','attempting'].includes(appt.notifications?.sms);
+      if (ownerAlertsOnly) {
+        result.smsReason = 'sms_scope_owner_alerts_only';
+        await store.log('notification.skipped', { appointmentId: appt.id, channel: 'sms', reason: result.smsReason }).catch(() => {});
+      } else {
+      const smsEligible=!ownerAlertsOnly && appt.status==='confirmed' && current.smsConfirmations===true && smsReady(current) && appt.smsConsent===true && Boolean(appt.phone) && !['sent','accepted','failed','failed_or_uncertain','rejected','attempting'].includes(appt.notifications?.sms);
       const delivery=await deliverConfirmationSmsOnce({store,appointment:appt,enabled:current.smsConfirmations===true,configured:smsReady(current),message:smsEligible ? confirmationSms(appt,current) : '',clock,sendSms:async(phone,text)=>{
         if((await store.config()).smsConfirmations!==true)throw new Error('Customer confirmation texts are disabled.');
         return sendSms(null,phone,text);
@@ -495,6 +512,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       if(state.messageId)result.smsMessageId=state.messageId;
       if(state.reason)result.smsReason=state.reason;
       if(delivery.status==='already_attempted')result.smsAlreadyAttempted=true;
+      }
     }catch{result.sms='failed_or_uncertain';result.smsDelivery='not_confirmed';}
     const priorEmail=appt.notifications?.email;
     if(appt.status==='confirmed' && ['sent','accepted','failed','failed_or_uncertain','rejected','attempting'].includes(priorEmail)) {
@@ -554,13 +572,17 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
   async function notifyApprover(a, c, origin = publicOrigin) {
     const out = { sms: "skipped", email: "skipped" };
     const ap = c.approver || {};
-    if ((!smsReady(c) || !ap.phone) && (!emailReady(c) || !ap.email)) {
+    if (ownerAlertsOnly && ap.phone) {
+      out.smsReason = 'sms_scope_owner_alerts_only';
+      await store.log('notification.skipped', { approvalId: a.id, channel: 'sms', reason: out.smsReason }).catch(() => {});
+    }
+    if ((ownerAlertsOnly || !smsReady(c) || !ap.phone) && (!emailReady(c) || !ap.email)) {
       await store.log("notification.skipped", { approvalId: a.id, reason: "not_configured" }, { sessionId: a.session?.slice(0, 16) || "", level: "warning" }).catch((error) => console.error("[activity] notification log", error.message));
       return { ...out, reason: "not_configured" };
     }
     const link = `${origin || ""}/admin?approval=${encodeURIComponent(a.id)}`;
     const text = approvalRequestText(a, link);
-    if (ap.phone && smsReady(c)) {
+    if (!ownerAlertsOnly && ap.phone && smsReady(c)) {
       out.sms = await sendSms(null, normalizePhone(ap.phone), text).then(async (response) => {
         out.smsMessageId = response?.messageId || response?.id || null;
         await store.log("notification.accepted", { approvalId: a.id, channel: "sms", provider: "Twilio", recipient: ap.name, messageId: out.smsMessageId, delivery: "not_confirmed" }, { sessionId: a.session?.slice(0, 16) || "" }).catch((error) => console.error("[activity] notification log", error.message));
@@ -662,6 +684,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           } else {
             await store.retireAppointment(appt, "failed");
             await store.audit("booking.jobber_failed", appt.id);
+            if (!approval) await notifyOwnerProblem('booking_jobber_failed', appt);
             fail(502, "We couldn't finish scheduling this visit. It is not confirmed — please try again or send the team a request.");
           }
         }
@@ -679,6 +702,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     } finally {
       await store.unlock(`slot:${day}`);
     }
+    if (pending && !approval) await notifyOwnerProblem('booking_action_needed', appt);
     if (!pending) {
       await notifyOwner(appt, c);
       appt.notifications = await sendConfirmations(appt, c);
@@ -796,7 +820,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         const place = data.pending === "serviceAddress" || data.stage === "out_of_area" ? await lookupPlace(body.message, c) : null;
         await record(req, "conversation.message", { role: "user", text: /^\s*\d{4,8}\s*$/.test(body.message) ? "[verification code omitted]" : body.message, stage: data.stage });
         const result = await chatTurn({ message: body.message, session: data, config: c, faqs: await store.get("faqs"), assistant: aiReady(c) ? selectedAssistant(c) : null, place });
-        const note = await captureAvailabilityRequest({ store, sendStaffSms: useTwilioSms ? async ({ phone, text }) => sendSms(null, phone, text) : null, config: c, data: result.session, message: body.message, session: token, now: clock(), origin: publicOrigin, log: (kind, details, level) => record(req, kind, details, level) });
+        const note = await captureAvailabilityRequest({ store, sendStaffSms: useTwilioSms && !ownerAlertsOnly ? async ({ phone, text }) => sendSms(null, phone, text) : null, config: c, data: result.session, message: body.message, session: token, now: clock(), origin: publicOrigin, log: (kind, details, level) => record(req, kind, details, level) });
         if (note) {
           result.reply = `${note}\n\n${result.reply}`;
           const last = result.session.history.at(-1);
@@ -1302,6 +1326,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         if (method === "PATCH" && pathname === "/api/admin/config") {
           const body = await readBody(req), old = await store.config();
           if (body.version !== old.version) fail(409, "Settings were changed elsewhere. Refresh before saving.");
+          if (req.adminPrincipal.role === 'legacy' && 'ownerErrorSmsEnabled' in body && body.ownerErrorSmsEnabled !== old.ownerErrorSmsEnabled) fail(403, 'Master Admin access is required to change owner service-error alerts.');
           const next = req.adminPrincipal.role === 'legacy' ? { ...old } : applyConfigPatch(req.adminPrincipal, body, old);
           if (req.adminPrincipal.role === 'legacy') for (const key of Object.keys(DEFAULT_CONFIG)) if (key in body && key !== "version") {
             const value = body[key], previous = old[key];

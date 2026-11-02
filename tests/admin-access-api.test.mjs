@@ -61,15 +61,30 @@ for(const rest of [false,true]){
   assert.equal(h.twilio.calls.length,0);assert.equal(h.jobber.jobs.length,0);
  });
 }
-test('HTTP: named master consent records actor and remains held; foreign origins and public bootstrap issuance fail',async t=>{
+test('HTTP: named master consent records actor without sending; foreign origins and public bootstrap issuance fail',async t=>{
  const h=await named(t);const member=await h.invite('limited@example.test',['settings.booking.view']);
  const body={action:'grant',revision:0,phone:'6235550100',consent:true,disclosureVersion:OWNER_SMS_CONSENT_VERSION,idempotencyKey:randomUUID()};
  assert.equal((await h.call('/api/admin/owner-sms-consent',{method:'POST',cookie:member.cookie,body})).status,403);
  assert.equal((await h.call('/api/admin/owner-sms-consent',{method:'POST',cookie:h.master,body,headers:{origin:'https://foreign.example'}})).status,403);
  const saved=await h.call('/api/admin/owner-sms-consent',{method:'POST',cookie:h.master,body});
- assert.equal(saved.status,200);assert.equal(saved.data.receipt.actor.type,'authenticated_admin_user');assert.equal(saved.data.sendingAuthorized,false);assert.equal(saved.data.effectiveActive,false);
+ assert.equal(saved.status,200);assert.equal(saved.data.receipt.actor.type,'authenticated_admin_user');assert.equal(Object.hasOwn(saved.data,'sendingAuthorized'),false);assert.equal(Object.hasOwn(saved.data.receipt,'sendingAuthorized'),false);assert.equal(Object.hasOwn(saved.data,'readiness'),false);assert.equal(saved.data.currentVersion,true);assert.equal(saved.data.effectiveActive,true);
  assert.equal((await h.call('/api/admin/owner-bootstrap/prepare',{method:'POST',cookie:h.master,body:{email:'intruder@example.test'}})).status,403);
  assert.equal((await h.call('/api/admin/activate',{method:'POST',cookie:h.master,body:{}})).status,403);
+ assert.equal(h.twilio.calls.length,0);
+});
+for(const rest of [false,true])test(`${rest?'REST RPC':'PGlite'} HTTP: owner error alerts stay Master-only even with forged member permission claims`,async t=>{
+ const h=await named(t,rest);const permissions=['settings.booking.view','settings.booking.manage'];
+ const member=await h.invite('booking-editor@example.test',permissions);
+ const before=await h.store.config();assert.equal(before.ownerErrorSmsEnabled,false);
+ const patch=()=>h.call('/api/admin/config',{method:'PATCH',cookie:member.cookie,body:{version:before.version,ownerErrorSmsEnabled:true}});
+ assert.equal((await patch()).status,403);assert.deepEqual(await h.store.config(),before);
+ // Simulate a forged stored claim without changing the member role or session.
+ await h.db.query('update bob.auth_users set permissions=$1::jsonb where id=$2',[JSON.stringify([...permissions,'ownerSms.manage']),member.principal.id]);
+ const viewed=await h.call('/api/admin/data',{cookie:member.cookie});assert.equal(viewed.status,200);assert.equal(viewed.data.access.role,'member');assert.equal(viewed.data.access.permissions.includes('ownerSms.manage'),false);
+ assert.equal((await patch()).status,403);assert.deepEqual(await h.store.config(),before,'forged claims must not persist protected config changes');
+ assert.equal((await h.call('/api/admin/owner-sms-consent',{cookie:member.cookie})).status,403);
+ const accepted=await h.call('/api/admin/config',{method:'PATCH',cookie:h.master,body:{version:before.version,ownerErrorSmsEnabled:true}});
+ assert.equal(accepted.status,200,JSON.stringify(accepted.data));assert.equal((await h.store.config()).ownerErrorSmsEnabled,true);
  assert.equal(h.twilio.calls.length,0);
 });
 test('HTTP: named write rechecks revoked session after body awaits and before persistence',async t=>{

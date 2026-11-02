@@ -5,6 +5,7 @@ import {createRequire} from 'node:module';
 import ts from 'typescript';
 import React from 'react';
 import {renderToStaticMarkup} from 'react-dom/server';
+import {parseDocument} from 'htmlparser2';
 import * as templates from '../shared/message-templates.mjs';
 const require=createRequire(import.meta.url);
 const source=await readFile(new URL('../src/admin/MessageTemplates.tsx',import.meta.url),'utf8');
@@ -41,6 +42,14 @@ test('sample preview is escaped plaintext, validates variables, and blank uses e
  assert.match(source,/renderMessageTemplate\(value, samples, field\)/);
  const smsField=templates.MESSAGE_TEMPLATE_FIELDS.find(f=>f.key==='confirmationSms');
  assert.match(renderToStaticMarkup(React.createElement(out.TemplateEditor,{field:smsField,value:'Hi {{customer_name}}',onChange:()=>{}})),/Hi Alex Example Reply STOP to opt out\./);
+});
+test('owner SMS campaign hint is exact and does not appear on customer templates or for a restricted user',()=>{
+ const hint='Start with "Custom-AIs ChatDaddy alert:" and end with "Reply STOP to opt out." to match the registered campaign.';
+ const text=node=>node.type==='text'?node.data:(node.children||[]).map(text).join('');
+ const renderField=key=>text(parseDocument(renderToStaticMarkup(React.createElement(out.TemplateEditor,{field:templates.MESSAGE_TEMPLATE_FIELDS.find(field=>field.key===key),value:'',onChange(){}}))));
+ assert.ok(renderField('ownerBookingSms').includes(hint));assert.equal(renderField('confirmationSms').includes(hint),false);
+ const hidden=renderToStaticMarkup(out.MessageTemplates({config:{messageTemplates:{}},integrations:{},allowOwner:false,allowMessaging:true,onPatch(){}}));
+ assert.equal(text(parseDocument(hidden)).includes(hint),false);assert.doesNotMatch(hidden,/Owner booking SMS/);
 });
 test('Templates uses mounted shared Settings drafts and preserves Client Hub independent saving',async()=>{
  const settings=await readFile(new URL('../src/admin/SettingsPage.tsx',import.meta.url),'utf8');

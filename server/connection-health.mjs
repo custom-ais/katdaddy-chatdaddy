@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const NAMES=['verification','sms','email','assistant','database','jobber'];
 /** Observes real operations; it never manufactures a send or paid model request. */
-export function createConnectionHealth({store,env={},clock=Date.now,maxAgeMs=15*60_000,jobber}) {
+export function createConnectionHealth({store,env={},clock=Date.now,maxAgeMs=15*60_000,jobber,onError}) {
   const revision=(name,c)=>hash(name==='verification'?[env.TWILIO_ACCOUNT_SID,env.TWILIO_API_KEY_SID,env.TWILIO_API_KEY_SECRET,env.TWILIO_VERIFY_SERVICE_SID,env.BOOKING_VERIFICATION_PROVIDER]:name==='sms'?[env.TWILIO_ACCOUNT_SID,env.TWILIO_API_KEY_SID,env.TWILIO_API_KEY_SECRET,env.TWILIO_MESSAGING_SERVICE_SID,env.BOOKING_SMS_PROVIDER,env.TWILIO_SMS_SENDER_APPROVED]:name==='email'?[env.SENDGRID_API_KEY,env.SENDGRID_FROM_EMAIL,env.SENDGRID_SENDER_VERIFIED,env.BOOKING_EMAIL_PROVIDER]:name==='assistant'?[c.aiProvider||'gemini',(c.aiProvider||'gemini')==='openai'?env.OPENAI_API_KEY:env.GEMINI_API_KEY,(c.aiProvider||'gemini')==='openai'?env.OPENAI_MODEL:env.GEMINI_MODEL]:['database',store.db?.kind,env.DATABASE_URL||env.POSTGRES_URL||env.SUPABASE_DB_URL||'',env.SUPABASE_URL||env.NEXT_PUBLIC_SUPABASE_URL||'',env.SUPABASE_SERVICE_ROLE_KEY||'',env.BOB_PGLITE_DIR||'']);
   const enabled=(name,c)=>name==='database'||(name==='assistant'?c.aiAssistant!==false:c.integrations?.[name]!==false);
   const key=name=>`connection-observation:v1:${name}`;
@@ -12,6 +12,9 @@ export function createConnectionHealth({store,env={},clock=Date.now,maxAgeMs=15*
       const now=await context(name);if(!now.enabled||before.revision!==now.revision)return;
       const prior=await store.kvGet(key(name));const at=clock();
       await store.kvSet(key(name),{revision:now.revision,status,operation,meaning,checkedAt:at,lastSuccessAt:status==='healthy'?at:prior?.revision===now.revision?prior.lastSuccessAt||null:null});
+      if(status==='error'&&!(prior?.revision===now.revision&&prior.status==='error')){
+        try{await onError?.({name,operation,at});}catch{}
+      }
     }catch{} // Observability cannot undo a booking or successful provider request.
   }
   function observe(name,operation,fn,{meaning='response_received',valid=()=>true,provider}={}){

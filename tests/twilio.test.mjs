@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createTwilio } from "../server/twilio.mjs";
+import { createIntegrationControls } from "../server/integration-controls.mjs";
+import { createOwnerConsent } from "../server/owner-consent.mjs";
+import { OWNER_SMS_CONSENT_VERSION } from "../shared/owner-sms-consent.mjs";
 
 const sid = (prefix, digit = "a") => prefix + digit.repeat(32);
 const env = { TWILIO_ACCOUNT_SID: sid("AC"), TWILIO_API_KEY_SID: sid("SK"), TWILIO_API_KEY_SECRET: "fake-test-secret", TWILIO_VERIFY_SERVICE_SID: sid("VA"), TWILIO_MESSAGING_SERVICE_SID: sid("MG"), TWILIO_SMS_SENDER_APPROVED: "true" };
@@ -92,4 +95,27 @@ test("provider and network errors are sanitized and never automatically retried"
     });
     assert.equal(count, 1);
   }
+});
+
+test('SMS dispatch guard is checked immediately before transport and failures never call or retry fetch',async()=>{
+ let calls=0,checks=0;
+ const twilio=createTwilio({env,fetchImpl:async()=>{calls++;return reply({sid:sid('SM'),status:'queued'});}});
+ await assert.rejects(twilio.sendSms('+16235550100','Synthetic owner alert',{beforeSend:async()=>{checks++;throw new Error('private guard details');}}),{code:'TWILIO_UNAVAILABLE'});
+ assert.equal(checks,1);assert.equal(calls,0);
+});
+
+test('real SMS transport observes consent revoked during the final integration read without forwarding callbacks to fetch',async()=>{
+ const config={bookingOwnerSmsPhone:'+16235550100'};
+ let receipt={active:true,phone:config.bookingOwnerSmsPhone,disclosureVersion:OWNER_SMS_CONSENT_VERSION};
+ const consent=createOwnerConsent({store:{config:async()=>config,kvGet:async()=>receipt}});
+ let checks=0,fetches=0,integrationReads=0,revokeAtRead=true;
+ const beforeSend=async()=>{checks++;if(!await consent.allows(config.bookingOwnerSmsPhone))throw new Error('Synthetic owner consent revoked');};
+ const controls=createIntegrationControls({store:{config:async()=>{integrationReads++;if(revokeAtRead)receipt={...receipt,active:false};return config;}}});
+ const fetchImpl=controls.fetchFor('sms',async(...args)=>{fetches++;assert.equal(args.length,2);assert.equal(typeof args[0],'string');assert.equal(Object.hasOwn(args[1],'beforeSend'),false);return reply({sid:sid('SM'),status:'queued'});});
+ const twilio=createTwilio({env,fetchImpl});
+ await assert.rejects(twilio.sendSms(config.bookingOwnerSmsPhone,'Synthetic owner alert',{beforeSend}),{code:'TWILIO_UNAVAILABLE'});
+ assert.equal(integrationReads,1);assert.equal(checks,2);assert.equal(fetches,0);assert.equal(receipt.active,false);
+ revokeAtRead=false;receipt={...receipt,active:true};
+ assert.deepEqual(await twilio.sendSms(config.bookingOwnerSmsPhone,'Synthetic owner alert',{beforeSend}),{messageId:sid('SM'),status:'queued'});
+ assert.equal(fetches,1);assert.equal(integrationReads,2);assert.equal(checks,4);
 });
