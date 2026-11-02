@@ -175,7 +175,7 @@ SERVICES:
 ${svc}
 ADD-ONS:
 ${addons}
-Gas dryers: the Gas Appliance Safety Procedure is added automatically to cleaning visits (not Express, not an inspection or assessment). A fixed pedestal and a stacked washer/dryer add their setup fees to Premium 1-2-3 and Ultimate Protection.
+Gas dryers: the Gas Appliance Safety Procedure is added automatically to cleaning visits (not Express, not an inspection or assessment). A fixed pedestal and a stacked washer/dryer add their setup fees to Premium 1-2-3 and Ultimate Protection. Bring up a gas, pedestal or stacked fee only when the customer has said they have that setup (see known home details) or asks about it.
 ASSESSMENT: ${config.assessmentProcess}${priced ? ` Price ${money(config.assessmentPriceCents)}.` : ""} Repairs, parts and replacement are quoted separately.
 CLEANING + ASSESSMENT: suggested when a customer wants a cleaning but thinks something may be broken. It is the Premium 1-2-3 cleaning plus an assessment of the issue in one visit${priced ? `: ${bundleTotals(config)}` : ""}. Gas dryers and stacked or pedestal setups add their usual fee. If the customer books just a cleaning and the technician finds a problem: when the damage prevents the cleaning, the visit becomes an assessment (the standalone assessment price) instead of the cleaning; when the cleaning can still be done, the customer can add an assessment for an upgrade, reroute, or minor damage at the add-on price${priced ? ` (${money(bundleAssessmentCents(config))})` : ""}. Repairs are quoted separately.
 No dryer installed → the visit is Express Vent Cleaning (vent only).

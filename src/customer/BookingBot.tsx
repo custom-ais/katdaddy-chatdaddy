@@ -126,24 +126,22 @@ function AirflowGauge({ a }: { a: { score: number; level: string; headline: stri
   );
 }
 
-/** What a clear vent could save: an estimate from the customer's drying cycles and published averages. */
-function SavingsTile({ s }: { s: { hoursPerWeek: number; hoursPerYear: number; dollarsPerYear: number | null; gas: boolean; basis: string } }) {
-  const stat = (icon: React.ReactNode, value: string, unit: string, label: string) => (
-    <div className="rounded-xl bg-white border border-emerald-100 p-3">
-      <div className="flex items-center gap-1.5 text-emerald-700">{icon}<span className="text-[11px] font-extrabold uppercase tracking-wide">{label}</span></div>
-      <p className="mt-1.5 font-display text-2xl sm:text-[28px] font-extrabold text-slate-900 leading-none">{value}</p>
+/** What a clear vent could save: two numbers, estimated from the customer's drying cycles and typical use. */
+function SavingsTile({ s }: { s: { hoursPerWeek: number; dollarsPerYear: number | null; basis: string } }) {
+  const stat = (value: string, unit: string) => (
+    <div className="rounded-xl bg-white border border-emerald-100 px-3 py-2.5">
+      <p className="font-display text-2xl font-extrabold text-slate-900 leading-none">{value}</p>
       <p className="mt-1 text-xs font-bold text-slate-500">{unit}</p>
     </div>
   );
   return (
-    <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-4 sm:p-5">
-      <p className="font-extrabold text-emerald-900 text-sm sm:text-[15px]">What a clear vent could save you</p>
-      <div className={`mt-3 grid gap-2.5 ${s.dollarsPerYear != null ? 'grid-cols-2' : 'grid-cols-1'}`}>
-        {s.dollarsPerYear != null && stat(<Zap size={14} aria-hidden="true" />, `$${s.dollarsPerYear}`, 'a year', 'Electricity')}
-        {stat(<Timer size={14} aria-hidden="true" />, `${s.hoursPerWeek} hrs`, 'a week', 'Drying time')}
+    <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-4" title={s.basis}>
+      <p className="font-extrabold text-emerald-900 text-sm">A clear vent could save you</p>
+      <div className={`mt-2.5 grid gap-2.5 ${s.dollarsPerYear != null ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        {s.dollarsPerYear != null && stat(`$${s.dollarsPerYear}`, 'a year')}
+        {stat(`${s.hoursPerWeek} hrs`, 'of drying a week')}
       </div>
-      <p className="text-sm text-emerald-900 mt-3 leading-relaxed">If cleaning brings each load back to one cycle, that adds up to about {s.hoursPerYear} fewer hours of drying a year{s.gas ? ', plus the gas those extra cycles burn' : ''}.</p>
-      <p className="text-xs text-emerald-800/80 mt-1.5 leading-relaxed">{s.basis}</p>
+      <p className="text-[11px] text-emerald-800/70 mt-2">Estimate based on typical use.</p>
     </div>
   );
 }

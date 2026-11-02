@@ -561,8 +561,8 @@ export function savingsEstimate(p = {}, a = SAVINGS_AVERAGES) {
   const dollarsPerYear = gas ? null : Math.round((cyclesPerWeek * 52 * a.kwhPerCycle * a.centsPerKwh) / 100 / 5) * 5;
   const hours = `${hoursPerWeek} hour${hoursPerWeek === 1 ? "" : "s"}`;
   const sentence = gas
-    ? `If cleaning brings each load back to one cycle, that's an estimated ${hours} less drying time a week (about ${hoursPerYear} hours a year), plus the gas those extra cycles burn.`
-    : `If cleaning brings each load back to one cycle, that's an estimated $${dollarsPerYear} a year in electricity and ${hours} less drying time a week.`;
+    ? `A clear vent could save you about ${hours} of drying a week.`
+    : `A clear vent could save you about $${dollarsPerYear} a year and ${hours} of drying a week.`;
   const basis =
     `Estimate based on averages: ${a.loadsPerWeek} loads a week and ${a.minutesPerCycle}-minute cycles` +
     (gas ? "." : `, about ${a.kwhPerCycle} kWh per cycle at ${a.centsPerKwh}¢ per kWh (typical Arizona rate)${p.power === "Electric" ? "" : ", for an electric dryer"}.`) +
@@ -874,8 +874,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   };
   const optionsFor = (key) => {
     const q = QUESTIONS[key];
-    if (key === "power" && s.intent !== "repair") return q.options.map((o) => (o === "Gas Dryer" ? `Gas Dryer${feeLabel("gas")}` : o));
-    if (key === "mount" && s.intent === "cleaning") return q.options.map((o) => (o === "Fixed Pedestal" ? `Fixed Pedestal${feeLabel("pedestal")}` : o === "Stacked Washer/Dryer" ? `Stacked Washer/Dryer${feeLabel("stacked")}` : o));
+    // Setup fees aren't shown on the buttons: BOB explains a fee when the customer says it applies.
     return q.options;
   };
   const ask = (key) => {
@@ -1051,10 +1050,10 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       .map((x) => "• " + x.trim().replace(/^./, (c) => c.toUpperCase()))
       .join("\n") + (noDryer ? "\n\nWith no dryer installed, the time for the lint screen and dryer cavity goes into the vent line." : "") + (fine.length ? `\n\n${finePrint}` : "");
     const extras = q.lineItems.slice(1);
-    const covers = extras.filter((l) => SETUP_KEY[l.name]).map((l) => `• **${l.name}:** ${SETUP_WHY[SETUP_KEY[l.name]].replace(/^./, (c) => c.toUpperCase())}.`);
+    // Each setup fee was explained when the customer mentioned it, so the summary just lists it.
     const total = priced
       ? extras.length
-        ? `\n\n${q.lineItems.map((l) => `${l.name}: ${money(l.cents)}`).join("\n")}\n**Total: ${money(q.priceCents)}**${covers.length ? `\n\n**What the extras cover**\n${covers.join("\n")}` : ""}`
+        ? `\n\n${q.lineItems.map((l) => `${l.name}: ${money(l.cents)}`).join("\n")}\n**Total: ${money(q.priceCents)}**`
         : ""
       : `\n\n${unverified}`;
     const note = q.priceNote && priced ? `\n\n${q.priceNote}` : "";
@@ -1531,7 +1530,10 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     let answer;
     if (s.route === "bundle" || (s.offered && !s.bundleDeclined)) {
       const price = priced ? bundlePrice() : "";
-      answer = price ? `The **Cleaning + Assessment** is **${price}**: our Premium 1-2-3 cleaning plus an assessment of the issue in one visit. Gas dryers and stacked or pedestal setups add their usual fee. Repairs are quoted separately.` : unverified;
+      // A setup fee is mentioned only when the customer has that setup.
+      const setups = [s.property.power === "Gas" && "gas dryer", s.property.mount === "Stacked" && "stacked setup", s.property.mount === "Pedestal" && "pedestal setup"].filter(Boolean);
+      const setupFee = setups.length ? ` Your ${setups.join(" and ")} ${setups.length > 1 ? "add their" : "adds its"} usual fee.` : "";
+      answer = price ? `The **Cleaning + Assessment** is **${price}**: our Premium 1-2-3 cleaning plus an assessment of the issue in one visit.${setupFee} Repairs are quoted separately.` : unverified;
     }
     else if (s.intent === "repair" || /\b(?:repair|assessment)\b/.test(t)) {
       const process = bare ? "" : explain("assessment");

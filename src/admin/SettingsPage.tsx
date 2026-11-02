@@ -309,7 +309,7 @@ function Answers({ active = true }: { active?: boolean }) {
         <Modal title={faqs.some((f) => f.id === editing.id) ? 'Edit answer' : 'New answer'} onClose={() => setEditing(null)}>
           <form className="space-y-4" onSubmit={save}>
             <Field label="Question"><input className={inputClass} required value={editing.question} onChange={(e) => setEditing({ ...editing, question: e.target.value })} /></Field>
-            <Field label="Answer" hint="Don't include prices here — BOB quotes prices from Services and prices."><textarea rows={5} required className={inputClass} value={editing.answer} onChange={(e) => setEditing({ ...editing, answer: e.target.value })} /></Field>
+            <Field label="Answer" hint="Don't include prices here — BOB quotes prices from Services and prices."><textarea rows={Math.min(12, Math.max(5, Math.ceil(String(editing.answer || '').length / 80) + 1))} required className={inputClass} value={editing.answer} onChange={(e) => setEditing({ ...editing, answer: e.target.value })} /></Field>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Category"><input className={inputClass} value={editing.category} onChange={(e) => setEditing({ ...editing, category: e.target.value })} /></Field>
               <Field label="Status"><select className={inputClass} value={editing.status || 'approved'} onChange={(e) => setEditing({ ...editing, status: e.target.value })}><option value="approved">Approved — customers see it</option><option value="draft">Draft — hidden</option></select></Field>

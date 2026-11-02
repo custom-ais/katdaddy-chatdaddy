@@ -170,7 +170,7 @@ test("the savings estimate follows the customer's drying cycles and published av
   assert.deepEqual([three.hoursPerWeek, three.hoursPerYear, three.dollarsPerYear], [7.5, 390, 195]);
   const gas = savingsEstimate({ symptoms: ["two"], power: "Gas" });
   assert.equal(gas.dollarsPerYear, null, "no dollar figure for gas");
-  assert.match(gas.sentence, /4 hours less drying time a week/);
+  assert.equal(gas.sentence, "A clear vent could save you about 4 hours of drying a week.");
   assert.doesNotMatch(gas.sentence + gas.basis, /\$/);
   assert.match(savingsEstimate({ symptoms: ["two"], power: "Not sure" }).basis, /for an electric dryer/);
   for (const p of [{ symptoms: ["normal"] }, { symptoms: ["overheat"] }, { symptoms: [] }, {}, { symptoms: ["three"], hasDryer: "No" }]) assert.equal(savingsEstimate(p), null, JSON.stringify(p));
@@ -181,10 +181,10 @@ test("the package offer shows the savings estimate when loads take extra cycles"
   const slow = offer("Takes about 2 cycles");
   assert.equal(slow.session.stage, "offer");
   assert.deepEqual([slow.card.savings.hoursPerWeek, slow.card.savings.dollarsPerYear], [4, 100]);
-  assert.match(slow.reply, /that's an estimated \$100 a year in electricity and 4 hours less drying time a week\./);
+  assert.match(slow.reply, /A clear vent could save you about \$100 a year and 4 hours of drying a week\./);
   const fine = offer("Dries in one normal cycle");
   assert.equal(fine.card.savings, undefined, "no savings claim when the dryer already dries in one cycle");
-  assert.doesNotMatch(fine.reply, /estimated \$/);
+  assert.doesNotMatch(fine.reply, /could save you/);
 });
 
 test("BOB's AI knows the savings estimate and may repeat its numbers", async () => {
@@ -197,4 +197,22 @@ test("BOB's AI knows the savings estimate and may repeat its numbers", async () 
   const assistant = createAssistant({ env: {}, generate: async (req) => { system = req.system; return { response: null }; } });
   await assistant.speak({ text: "how much would this save me", session: initialSession(), config, faqs: INITIAL_FAQS, next: "" });
   assert.match(system, /SAVINGS ESTIMATE .*about 2 cycles saves about 4 hours of drying a week and about \$100 a year in electricity; 3 or more cycles saves about 7\.5 hours a week and about \$195 a year\. .*give no dollar figure for gas/);
+});
+
+test("a setup fee comes up only when the customer has that setup", async () => {
+  const { refreshFaqs } = await import("../shared/faqs.mjs");
+  const bundleAnswer = (power) => run(["Dryer Vent Cleaning", "The vent also has damage.", "Cleaning + Assessment", "85326", "Have Dryer", "No", "1-Story Home", power, "how much is it?"]).reply;
+  const electric = bundleAnswer("Electric Dryer");
+  assert.match(electric, /The \*\*Cleaning \+ Assessment\*\* is \*\*\$239/);
+  assert.doesNotMatch(electric, /usual fee/);
+  assert.match(bundleAnswer("Gas Dryer"), /Your gas dryer adds its usual fee\./);
+  for (const id of ["faq-1", "faq-10", "faq-bundle"]) assert.doesNotMatch(INITIAL_FAQS.find((f) => f.id === id).answer, /\$49|\$20|\$45|usual fee/, id);
+  const before = "Premium 1-2-3 See-It-Clean is $179 for a 1-story home, $219 for a 2-story with first-floor laundry, and $199 with second-floor laundry. Ultimate Protection is $299, $339, and $319. A Dryer Vent Safety Inspection is $119, $139, and $129, and the fee applies toward approved repairs. Vent-only Express cleaning, for when no dryer is installed, starts at $149. Gas dryers add the $49 Gas Appliance Safety Procedure, a fixed pedestal adds $20, and a stacked washer and dryer adds $45.";
+  const [refreshed, edited] = refreshFaqs([{ id: "faq-1", question: "How much does it cost to get my dryer vent cleaned?", answer: before, keywords: [] }, { id: "faq-10", question: "Do you move the dryer?", answer: "The office's own words, $49.", keywords: [] }]);
+  assert.equal(refreshed.answer, INITIAL_FAQS.find((f) => f.id === "faq-1").answer, "the unedited default switches to the new wording");
+  assert.equal(edited.answer, "The office's own words, $49.", "an edited answer is left alone");
+  let system = "";
+  const assistant = createAssistant({ env: {}, generate: async (req) => { system = req.system; return { response: null }; } });
+  await assistant.speak({ text: "ok", session: initialSession(), config, faqs: INITIAL_FAQS, next: "" });
+  assert.match(system, /Bring up a gas, pedestal or stacked fee only when the customer has said they have that setup/);
 });
