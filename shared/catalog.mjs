@@ -36,7 +36,8 @@ export const SERVICE_CATALOG = [
   s("addon-fogging", "addon", "fogging", "Sanitation Fogging Add-On", "Antimicrobial fogging treatment", "Add-Ons", 79, 15),
   s("addon-gas", "addon", "gas", "Gas Appliance Safety Procedure", "Shut off the gas, safely disconnect and reconnect the dryer, and perform a gas leak test before leaving", "Add-Ons", 49, 15),
   s("addon-tool", "addon", "tool", "Tool Retrieval", "Foreign object removal from vent system", "Add-Ons", 69, 30),
-  s("addon-dryerflex", "addon", "dryerflex", "DryerFlex Transition Hose Upgrade", "Commercial-grade, crush-resistant DryerFlex aluminum transition hose that holds its full 4-inch airflow, professionally installed with airtight clamps", "Add-Ons", 79, 15),
+  s("addon-afterhours", "addon", "afterhours", "After-Hours Emergency Service", "On-call technician visit outside regular hours, charged in addition to the regular service price", "Add-Ons", 199, 0),
+  s("addon-dryerflex", "addon", "dryerflex", "DryerFlex Transition Hose Upgrade", "Commercial-grade, crush-resistant DryerFlex aluminum transition hose (UL 2158A listed) that holds its full 4-inch airflow, professionally installed with airtight clamps and backed by our 3-year warranty", "Add-Ons", 79, 15),
   s("addon-pedestal", "addon", "pedestal", "Fixed Pedestal Setup", "Extra labor for a dryer on a fixed pedestal: moving the raised dryer and pedestal out together without tipping, reaching the vent connection, and setting it back securely", "Add-Ons", 20, 10),
   s("addon-stacked", "addon", "stacked", "Stacked Washer/Dryer Setup", "Stacked washer and dryer moved with air sleds so the pair slides out safely and goes back into place", "Add-Ons", 45, 15),
   s("emergency", "emergency", "any", "Emergency Same-Day Clog Relief", "Urgent blockage removal, airflow restoration, live camera inspection during service, and airflow verification", "Emergency", 349, 75),
@@ -64,7 +65,11 @@ const APPLIANCE_FREE = new Set(["express", "inspection"]); // no dryer to discon
 // sanitizing fog save $20 (taken off the fog line, so there's never a negative line item).
 export const ADDON_PROMOS = Object.freeze({ dryerflex: Object.freeze({ wasCents: 9900 }) });
 export const ADDON_BUNDLE_SAVINGS_CENTS = 2000;
+// $20 off when the dryer was purchased or serviced in the last 90 days.
+export const RECENT_SERVICE_DISCOUNT_CENTS = 2000;
+export const RECENT_SERVICE_DISCOUNT = Object.freeze({ id: "discount-recent-service", name: "New or recently serviced dryer discount", description: "$20 off for a dryer purchased or serviced in the last 90 days." });
 export const NO_DRYERFLEX = new Set(["ultimate", "restoration", "express", "inspection"]);
+export const DRYERFLEX_URL = "https://www.dryerflex.com"; // the manufacturer's (InOvate) site
 // Setup surcharges (pedestal, stacked) apply to the core packages, per the assistant rules manual.
 const SETUP_FAMILIES = new Set(["premium", "ultimate", "postservice"]);
 

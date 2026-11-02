@@ -65,6 +65,17 @@ export function tokenStoreFor(store, table = "chatdaddy_jobber_tokens") {
   };
 }
 
+/** Discounts are negative lines in BOB's quote; Jobber gets them folded into the main service line. */
+export function foldDiscounts(items) {
+  const out = items.filter((i) => i.cents >= 0).map((i) => ({ ...i }));
+  const discounts = items.filter((i) => i.cents < 0);
+  if (!discounts.length || !out.length) return out.length ? out : items;
+  const main = out[0];
+  main.cents = Math.max(0, main.cents + discounts.reduce((n, d) => n + d.cents, 0));
+  main.description = [main.description, ...discounts.map((d) => `Includes ${d.name}: -$${(-d.cents / 100).toFixed(2).replace(/\.00$/, "")}.`)].filter(Boolean).join(" ");
+  return out;
+}
+
 export function createJobber({ store, env = process.env, fetchImpl = fetch, tokens: tokenStore = tokenStoreFor(store, env.JOBBER_TOKEN_TABLE || "chatdaddy_jobber_tokens") } = {}) {
   const cfg = {
     clientId: env.JOBBER_CLIENT_ID || "",
@@ -434,7 +445,7 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
           instructions: instructions || undefined,
           scheduling: { createVisits: false, notifyTeam: false },
           invoicing: { invoicingType: "FIXED_PRICE", invoicingSchedule: "ON_COMPLETION" },
-          lineItems: lineItems.map((i) => ({
+          lineItems: foldDiscounts(lineItems).map((i) => ({
             name: i.name,
             description: i.description || undefined,
             quantity: 1,

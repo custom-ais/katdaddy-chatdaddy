@@ -31,7 +31,7 @@ import { captureAvailabilityRequest } from "./availability-request.mjs";
 import { randomBytes, createHash, scryptSync, timingSafeEqual, createHmac } from "node:crypto";
 import {
   DEFAULT_CONFIG, INITIAL_FAQS, bookingQuote, travelFeeFor, validateContact,
-  validateConfig, normalizePhone, isBookable, BUNDLE_PRICE_CENTS, phoenixDate, areaFor, drivingAreaFor,
+  validateConfig, normalizePhone, isBookable, BUNDLE_PRICE_CENTS, phoenixDate, areaFor, drivingAreaFor, money,
 } from "../shared/domain.mjs";
 import { initialSession, WELCOME, detectSafety, turn } from "../shared/conversation.mjs";
 import { territoryFor, WEST_VALLEY_ZIPS } from "../shared/territory.mjs";
@@ -1172,7 +1172,26 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           smsConsent: body.smsConsent === true, status: "new", createdAt: new Date(clock()).toISOString(),
           route: data.route, safety: data.safety, concerns: [...(data.concerns || []), ...(data.notes || [])], transcript: data.history,
         };
+        const c = await store.config();
+        if (data.afterHours) {
+          // An on-call (after-hours) request: what they want, the regular price, and the premium.
+          const fee = (c.services || []).find((x) => x.family === "addon" && x.variant === "afterhours" && x.active !== false)?.priceCents ?? null;
+          let q = null;
+          try { if (data.package || data.suggested) q = bookingQuote(data.route === "bundle" ? "bundle" : "cleaning", c, { package: data.package || data.suggested, property: data.property, addOns: data.addOns }); } catch {}
+          request.kind = "after_hours";
+          request.afterHours = { package: q?.name || null, serviceCents: q?.priceCents ?? null, premiumCents: fee };
+          request.message = `AFTER-HOURS EMERGENCY REQUEST${q ? `: ${q.name} (${money(q.priceCents)})` : ""}${fee ? ` + after-hours premium ${money(fee)}` : ""}. Call the customer to confirm on-call availability.\n\n${request.message}`;
+        }
         await store.insertRequest(request, token, body.idempotencyKey);
+        if (request.kind === "after_hours") {
+          const to = c.approver?.email || c.email || "";
+          if (to) {
+            const text = `${request.message}\n\nCustomer: ${request.name}\nPhone: ${request.phone}\nEmail: ${request.email || "—"}\nZIP: ${request.zip || "—"}\nPreferred contact: ${request.preference}\n\nReview: ${publicOrigin || ""}/admin?tab=inbox`;
+            await deliverEmailOnce({ store, kind: "after_hours_request", id: request.id, to, clock, enabled: true, configured: useSendGrid && Boolean(sendgrid?.configured),
+              message: { subject: `After-hours emergency request: ${request.name}${request.afterHours.package ? ` · ${request.afterHours.package}` : ""}`, text },
+              sendEmail: async ({ to: recipient, ...content }) => sendgrid.sendEmail(recipient, content) }).catch(() => {});
+          }
+        }
         await store.enqueue("request.created", request, Boolean(webhookUrl));
         await store.audit("request.created", request.id);
         await dispatch();

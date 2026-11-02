@@ -185,12 +185,14 @@ function UpsellOffer({ upsell, onDone }: { upsell: any; onDone: (sel: { dryerfle
               <p className="shrink-0 text-right leading-none">{df.wasCents ? <span className="block text-xs font-bold text-slate-400 line-through">{money(df.wasCents)}</span> : null}<span className="font-display text-2xl font-extrabold text-slate-900">{money(df.cents)}</span></p>
             </div>
             <ul className="mt-2 space-y-1 text-sm text-slate-600">
-              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Crush-resistant aluminum that keeps the full 4-inch airflow</li>
-              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Replaces thin foil or vinyl hoses that kink behind the dryer</li>
-              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Professionally installed with airtight clamps</li>
+              <li className="flex gap-2"><ShieldCheck size={15} className="text-emerald-600 mt-0.5 shrink-0" /><span><b className="text-slate-800">Backed by our 3-year warranty</b></span></li>
+              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />UL 2158A listed, with zero flame spread</li>
+              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Crush-resistant 5-layer aluminum keeps the full 4-inch airflow</li>
+              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Replaces foil or vinyl hoses that kink behind the dryer, installed with airtight clamps</li>
             </ul>
           </Tile>
         )}
+        {df?.learnMore && <a href={df.learnMore} target="_blank" rel="noopener noreferrer" className="block -mt-1 px-1 text-xs font-bold text-sky-700 hover:text-sky-900 underline underline-offset-2">Learn more about DryerFlex (manufacturer site)</a>}
         {fog && (
           <Tile on={sel.fogging} onClick={() => flip('fogging')} label={`Sanitizing fog treatment, ${money(fog.cents)}`}>
             <div className="flex items-start justify-between gap-3">
@@ -252,12 +254,12 @@ function RecommendationCard({ card, onChoose, active }: { card: any; onChoose: (
     <div className="space-y-3 w-full">
       {card.intro && <div className="p-4 rounded-2xl bg-white text-slate-800 border border-slate-200/90 text-sm sm:text-[15px] leading-relaxed whitespace-pre-wrap shadow-xs"><Rich text={card.intro} /></div>}
       {card.airflow && <AirflowGauge a={card.airflow} />}
-      {card.savings && <SavingsTile s={card.savings} />}
       {card.summary ? (
         <div className="p-4 rounded-2xl bg-white text-slate-800 border border-slate-200/90 text-sm sm:text-[15px] leading-relaxed shadow-xs"><Rich text={card.summary} /></div>
       ) : card.lead ? (
         <div className="p-4 rounded-2xl bg-white text-slate-800 border border-slate-200/90 text-sm sm:text-[15px] leading-relaxed whitespace-pre-wrap shadow-xs"><Rich text={card.lead} /></div>
       ) : null}
+      {card.savings && <SavingsTile s={card.savings} />}
       {card.question && <p className="font-extrabold text-slate-900 text-sm px-1 pt-1">{card.question}</p>}
       {(card.picks || []).map((p: any) => <PackageCard key={p.family} p={p} onChoose={onChoose} disabled={!active} />)}
       {card.note && <p className="text-xs text-slate-500 px-1">{card.note}</p>}
@@ -358,7 +360,7 @@ function LineItems({ items, total }: { items: any[]; total: number }) {
 }
 
 function RequestForm({ token, session, onDone }: { token: string; session: any; onDone: (id: string) => void }) {
-  const [form, setForm] = useState({ name: session?.contact?.name || '', phone: session?.contact?.phone || '', email: session?.contact?.email || '', zip: session?.zip || '', message: session?.concerns?.join('\n') || '', preference: 'phone', smsConsent: false });
+  const [form, setForm] = useState({ name: session?.contact?.name || '', phone: session?.contact?.phone || '', email: session?.contact?.email || '', zip: session?.zip || '', message: [session?.afterHours ? 'After-hours emergency visit requested.' : '', ...(session?.concerns || [])].filter(Boolean).join('\n'), preference: 'phone', smsConsent: false });
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const id = useRef(crypto.randomUUID());
   const input = 'w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-800 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 outline-none';
@@ -525,7 +527,7 @@ function useProgress(min: number) {
   return { state, start, finish, stop };
 }
 
-function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, onEdit }: { token: string; session: any; config: any; onBooked: (r: any, pending: boolean) => void; onApproval: (a: any) => void; onRequest: () => void; onEdit: () => void }) {
+function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, onEdit, onSooner }: { token: string; session: any; config: any; onBooked: (r: any, pending: boolean) => void; onApproval: (a: any) => void; onRequest: () => void; onEdit: () => void; onSooner?: () => void }) {
   const [slots, setSlots] = useState<any[]>([]), [cursor, setCursor] = useState<number | null>(0), [date, setDate] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [hold, setHold] = useState<any>(null), [approved, setApproved] = useState(false), [enabled, setEnabled] = useState(true), [now, setNow] = useState(Date.now()), [quote, setQuote] = useState<any>(null);
   const idem = useRef(crypto.randomUUID()), generation = useRef(0), busyRef = useRef(false);
   const loading = useProgress(2400), booking = useProgress(2600);
@@ -707,7 +709,8 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
         </label>
         <button className="px-4 py-2.5 rounded-xl text-sm font-extrabold bg-slate-900 text-white disabled:opacity-40" disabled={busy || !date}>Check day</button>
       </form>
-      <p className="mt-4 text-xs text-slate-400">Picking a time holds it for five minutes while you review. Nothing is booked until you confirm.</p>
+      {onSooner && <button type="button" className="mt-4 text-sm font-extrabold text-orange-600 hover:text-orange-700" onClick={onSooner} disabled={busy}>Need it sooner than these times?</button>}
+      <p className="mt-3 text-xs text-slate-400">Picking a time holds it for five minutes while you review. Nothing is booked until you confirm.</p>
       <button className="mt-2 w-full text-sm font-bold text-slate-500 hover:text-slate-800" onClick={onEdit} disabled={busy}>Edit details</button>
     </Card>
   );
@@ -1016,7 +1019,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   }, [token, showChoices]);
   const addOnLabels = (s: any) =>
     (config?.addOns || [])
-      .filter((a: any) => !(a.key === 'fogging' && s?.package === 'restoration'))
+      .filter(() => !['emergency', 'nest', 'restoration'].includes(s?.package)) // no upgrades on these visits
       .filter((a: any) => !(a.key === 'dryerflex' && (['ultimate', 'restoration', 'express', 'inspection'].includes(s?.package) || s?.property?.hasDryer === 'No')))
       .map((a: any) => `${a.name}${config?.pricesApproved ? ` · +${money(a.cents)}` : ''}`);
 
@@ -1372,7 +1375,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
             <div className="pl-9 sm:pl-10 space-y-4">
               {!receipt && !requestId && contactStep === 'addons' && session?.upsell && !busy && <UpsellOffer upsell={session.upsell} onDone={chooseUpsell} />}
               {!receipt && !requestId && action === 'verify' && verification && <VerifyPhone token={token} verification={verification} onVerified={(s) => { setSession(s); setVerification(null); setAction('slots'); say('model', `Thanks — your ${s.verifiedContact?.channel === 'email' ? 'email' : 'phone'} is confirmed. Here are the soonest openings for the full visit.`); }} onEdit={editDetails} onRequest={() => setAction('request')} />}
-              {!receipt && !requestId && action === 'slots' && <SlotPicker token={token} session={session} config={config} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); setAutoClose(!p && !preview); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
+              {!receipt && !requestId && action === 'slots' && <SlotPicker token={token} session={session} config={config} onSooner={() => void send('Do you have anything sooner?')} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); setAutoClose(!p && !preview); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
               {!receipt && !requestId && action === 'approval' && approval && <ApprovalWait token={token} initial={approval} onBooked={onApprovalBooked} onEnded={onApprovalEnded} onCancelled={onApprovalCancelled} />}
               {!receipt && !requestId && action === 'request' && <RequestForm token={token} session={session} onDone={(id) => { setRequestId(id); setAction(''); setOptions([]); }} />}
               {requestId && (

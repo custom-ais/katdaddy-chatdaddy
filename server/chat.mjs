@@ -1,8 +1,8 @@
 // One chat turn: rules engine first for anything exact, Gemini for free-typed messages.
 
-import { turn, detectSafety, applyFacts, answeredUnsure, WELCOME, START_LABELS, UNANSWERED, NOTED } from "../shared/conversation.mjs";
+import { turn, detectSafety, applyFacts, answeredUnsure, asksForSooner, WELCOME, START_LABELS, UNANSWERED, NOTED } from "../shared/conversation.mjs";
 
-const DIRECT = /^(?:continue(?: booking)?|start over|restart|reset|accept(?: & continue)?|compare packages|more services|back to (?:packages|options)|book this service|book assessment|include assessment|cleaning (?:\+|and) assessment|cleaning only|just (?:the )?cleaning|cancel package|skip|not sure|i don't know|yes|no|ask a question(?: \(faqs\))?|request a callback|\d{5})$/i;
+const DIRECT = /^(?:continue(?: booking)?|start over|restart|reset|accept(?: & continue)?|compare packages|more services|back to (?:packages|options)|book this service|book assessment|include assessment|cleaning (?:\+|and) assessment|cleaning only|just (?:the )?cleaning|cancel package|check after-hours availability|keep regular times|skip|not sure|i don't know|yes|no|ask a question(?: \(faqs\))?|request a callback|\d{5})$/i;
 const PICK_LABEL = /^(?:select )?(?:premium 1-2-3|ultimate protection|safety inspection|essential|performance|total system|express|post-service|nest removal \+ cleaning|full system restoration|emergency same-day)(?: ⭐)?(?: · \$[\d,.]+\+?| \(\$[\d,.]+\+?\))?$/i;
 
 const isDirect = (message, session) => {
@@ -93,6 +93,7 @@ async function decide({ message, session, config, faqs, assistant, place = null 
   if (place) return rules(); // an address the server already looked up
   if (isDirect(message, session)) return rules();
   if (detectSafety(message)) return rules();
+  if (asksForSooner(message, session)) return rules(); // the after-hours offer has fixed wording and price
   if (["emergency", "confirmed", "review"].includes(session.stage)) return rules();
   // Verification codes belong in the code box, never in chat (and never sent to Gemini).
   if (/^\s*\d{4,8}\s*$/.test(message) && ["contact", "verify", "slots"].includes(session.stage)) {

@@ -220,7 +220,7 @@ test("a setup fee comes up only when the customer has that setup", async () => {
 test("emergency path: a regular package can be picked, asks only the dryer setup, and can be canceled", async () => {
   const { EMERGENCY_PENDING } = await import("../shared/conversation.mjs");
   const offer = run(["My dryer vent is completely clogged, I need help asap", "No, it's turned off now", "Possible nest or blockage", "85326", "1-Story Home", "Electric Dryer"]);
-  assert.deepEqual(offer.card.picks.map((p) => p.family), ["emergency", "premium", "ultimate"]);
+  assert.deepEqual(offer.card.picks.map((p) => p.family), ["ultimate", "premium"]);
   let r = chat("Premium 1-2-3 · $179", offer.session);
   assert.equal(r.session.pending, "mount", "the setup decides the price");
   r = chat("Stacked Washer/Dryer", r.session);
@@ -231,7 +231,7 @@ test("emergency path: a regular package can be picked, asks only the dryer setup
   assert.equal(r.session.package, null);
   assert.equal(r.session.stage, "offer");
   assert.match(r.reply, /^No problem, that package is canceled\.\n\n/);
-  assert.deepEqual(r.card.picks.map((p) => p.family), ["emergency", "premium", "ultimate"], "back to the same-day and regular choices");
+  assert.deepEqual(r.card.picks.map((p) => p.family), ["ultimate", "premium"], "back to the emergency choices");
   r = chat("Emergency Same-Day · $349", r.session);
   assert.ok(r.reply.includes(EMERGENCY_PENDING), "the summary says same-day depends on availability");
   const cleaning = run(["Dryer Vent Cleaning", "85326", "Have Dryer", "No", "1-Story Home", "Electric Dryer", "Standard Floor Setup", "Dries in one normal cycle", "No signs", "Premium 1-2-3 · $179"]);
