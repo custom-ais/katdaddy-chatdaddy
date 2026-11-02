@@ -2,7 +2,7 @@
 
 import { turn, detectSafety, applyFacts, WELCOME, START_LABELS } from "../shared/conversation.mjs";
 
-const DIRECT = /^(?:continue(?: booking)?|start over|restart|reset|accept(?: & continue)?|compare packages|more services|back to (?:packages|options)|book this service|book assessment|include assessment|cleaning only|skip|not sure|i don't know|yes|no|ask a question(?: \(faqs\))?|request a callback|\d{5})$/i;
+const DIRECT = /^(?:continue(?: booking)?|start over|restart|reset|accept(?: & continue)?|compare packages|more services|back to (?:packages|options)|book this service|book assessment|include assessment|cleaning (?:\+|and) assessment|cleaning only|just (?:the )?cleaning|skip|not sure|i don't know|yes|no|ask a question(?: \(faqs\))?|request a callback|\d{5})$/i;
 const PICK_LABEL = /^(?:select )?(?:premium 1-2-3|ultimate protection|safety inspection|essential|performance|total system|express|post-service|nest removal \+ cleaning|full system restoration|emergency same-day)(?: ⭐)?(?: · \$[\d,.]+\+?| \(\$[\d,.]+\+?\))?$/i;
 
 const isDirect = (message, session) => {
@@ -84,8 +84,8 @@ export async function chatTurn({ message, session, config, faqs, assistant, plac
   let result;
   if (ai.command) {
     let text = ai.commandText;
-    if (ai.command === "ACCEPT" && working.stage === "bundle_offer") text = "Include assessment";
-    if (ai.command === "DECLINE" && working.stage === "bundle_offer") text = "Cleaning only";
+    if (ai.command === "ACCEPT" && working.stage === "bundle_offer") text = "Cleaning + Assessment";
+    if (ai.command === "DECLINE" && working.stage === "bundle_offer") text = "Just the cleaning";
     if (ai.command === "START_REPAIR" && ai.facts.concern && !working.concerns.length) {
       working.concerns.push(ai.facts.concern);
       working.concernDescribed = true; // their own words describe the issue, so BOB skips the issue list

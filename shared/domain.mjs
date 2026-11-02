@@ -5,10 +5,12 @@ import {COVERAGE_VERSION,COVERAGE_IN,COVERAGE_TRAVEL,validPoint,customCoverage} 
 // Cleaning packages get extra time when the answers point to a restricted or severe vent.
 const DIFFICULTY_FAMILIES=new Set(['premium','ultimate','express','postservice']);
 export const TIME_ZONE = 'America/Phoenix';
-// Before Oct 30 2026 cleaning + assessment was a fixed $248. Now the assessment is 50% off when added to a cleaning.
+// Legacy fixed combined price (before Oct 30 2026), kept only for old saved configs and API shape.
 export const BUNDLE_PRICE_CENTS = 24800;
-export const ASSESSMENT_WITH_CLEANING_DISCOUNT = 0.5;
-export const halfAssessmentCents = (config) => Math.round((config.assessmentPriceCents ?? 11900) * (1 - ASSESSMENT_WITH_CLEANING_DISCOUNT));
+// Cleaning + Assessment: the Premium 1-2-3 cleaning for the home plus a fixed assessment add-on.
+// $179 + $60 = $239 for a 1-story home; 2-story homes follow their cleaning price ($259 / $279).
+export const BUNDLE_ASSESSMENT_CENTS = 6000;
+export const bundleAssessmentCents = (config) => (Number.isInteger(config?.bundleAssessmentCents) ? config.bundleAssessmentCents : BUNDLE_ASSESSMENT_CENTS);
 export const DEFAULT_CONFIG = {
   version: 1,
   businessName: 'Dryer Vent Squad West Valley',
@@ -69,6 +71,7 @@ export const DEFAULT_CONFIG = {
   cleaningPriceCents: 17900,
   assessmentPriceCents: 11900,
   bundlePriceCents: BUNDLE_PRICE_CENTS,
+  bundleAssessmentCents: BUNDLE_ASSESSMENT_CENTS,
   cleaningMinutes: 90, assessmentMinutes: 60, bundleMinutes: 150,
   bufferMinutes: 30, maxJobsPerDay: 4, leadHours: 12, horizonDays: 45,
   weekdayStarts: ['09:00','11:00','13:00','15:00'], weekdayClose: '17:00',
@@ -118,11 +121,11 @@ export function serviceQuote(route,config=DEFAULT_CONFIG,ctx={}) {
  else throw new Error('Choose cleaning, assessment, or cleaning + assessment.');
  if(!base)throw new Error('That service is not available right now.');
  const lines=[base,...addOnLines(services,{family,route:route==='bundle'?'cleaning':route,property,addOns:ctx.addOns||{}})];
- if(route==='bundle')lines.push({id:'assessment-with-cleaning',name:'Comprehensive Repair Assessment (50% off with cleaning)',description:'Evaluation of the vent issue with documented findings, at half price with a cleaning. Repairs are quoted separately.',cents:halfAssessmentCents(config),mins:config.assessmentMinutes,certain:true});
+ if(route==='bundle')lines.push({id:'assessment-with-cleaning',name:'Repair Assessment (with cleaning)',description:'Evaluation of the vent issue during the cleaning visit, with documented findings. Repairs are quoted separately.',cents:bundleAssessmentCents(config),mins:config.assessmentMinutes,certain:true});
  // With no dryer, Premium's usual time for cleaning the dryer covers the extra vent work, so no difficulty time is added.
  const noDryerPremium=property.hasDryer==='No'&&family==='premium';
  const difficultyMins=(route==='cleaning'||route==='bundle')&&DIFFICULTY_FAMILIES.has(family)&&!noDryerPremium?difficultyMinutes(property):0;
- return {route,package:family,serviceId:base.id,name:route==='bundle'?`${base.name} + assessment`:base.name,priceCents:lines.reduce((n,l)=>n+l.cents,0),durationMins:lines.reduce((n,l)=>n+l.mins,0)+difficultyMins,difficultyMins,
+ return {route,package:family,serviceId:base.id,name:route==='bundle'?`${base.name} + Assessment`:base.name,priceCents:lines.reduce((n,l)=>n+l.cents,0),durationMins:lines.reduce((n,l)=>n+l.mins,0)+difficultyMins,difficultyMins,
   lineItems:lines.map(({id,name,description,cents,mins})=>({id,name,description,cents,mins})),
   priceNote:base.certain?'':'Priced for a 2-story home with first-floor laundry. Your technician lowers it on site if your home is smaller.',
   version:config.version,repairsIncluded:false};
@@ -200,7 +203,7 @@ export function validateConfig(c) {
  if(!['gemini','openai'].includes(c.aiProvider))errors.push('Choose Gemini or OpenAI as the AI provider.');
  if(!c.integrations||typeof c.integrations!=='object'||Array.isArray(c.integrations)||Object.keys(c.integrations).some(k=>!['jobber','maps','verification','sms','email'].includes(k)))errors.push('Invalid integration switches.');
  for(const k of ['jobber','maps','verification','sms','email'])if(typeof c.integrations?.[k]!=='boolean')errors.push(`Invalid integration switch: ${k}.`);
- for(const [key,min,max] of [['cleaningPriceCents',0,1000000],['assessmentPriceCents',0,1000000],['cleaningMinutes',30,480],['assessmentMinutes',30,480],['bundleMinutes',30,600],['bufferMinutes',0,180],['maxJobsPerDay',1,30],['leadHours',0,168],['horizonDays',1,180]]) {
+ for(const [key,min,max] of [['cleaningPriceCents',0,1000000],['assessmentPriceCents',0,1000000],['bundleAssessmentCents',0,1000000],['cleaningMinutes',30,480],['assessmentMinutes',30,480],['bundleMinutes',30,600],['bufferMinutes',0,180],['maxJobsPerDay',1,30],['leadHours',0,168],['horizonDays',1,180]]) {
   if(!Number.isInteger(c[key])||c[key]<min||c[key]>max)errors.push(`Invalid ${key}.`);
  }
  for(const key of ['weekdayStarts','saturdayStarts'])if(!Array.isArray(c[key])||c[key].length>12||c[key].some(t=>!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)))errors.push(`Invalid ${key}.`);

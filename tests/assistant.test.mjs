@@ -59,29 +59,33 @@ test("Gemini can't claim a booking, promise a warranty, or ask for card numbers"
   assert.equal(guard("Call us at (602) 555-0000.", limits), null);
   assert.equal(guard("Premium 1-2-3 is $179 and Ultimate Protection is $299.", limits), "Premium 1-2-3 is $179 and Ultimate Protection is $299.");
   assert.equal(guard("Gas dryers come to $248 for Premium 1-2-3 upstairs.", limits), "Gas dryers come to $248 for Premium 1-2-3 upstairs.");
-  assert.equal(guard("With a cleaning the assessment is $59.50.", limits), "With a cleaning the assessment is $59.50.");
+  assert.equal(guard("Cleaning + Assessment is $239 for a 1-story home.", limits), "Cleaning + Assessment is $239 for a 1-story home.");
+  assert.equal(guard("A 2-story home is $279.", limits), "A 2-story home is $279.");
+  assert.equal(guard("With a cleaning the assessment is $59.50.", limits), null, "the old half-off price is no longer allowed");
 });
 
 test("option commands must match a real button", () => {
-  const r = normalizeResult({ ...base, command: "OPTION:Include assessment" }, { config, faqs: INITIAL_FAQS, options: ["Include assessment", "Cleaning only"] });
-  assert.equal(r.commandText, "Include assessment");
-  const bad = normalizeResult({ ...base, command: "OPTION:Free cleaning" }, { config, faqs: INITIAL_FAQS, options: ["Include assessment"] });
+  const r = normalizeResult({ ...base, command: "OPTION:Cleaning + Assessment" }, { config, faqs: INITIAL_FAQS, options: ["Cleaning + Assessment", "Just the cleaning"] });
+  assert.equal(r.commandText, "Cleaning + Assessment");
+  const bad = normalizeResult({ ...base, command: "OPTION:Free cleaning" }, { config, faqs: INITIAL_FAQS, options: ["Cleaning + Assessment"] });
   assert.equal(bad.command, null);
   const unknown = normalizeResult({ ...base, command: "BOOK_NOW_FREE", facts: { power: "Plasma", stories: "2-story" } }, { config, faqs: INITIAL_FAQS });
   assert.equal(unknown.command, null);
   assert.deepEqual(unknown.facts, { stories: "2-story" }, "only allowed values survive");
 });
 
-test("cleaning plus a vent problem gets the half-off assessment offer with the customer's concern recorded", async () => {
+test("cleaning plus a vent problem gets the Cleaning + Assessment offer with the customer's concern recorded", async () => {
   const { assistant } = reply({ ...base, command: "CLEANING_WITH_CONCERN", facts: { concern: "hose behind the dryer is squished" } });
   const r = await step("want it cleaned, also the hose behind the dryer is all squished", initialSession(), assistant);
   assert.equal(r.session.stage, "bundle_offer");
-  assert.match(r.reply, /50% off: \$59\.50 instead of \$119/);
+  assert.match(r.reply, /Cleaning \+ Assessment: \$239 for a 1-story home/);
+  assert.match(r.reply, /never pay for both/);
+  assert.doesNotMatch(r.reply, /50% off|\$59\.50/);
   assert.deepEqual(r.session.concerns, ["hose behind the dryer is squished"]);
   assert.equal(r.session.bundleAccepted, false, "an offer is not acceptance");
 });
 
-test("yes to the bundle offer becomes Include assessment", async () => {
+test("yes to the bundle offer becomes Cleaning + Assessment", async () => {
   const offered = turn("I need cleaning and the hose may need replacing.", initialSession(), config, INITIAL_FAQS).session;
   const { assistant } = reply({ ...base, command: "ACCEPT" });
   const r = await step("ya lets add that", offered, assistant);
