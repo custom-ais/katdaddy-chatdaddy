@@ -21,6 +21,7 @@ import { sanitizeDiagnostic } from "./integration-status.mjs";
 
 import { deliverEmailOnce } from "./email-notification.mjs";
 import { notifyBookingOwner } from "./owner-notification.mjs";
+import { BOOKING_REPORT_TO, COMMISSION_CENTS, bookingTotals, bookingReportEmail } from "./booking-report.mjs";
 import { createVerification } from "./verification.mjs";
 import { waitForRequestLock } from "./request-lock.mjs";
 import { approvalPolicy } from "./approval-policy.mjs";
@@ -173,6 +174,26 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         return sendSms(null, phone, text, beforeSend, 'owner');
       } });
     } catch { return { status: 'failed', reason: 'notification_unavailable' }; }
+  };
+  // Custom-AIs booking report: every confirmed ChatDaddy booking, with running counts, revenue and
+  // commission. BOOKING_REPORT_EMAIL changes the recipient ("off" stops it); it doesn't depend on the
+  // office's customer-email switches, only on a configured SendGrid sender. Sent at most once per booking.
+  const bookingReportTo = () => {
+    const value = String(env.BOOKING_REPORT_EMAIL ?? BOOKING_REPORT_TO).trim();
+    return /^(?:off|none|false|)$/i.test(value) ? "" : value;
+  };
+  const commissionCents = Number.isInteger(Number(env.BOOKING_COMMISSION_CENTS)) && Number(env.BOOKING_COMMISSION_CENTS) >= 0 && env.BOOKING_COMMISSION_CENTS !== undefined && env.BOOKING_COMMISSION_CENTS !== "" ? Number(env.BOOKING_COMMISSION_CENTS) : COMMISSION_CENTS;
+  const sendBookingReport = async (appointment, config) => {
+    try {
+      const to = bookingReportTo();
+      if (!to || appointment.source !== "ai_bot" || appointment.status !== "confirmed") return { status: "skipped" };
+      const totals = bookingTotals(await store.appointments(), appointment, { commissionCents });
+      return await deliverEmailOnce({ store, kind: "booking_report", id: appointment.id, to, clock,
+        enabled: true, configured: useSendGrid && Boolean(sendgrid?.configured),
+        message: bookingReportEmail(appointment, totals, config),
+        sendEmail: async ({ to: recipient, ...content }) => sendgrid.sendEmail(recipient, content),
+      });
+    } catch { return { status: "failed_or_uncertain", reason: "report_unavailable" }; }
   };
   const notifyOwnerProblem = async (kind, appointment) => {
     try {
@@ -715,6 +736,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       await notifyOwner(appt, c);
       appt.notifications = await sendConfirmations(appt, c);
       await store.updateAppointment(appt);
+      await sendBookingReport(appt, c);
       await dispatch();
     }
     return { appt, pending };
@@ -1609,6 +1631,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
             await notifyOwner(a, c);
             a.notifications = await sendConfirmations(a, c);
             await store.updateAppointment(a);
+            await sendBookingReport(a, c);
             await store.audit("appointment.resolved_in_jobber", id);
           } else if (b.outcome === "not_in_jobber") {
             a.jobberState = "not_created";

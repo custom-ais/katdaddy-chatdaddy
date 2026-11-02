@@ -217,7 +217,8 @@ export async function harness(t, { ready = true, config = {}, jobber: jobberOpts
   const controls = createIntegrationControls({ store });
   const wrapped = controlProviders({ controls, jobber, geo, twilio, sendgrid });
   const scheduler = createScheduler({ store, jobber: wrapped.jobber, geo: wrapped.geo });
-  const env = { BOB_SETUP_TOKEN: "test-only-setup-token", BOOKING_VERIFICATION_PROVIDER: "twilio", BOOKING_SMS_PROVIDER: "twilio", ...envOpts };
+  // The Custom-AIs booking report is on in production; tests turn it on where they check it.
+  const env = { BOB_SETUP_TOKEN: "test-only-setup-token", BOOKING_VERIFICATION_PROVIDER: "twilio", BOOKING_SMS_PROVIDER: "twilio", BOOKING_REPORT_EMAIL: "off", ...envOpts };
   const handle = createBobHandler({ store, jobber: wrapped.jobber, lc, geo: wrapped.geo, scheduler, assistant, twilio: wrapped.twilio, sendgrid: wrapped.sendgrid, integrationAccounts, env, clock });
   const server = http.createServer((req, res) => handle(req, res));
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
