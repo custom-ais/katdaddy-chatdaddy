@@ -15,8 +15,8 @@
 //     until it's cleaned; Ultimate Protection suggested) and the booking carries on
 //   • a repair-first visit starts with an assessment; repairs are quoted separately
 //   • cleaning + a possible problem is offered Cleaning + Assessment ($239 for a 1-story home), added
-//     only on a yes; just the cleaning stays available, and is switched to an assessment on site if
-//     something is broken, so the customer never pays for both
+//     only on a yes; just the cleaning stays available, and if something is broken on site the visit
+//     is switched to Cleaning + Assessment, so the customer gets both at the lower combined price
 //   • appliance problems, commercial work, complaints and "talk to a person" go to the team
 //   • facts already given are reused, "Not sure" is accepted, and a question asked mid-booking
 //     is answered before returning to the unfinished step
@@ -615,7 +615,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   s.history = [...(s.history || []).slice(-39), { role: "user", text: String(text).slice(0, 2000) }];
 
   let ack = "", warn = "";
-  const SWITCH_PROMISE = "If our technician finds something broken when they arrive, we'll switch your visit to an assessment instead, so you never pay for both.";
+  const SWITCH_PROMISE = "If our technician finds something broken when they arrive, we'll switch your visit to the Cleaning + Assessment, so you get both at the lower combined price.";
   const respond = (reply, options = [], extra = {}) => {
     // The parts let the conversational layer replace the short acknowledgement with its own
     // reply while the warning and the required body (question, offer, summary) stay as written.
