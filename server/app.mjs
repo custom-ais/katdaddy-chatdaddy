@@ -1330,6 +1330,12 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         }
         if (method === "GET" && pathname === "/api/admin/data") return send(200, await snapshot());
         if (method === "GET" && pathname === "/api/admin/activity") return send(200, await store.activity({ sessionId: (url.searchParams.get("session") || "").slice(0, 32), level: url.searchParams.get("level") || "", cursor: url.searchParams.get("cursor") || "", limit: 100 }));
+        // The browser Maps key is separate from the server key: it's restricted to the dashboard's web
+        // address in Google Cloud, so it's safe to send to the browser. Without it the map uses OpenStreetMap.
+        if (method === "GET" && pathname === "/api/admin/maps-key") {
+          const key = String(env.GOOGLE_MAPS_BROWSER_KEY || "").trim();
+          return send(200, { key: /^[A-Za-z0-9_-]{20,100}$/.test(key) ? key : "" });
+        }
         if (method === "POST" && pathname === "/api/admin/service-area/map") {
           await rate(req, "area-map", 5);
           const b = await readBody(req), c = { ...await store.config(), ...Object.fromEntries(["baseAddress", "baseLocation", "serviceAreaMode", "serviceAreaMiles", "travelAreaMiles", "customServiceAreas"].filter((key) => key in b).map((key) => [key, b[key]])) };

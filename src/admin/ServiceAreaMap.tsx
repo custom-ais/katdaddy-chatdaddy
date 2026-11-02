@@ -6,6 +6,9 @@ import { api } from '../lib/api';
 import { Field, inputClass, secondaryButton, ErrorNote } from './ui';
 import { useServiceAreaEditor } from './useServiceAreaEditor';
 import { money, drivingAreaFor } from '../../shared/domain.mjs';
+import { loadGoogleMaps, onGoogleMapsAuthFailure } from './googleMaps';
+
+const OSM = ['https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }] as const;
 
 const colors: Record<string, string> = { in: '#059669', travel: '#d97706', out: '#64748b', unknown: '#94a3b8' };
 const label: Record<string, string> = { in: 'Standard service area', travel: 'Travel charge applies', out: 'Outside service area', unknown: 'Route unavailable' };
@@ -17,13 +20,41 @@ export function ServiceAreaMap({ config, onChange }: { config: any; onChange: (k
   const [address, setAddress] = useState(''), [check, setCheck] = useState<any>(null), [checking, setChecking] = useState(false);
   const fingerprint = JSON.stringify([config.baseAddress, config.baseLocation, config.travelAreaMiles, config.serviceAreaMode]);
   const [generatedFor, setGeneratedFor] = useState('');
+  const [basemap, setBasemap] = useState<'loading' | 'google' | 'osm' | 'osm-rejected'>('loading');
   useEffect(() => {
     if (!container.current) return;
     const m = L.map(container.current, { scrollWheelZoom: false }).setView([33.5, -112.4], 9);
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(m);
     markers.current = L.layerGroup().addTo(m); map.current = m;
     const resize = new ResizeObserver(() => m.invalidateSize()); resize.observe(container.current);
-    return () => { resize.disconnect(); m.remove(); map.current = null; };
+    // Google Maps when a browser key is set up; OpenStreetMap otherwise, or if Google rejects the key.
+    let cancelled = false, google: L.Layer[] = [], control: L.Control | null = null;
+    const useOsm = (state: 'osm' | 'osm-rejected') => {
+      if (cancelled) return;
+      for (const layer of google) layer.remove();
+      control?.remove();
+      google = []; control = null;
+      L.tileLayer(...OSM).addTo(m);
+      setBasemap(state);
+    };
+    const stopAuthWatch = onGoogleMapsAuthFailure(() => useOsm('osm-rejected'));
+    void (async () => {
+      let key = '';
+      try { key = (await api('/api/admin/maps-key')).key || ''; } catch {}
+      if (cancelled) return;
+      if (!key) return useOsm('osm');
+      try {
+        await loadGoogleMaps(key);
+        (window as any).L = L; // the Google layer plugin looks for Leaflet on window
+        const { default: GoogleMutant } = await import('leaflet.gridlayer.googlemutant');
+        if (cancelled) return;
+        const road = new GoogleMutant({ type: 'roadmap', maxZoom: 21 }).addTo(m);
+        const satellite = new GoogleMutant({ type: 'hybrid', maxZoom: 21 });
+        google = [road, satellite];
+        control = L.control.layers({ Map: road, Satellite: satellite }, undefined, { position: 'topright', collapsed: false }).addTo(m);
+        setBasemap('google');
+      } catch { useOsm('osm-rejected'); }
+    })();
+    return () => { cancelled = true; stopAuthWatch(); resize.disconnect(); m.remove(); map.current = null; };
   }, []);
   useEffect(() => {
     if (!result || !map.current || !markers.current) return;
@@ -67,6 +98,8 @@ export function ServiceAreaMap({ config, onChange }: { config: any; onChange: (k
     </div>
     {editor}
     <div ref={container} className="h-80 sm:h-96 w-full rounded-2xl border border-slate-200 overflow-hidden isolate z-0" role="region" aria-label="Driving-distance service area map" />
+    {basemap === 'osm' && <p className="text-xs text-slate-500">Showing OpenStreetMap. To use Google Maps here, add a Google Maps browser key as <code>GOOGLE_MAPS_BROWSER_KEY</code> in Vercel.</p>}
+    {basemap === 'osm-rejected' && <p className="text-xs font-semibold text-amber-800">Google Maps didn't accept the browser key on this web address, so the map is showing OpenStreetMap. Check the key's website restrictions and that the Maps JavaScript API is enabled.</p>}
     <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs font-semibold text-slate-600">{['in', 'travel', 'out'].map((area) => <span key={area} className="flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: colors[area] }} />{label[area]}</span>)}</div>
     <p className="text-xs text-slate-500">{config.serviceAreaMode === 'radius' ? 'Green and amber circles show your standard and outer radii. Custom included or excluded areas override those circles.' : 'Map dots show sampled road-distance checks. Driving miles follow roads, so this mode does not use a circular boundary.'} Check a complete address for its coverage and travel charge. Click Save settings to apply your edits.</p>
     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">

@@ -17,6 +17,7 @@ const routes = [
   ['GET', /^\/api\/admin\/owner-sms-consent$/, ['ownerSms.manage']],
   ['POST', /^\/api\/admin\/owner-sms-consent$/, ['ownerSms.manage']],
   ['POST', /^\/api\/admin\/booking-report\/test$/, ['integrations.manage']],
+  ['GET', /^\/api\/admin\/maps-key$/, ['settings.coverage.view']],
   ['GET', /^\/api\/admin\/integration-accounts$/, ['settings.connections.view']],
   ['POST', /^\/api\/admin\/(?:integration-accounts|connections\/refresh)$/, ['integrations.manage']],
   ['GET', /^\/api\/admin\/jobber\/(?:connect|users)$/, ['integrations.manage']],
@@ -322,6 +323,7 @@ export function projectAdminResponse(principal,method,path,body) {
   if (hasPermission(principal,'users.manage') && /^\/api\/admin\/(?:users|invitations)(?:\/|$)/.test(path)) return clone(body);
   if (hasPermission(principal,'ownerSms.manage') && path === '/api/admin/owner-sms-consent') return clone(body);
   if (isMaster(principal) && path === '/api/admin/booking-report/test') return pick(body,['status','to']);
+  if (path === '/api/admin/maps-key') return pick(body,['key']);
   if (hasPermission(principal,'integrations.manage') && /^\/api\/admin\/(?:integration-accounts|jobber\/)/.test(path)) return clone(body);
   if (path === '/api/admin/status') return pick(body,['authenticated','setupRequired','passwordFromEnv','namedUsersEnabled']);
   if (path === '/api/admin/logout') return pick(body,['signedOut']);
