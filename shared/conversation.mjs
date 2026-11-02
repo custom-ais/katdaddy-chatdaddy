@@ -64,10 +64,16 @@ export const initialSession = () => ({
   options: [],
 });
 
-/** Welcome cards (the playbook's four starting paths). The engine accepts them as typed text too. */
-export const WELCOME = ["Emergency Clog / Overheating", "Standard Vent Cleaning", "Help Me Choose Package", "Repair / Reroute / Assessment"];
+/** Welcome cards, in the office's order. The engine accepts them as typed text too. */
+export const WELCOME = ["Book a Cleaning", "Repairs, Reroutes & Upgrades", "Emergency Clog / Overheating", "Pest / Nest Removal", "Something Else"];
+const [CLEANING_START, REPAIR_START] = WELCOME;
 /** Starting-path names, including earlier button labels that may still be typed or sent by the AI layer. */
 const START = {
+  "book a cleaning": "cleaning",
+  "repairs, reroutes & upgrades": "repair",
+  "repairs, reroutes and upgrades": "repair",
+  "something else": "other",
+  "help me choose a cleaning": "help",
   "emergency clog / overheating": "emergency",
   "standard vent cleaning": "cleaning",
   "dryer vent cleaning": "cleaning",
@@ -1301,7 +1307,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond("I can help with approved DVS services, prices, and booking requests. I can't change pricing or confirm an appointment outside the booking system.", s.intent ? ["Continue booking", "Ask a question"] : WELCOME.slice(0, 4));
   }
   if (/\b(?:are you (?:a |an )?(?:real person|human|ai|bot|robot)|who are you|is this (?:a |an )?(?:ai|bot|automated assistant))\b/.test(t)) {
-    return respond("I'm BOB, Dryer Vent Squad's automated online booking assistant — not a person. I can explain our services and prices, check the live schedule, and send a request to the team.", ["Request a callback", ...(s.intent ? ["Continue booking"] : [WELCOME[1], WELCOME[3]])]);
+    return respond("I'm BOB, Dryer Vent Squad's automated online booking assistant — not a person. I can explain our services and prices, check the live schedule, and send a request to the team.", ["Request a callback", ...(s.intent ? ["Continue booking"] : [CLEANING_START, REPAIR_START])]);
   }
   if (s.stage === "review" && !/^(?:continue|continue booking)$/.test(t)) {
     return respond("You can send the request below. The team will review it; no appointment or appointment change is confirmed by a request.", [], { action: "request" });
@@ -1326,7 +1332,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   }
   if (start === "repair" || (/^(?:vent issue or repair|book assessment|assessment)$/.test(t) && !s.intent)) {
     startIntent("repair");
-    ack = "I'd be happy to help you with your vent repair, reroute, or assessment.";
+    ack = "I'd be happy to help you with your vent repair, reroute, or upgrade.";
     return next();
   }
   if (start === "emergency" || /^emergency clog(?: relief)?$/.test(t)) {
@@ -1339,6 +1345,9 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.property.animals = "Yes";
     ack = "I'd be happy to help you with your bird or pest problem.";
     return next();
+  }
+  if (start === "other") {
+    return respond("No problem. Tell me what's going on in your own words, or pick one of these.", ["Help Me Choose a Cleaning", "Ask a question", "Talk to the team"]);
   }
   if (start === "faq" || /^(?:ask (?:a|another) question|faqs?)$/.test(t)) {
     const picks = approvedFaqs.slice(0, 5).map((f) => f.question);
@@ -1571,7 +1580,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   }
   if (intent.faq === "repair") {
     const yes = "Yes. For a vent repair concern, we start with an assessment, and repairs are quoted separately.";
-    if (!s.intent) return respond(`${yes} Is there a specific vent issue you need evaluated?`, [WELCOME[3], WELCOME[1], "Ask a question"]);
+    if (!s.intent) return respond(`${yes} Is there a specific vent issue you need evaluated?`, [REPAIR_START, CLEANING_START, "Ask a question"]);
     return resume(yes, { faq: true });
   }
   const early = ["welcome", "evaluating", "offer", "details"].includes(s.stage) && !s.serviceAccepted;
@@ -1661,7 +1670,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond("Send your details below and the team will follow up. A request doesn't book an appointment by itself.", [], { action: "request" });
   }
   if (intent.route === "clarify" || /^help me choose$/.test(t)) {
-    return respond("Are you looking to schedule a routine cleaning, or is there a specific vent problem you need evaluated?", [WELCOME[1], WELCOME[3]]);
+    return respond("Are you looking to schedule a routine cleaning, or is there a specific vent problem you need evaluated?", [CLEANING_START, REPAIR_START]);
   }
   if (!s.intent && /^(?:hi|hello|hey|good (?:morning|afternoon|evening))[.!]?$/.test(t)) return welcome();
   unresolved = true;

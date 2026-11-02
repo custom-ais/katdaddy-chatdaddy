@@ -90,3 +90,16 @@ test("an after-hours request is marked, priced and emailed to the on-call contac
   assert.ok(mail, "the on-call contact is emailed");
   assert.match(mail.subject, /^After-hours emergency request: /);
 });
+
+test("the opening menu is in the office's order; Something Else offers help choosing, questions, or the team", async () => {
+  const { WELCOME } = await import("../shared/conversation.mjs");
+  assert.deepEqual(WELCOME, ["Book a Cleaning", "Repairs, Reroutes & Upgrades", "Emergency Clog / Overheating", "Pest / Nest Removal", "Something Else"]);
+  assert.equal(run(["Book a Cleaning"]).session.intent, "cleaning");
+  assert.equal(run(["Repairs, Reroutes & Upgrades"]).session.intent, "repair");
+  assert.equal(run(["Pest / Nest Removal"]).session.intent, "nest");
+  assert.equal(run(["Standard Vent Cleaning"]).session.intent, "cleaning", "older labels still work");
+  const other = run(["Something Else"]);
+  assert.deepEqual(other.options, ["Help Me Choose a Cleaning", "Ask a question", "Talk to the team"]);
+  assert.equal(run(["Help Me Choose a Cleaning"], other.session).session.help, true);
+  assert.equal(run(["Talk to the team"], other.session).action, "request");
+});

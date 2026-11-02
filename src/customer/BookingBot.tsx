@@ -275,7 +275,7 @@ function iconFor(label: string) {
   if (/question|faq/.test(l)) return <MessageCircle size={18} className={`${c} text-blue-500`} />;
   if (/edit|gate code|back to/.test(l)) return <Pencil size={18} className={`${c} text-slate-400`} />;
   if (/don't know|not sure/.test(l)) return <HelpCircle size={18} className={`${c} text-slate-400`} />;
-  if (/callback|contact the team|person/.test(l)) return <Phone size={18} className={`${c} text-slate-500`} />;
+  if (/callback|contact the team|talk to the team|person/.test(l)) return <Phone size={18} className={`${c} text-slate-500`} />;
   if (/more services|other/.test(l)) return <MoreHorizontal size={18} className={`${c} text-slate-400`} />;
   if (l.includes('1-story')) return <Home size={18} className={`${c} text-blue-500`} />;
   if (l.includes('2-story')) return <Building size={18} className={`${c} text-blue-500`} />;
@@ -303,10 +303,11 @@ function iconFor(label: string) {
 }
 
 const WELCOME_CARDS: [string, React.ReactElement][] = [
+  ['Book a Cleaning', <Wind strokeWidth={2} size={26} />],
+  ['Repairs, Reroutes & Upgrades', <Wrench strokeWidth={2} size={26} />],
   ['Emergency Clog / Overheating', <Flame strokeWidth={2} size={26} />],
-  ['Standard Vent Cleaning', <Wind strokeWidth={2} size={26} />],
-  ['Help Me Choose Package', <Search strokeWidth={2} size={26} />],
-  ['Repair / Reroute / Assessment', <Wrench strokeWidth={2} size={26} />],
+  ['Pest / Nest Removal', <Bird strokeWidth={2} size={26} />],
+  ['Something Else', <MessageCircle strokeWidth={2} size={26} />],
 ];
 
 // ---- contact details, collected one question at a time ---------------------------------------
@@ -1246,7 +1247,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     <div className={`bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden flex flex-col relative text-white ${minimized ? 'bob-minimized' : ''} ${shell}`}>
       <div className="bg-slate-800/90 backdrop-blur-md px-4 py-3 border-b border-slate-700/60 flex items-center justify-between z-20">
         <div className="flex items-center gap-3">
-          <BobFace size={40} />
+          <BobFace size={52} />
           <div>
             <h1 className="font-extrabold text-base text-white tracking-tight leading-none">Dryer Vent Squad West Valley</h1>
             <p className="text-[11px] font-semibold text-orange-400 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
@@ -1286,7 +1287,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       <div ref={scroll} className={`flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 ${started ? 'bg-slate-50 text-slate-800' : 'bg-slate-900'}`} aria-live="polite" aria-relevant="additions text">
         {!started ? (
           <div className="flex flex-col items-center max-w-xl mx-auto py-4 animate-in">
-            <div className="mb-5"><BobFace size={112} /></div>
+            <div className="mb-5"><BobFace size={128} /></div>
             <h2 className="text-2xl sm:text-3xl font-black text-white mb-2 text-center tracking-tight">👋 Hi! Welcome to Dryer Vent Squad West Valley!</h2>
             <p className="text-slate-300 text-center mb-6 text-sm max-w-sm leading-relaxed">I'm your AI Booking &amp; Diagnostic Assistant. How can I help restore your dryer exhaust system today?</p>
             {error && <div role="alert" className="mb-4 w-full text-sm font-semibold text-rose-200 bg-rose-950/60 border border-rose-400/40 rounded-xl p-3">{error} <button className="ml-2 underline font-bold" onClick={() => initialize()}>Reconnect</button></div>}
@@ -1309,7 +1310,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
                 <div key={i} data-msg={i} className={`flex w-full ${model ? 'justify-start' : 'justify-end'} animate-in`}>
                   <div className={`flex ${model && msg.card ? 'w-full sm:max-w-[88%]' : 'max-w-[90%] sm:max-w-[80%]'} gap-2.5 ${model ? 'flex-row' : 'flex-row-reverse'}`}>
                     <div className="shrink-0 mt-auto mb-1">
-                      {model ? <BobFace size={32} /> : <div className="bg-slate-700 text-slate-300 p-2 rounded-full border border-slate-600"><User size={16} /></div>}
+                      {model ? <BobFace size={38} /> : <div className="bg-slate-700 text-slate-300 p-2 rounded-full border border-slate-600"><User size={16} /></div>}
                     </div>
                     <div className={`min-w-0 ${model && msg.card ? 'w-full' : ''}`}>
                       {model && msg.card ? (
