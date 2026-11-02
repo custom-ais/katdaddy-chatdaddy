@@ -14,6 +14,10 @@ body { margin: 0; background: #f1f5f9; color: #0f172a; font-family: var(--font-s
 /* One quiet entrance for a screen or a modal opening; nothing animates on its own. */
 @keyframes bob-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .animate-in { animation: bob-in 180ms ease-out both; }
+/* A pressed time or the confirm button fills with green while BOB works on it. */
+@keyframes bob-fill { from { transform: scaleX(0); } to { transform: scaleX(0.9); } }
+.bob-fill { transform-origin: left; animation: bob-fill 2.4s cubic-bezier(.2,.7,.3,1) forwards; }
+@media (prefers-reduced-motion: reduce) { .bob-fill { animation: none; transform: scaleX(0.6); } }
 
 .scrollbar-none { scrollbar-width: none; }
 .scrollbar-none::-webkit-scrollbar { display: none; }

@@ -70,10 +70,12 @@ test("birds or a nest offer Nest Removal and Full System Restoration", () => {
   assert.equal(picked.session.package, "restoration");
 });
 
-test("an urgent clog offers Emergency Same-Day Clog Relief, with Premium and Ultimate alongside", () => {
+test("an urgent clog leads with Ultimate, offers Premium, and offers the on-call tech for $199 more", () => {
   const r = say(["My dryer vent is completely clogged, I need help asap", "No, it's turned off now", "Possible nest or blockage", "85326", "1-Story Home", "Electric Dryer"]);
-  assert.deepEqual(r.options, ["Emergency Same-Day · $349", "Premium 1-2-3 · $179", "Ultimate Protection · $299", "Ask a question"]);
-  assert.match(r.reply, /depends on availability\. If you're interested, we'll check whether a technician can get to you today, and nothing is booked until we confirm\./);
+  assert.deepEqual(r.options, ["Ultimate Protection · $299", "Premium 1-2-3 · $179", "Check after-hours availability", "Ask a question"]);
+  assert.match(r.reply, /I recommend \*\*Ultimate Protection\*\*, our most comprehensive package/);
+  assert.match(r.reply, /\$50 off that removal/);
+  assert.match(r.reply, /on-call technician who may be available after hours\. The after-hours service premium is \$199 in addition to the regular charges\. Would you like me to check our after-hours availability\?/);
   const regular = turn("Schedule regular cleaning", r.session, config, INITIAL_FAQS);
   assert.equal(regular.session.intent, "cleaning");
   assert.equal(regular.session.pending, "recentService", "answers already given are kept (\"my dryer\" means one is installed)");

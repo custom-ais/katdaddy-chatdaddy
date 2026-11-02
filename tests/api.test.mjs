@@ -906,7 +906,7 @@ test("a customer can cancel a waiting same-day request and book a regular packag
   assert.equal(cancelled.data.session.stage, "offer");
   assert.equal(cancelled.data.session.package, null);
   assert.match(cancelled.data.reply, /^No problem, that package is canceled\./);
-  assert.deepEqual(cancelled.data.card.picks.map((p) => p.family), ["emergency", "premium", "ultimate"]);
+  assert.deepEqual(cancelled.data.card.picks.map((p) => p.family), ["ultimate", "premium"], "back to the emergency choices");
   const [saved] = await h.store.approvals();
   assert.equal(saved.status, "cancelled");
   assert.equal(await h.store.countActiveHolds(), 0, "the held time is freed");

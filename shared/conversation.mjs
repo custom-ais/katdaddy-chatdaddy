@@ -26,7 +26,7 @@
 // facts below; every decision about price and booking happens here or on the server.
 
 import { DEFAULT_CONFIG, money, serviceQuote, areaFor, bundleAssessmentCents } from "./domain.mjs";
-import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant, noDryerNeedsPremium, ADDON_PROMOS, ADDON_BUNDLE_SAVINGS_CENTS, NO_DRYERFLEX } from "./catalog.mjs";
+import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant, noDryerNeedsPremium, ADDON_PROMOS, ADDON_BUNDLE_SAVINGS_CENTS, NO_DRYERFLEX, RECENT_SERVICE_DISCOUNT_CENTS, DRYERFLEX_URL } from "./catalog.mjs";
 import { restrictionScore, restrictionLevel } from "./airflow.mjs";
 
 export const initialSession = () => ({
@@ -64,10 +64,16 @@ export const initialSession = () => ({
   options: [],
 });
 
-/** Welcome cards (the playbook's four starting paths). The engine accepts them as typed text too. */
-export const WELCOME = ["Emergency Clog / Overheating", "Standard Vent Cleaning", "Help Me Choose Package", "Repair / Reroute / Assessment"];
+/** Welcome cards, in the office's order. The engine accepts them as typed text too. */
+export const WELCOME = ["Book a Cleaning", "Repairs, Reroutes & Upgrades", "Emergency Clog / Overheating", "Pest / Nest Removal", "Something Else"];
+const [CLEANING_START, REPAIR_START] = WELCOME;
 /** Starting-path names, including earlier button labels that may still be typed or sent by the AI layer. */
 const START = {
+  "book a cleaning": "cleaning",
+  "repairs, reroutes & upgrades": "repair",
+  "repairs, reroutes and upgrades": "repair",
+  "something else": "other",
+  "help me choose a cleaning": "help",
   "emergency clog / overheating": "emergency",
   "standard vent cleaning": "cleaning",
   "dryer vent cleaning": "cleaning",
@@ -148,6 +154,15 @@ const normalize = (t) => String(t || "").toLowerCase().replace(/[’‘]/g, "'")
 export const FIRE_SAFE = "Everyone is safe & fire/smoke is handled";
 /** The rules engine's reply when it has no approved answer; the conversational layer may replace it. */
 export const UNANSWERED = "I don't have a verified answer to that yet. I can send the question to the team, or we can keep going with your booking.";
+const NO_UPSELL = new Set(["emergency", "nest", "restoration"]);
+export const AFTER_HOURS_BUTTON = "Check after-hours availability";
+const AFTER_HOURS_YES = /^(?:yes,? )?(?:please )?check (?:our |your |the )?after[- ]hours(?: availability)?[.!]?$/;
+/** Asking for something sooner than the offered times, once the service is chosen. */
+export function asksForSooner(text, s) {
+  if (!s?.serviceAccepted && !["contact", "verify", "slots"].includes(s?.stage)) return false;
+  const t = String(text || "").toLowerCase().replace(/[’‘]/g, "'");
+  return /\b(?:sooner|earlier|anything (?:today|tonight|this evening)|today|tonight|this evening|asap|as soon as possible|right away|after[- ]hours|on[- ]call|first available)\b/.test(t) && !/\b(?:later|next week)\b/.test(t);
+}
 /** Same-day isn't promised: it depends on whether a technician can get there today. */
 export const EMERGENCY_PENDING = "**Emergency Same-Day Clog Relief** depends on availability. If you're interested, we'll check whether a technician can get to you today, and nothing is booked until we confirm.";
 /** The reply when the customer doesn't know an answer: it's fine, and the technician checks it on site. */
@@ -646,20 +661,26 @@ export function airflowFactors(p = {}) {
 export function airflowSummary(p = {}, recommended = recommendTier(p)) {
   const sym = p.symptoms || [];
   const eff = dryingEfficiency(p);
+  const severe = sym.includes("three") || sym.includes("error") || sym.includes("overheat");
   const finding = sym.includes("overheat")
     ? "Overheating or shutting off means heat is building up from a significant airflow restriction, so please don't use the dryer until it's cleaned."
     : eff
-    ? `Each load is taking ${eff.times} as long to dry, so your dryer is likely running at ${eff.percent} efficiency, and you're paying for that extra drying time on every load.`
-    : sym.includes("error")
-      ? "Your dryer is reporting restricted airflow with an error code."
-      : "Drying in one normal cycle suggests airflow is in good shape for now.";
-  const why =
-    recommended === "ultimate"
-      ? "**Ultimate Protection** adds exterior termination cleanout and a DryerFlex transition upgrade to restore full airflow, with a 3-year parts and labor warranty."
-      : eff || sym.includes("error") || sym.includes("overheat")
-        ? "**Premium 1-2-3 See-It-Clean** clears the full path from the appliance to the termination, with live camera proof before and after."
-        : "**Premium 1-2-3 See-It-Clean** keeps it that way: a full-path cleaning with live camera proof before and after.";
-  return `${finding} ${why}`;
+      ? `Each load is taking ${eff.times} as long to dry, so your dryer is likely running at ${eff.percent} efficiency, and you're paying for that extra drying time on every load.`
+      : sym.includes("error")
+        ? "Your dryer is reporting restricted airflow with an error code."
+        : "Drying in one normal cycle suggests airflow is in good shape for now.";
+  // Why this package: the reason in their answers, then what the package does about it.
+  const reason = recommended !== "ultimate" ? ""
+    : severe ? "A restriction that significant usually means lint is packed deep in the line and at the exterior cap."
+    : ["Stacked", "Pedestal"].includes(p.mount) ? `With a ${p.mount === "Stacked" ? "stacked" : "pedestal"} setup, the transition hose behind the dryer is often kinked or crushed.`
+    : p.recentService === "Yes" && sym.includes("two") ? "Since the dryer is new or just serviced, the slow drying is coming from the vent, not the dryer."
+    : "";
+  const pitch = recommended === "ultimate"
+    ? "That's why I recommend **Ultimate Protection**, our most comprehensive package: it cleans the full path, clears the exterior termination, and replaces the transition hose with a crush-resistant DryerFlex, backed by a 3-year parts and labor warranty. If a complete clog or nest has to be removed, you get $50 off that removal."
+    : eff || sym.includes("error")
+      ? "I recommend **Premium 1-2-3 See-It-Clean**: a full-path cleaning from the dryer to the outside, with live camera footage before and after so you can see the airflow come back."
+      : "I recommend **Premium 1-2-3 See-It-Clean** to keep it that way: a full-path cleaning with live camera footage before and after.";
+  return [finding, reason, pitch].filter(Boolean).join(" ");
 }
 
 /** What each step up adds, for comparisons. */
@@ -828,7 +849,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       case "hasDryer":
         return p.hasDryer === "No" ? "Got it, duct line service only." : "Understood.";
       case "recentService":
-        return p.recentService === "Yes" ? "Thanks, a new or recently serviced dryer." : "Thanks.";
+        return p.recentService === "Yes" ? `Thanks, a new or recently serviced dryer.${priced ? ` That takes ${money(RECENT_SERVICE_DISCOUNT_CENTS)} off your cleaning.` : ""}` : "Thanks.";
       case "stories":
       case "laundryFloor":
         if (p.stories === "2-story" && p.laundryFloor === "2nd floor") return "Understood, second-floor laundry setup.";
@@ -943,6 +964,13 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond(reply, options, { ...extra, info: ["pricing"], card });
   };
 
+  const afterHoursFee = () => services.find((x) => x.family === "addon" && x.variant === "afterhours" && x.active !== false)?.priceCents ?? null;
+  /** The on-call offer, shown to customers with an emergency or who ask for something sooner. */
+  const afterHoursOffer = () => {
+    const fee = afterHoursFee();
+    return `We do have an on-call technician who may be available after hours.${priced && fee ? ` The after-hours service premium is ${money(fee)} in addition to the regular charges.` : " After-hours service has a premium in addition to the regular charges."} Would you like me to check our after-hours availability?`;
+  };
+
   const specialOffer = (families, suggested, lead, brief, extraOptions = ["Ask a question"], { airflow = null, summary = "" } = {}) => {
     s.suggested = suggested;
     s.offerFamilies = families;
@@ -990,14 +1018,12 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       return specialOffer(["premium", "ultimate"], "premium", "We couldn't get a technician to you today. You can book **Premium 1-2-3** or **Ultimate Protection** on our regular schedule. Please keep the dryer off until then.", brief, ["Request a callback"]);
     }
     if (s.intent === "emergency") {
-      // Same-day depends on who's free today, so the regular packages are offered alongside it.
-      return specialOffer(
-        ["emergency", "premium", "ultimate"],
-        "emergency",
-        `${EMERGENCY_PENDING} You can also book **Premium 1-2-3** or **Ultimate Protection** on our regular schedule. Please keep the dryer off until then.`,
-        brief,
-        ["Ask a question"],
-      );
+      // A clog or overheating dryer: Ultimate first (it clears the exterior termination and replaces the
+      // hose), Premium as the simpler option, and the on-call tech for anyone who can't wait.
+      const lead =
+        "For a clog or an overheating dryer, I recommend **Ultimate Protection**, our most comprehensive package. It cleans the full vent path, clears the exterior termination where clogs usually pack in, and replaces the transition hose with a crush-resistant DryerFlex, backed by a 3-year parts and labor warranty. If a complete clog or nest has to be removed, you get $50 off that removal. **Premium 1-2-3** is the standard full cleaning if you'd rather keep it simple. Please keep the dryer off until your visit." +
+        `\n\n${afterHoursOffer()}`;
+      return specialOffer(["ultimate", "premium"], "ultimate", lead, brief, [AFTER_HOURS_BUTTON, "Ask a question"]);
     }
     if (s.intent === "nest" || s.property.animals === "Yes") {
       return specialOffer(["nest", "restoration"], "nest", "Birds or pests in a vent need to be removed before the vent is cleaned.", brief);
@@ -1077,12 +1103,14 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
    */
   const upsellFor = () => {
     if (!priced || !["cleaning", "bundle"].includes(s.route) || s.property.hasDryer === "No" || !s.package) return null;
+    // No upgrades on emergency, nest or restoration visits; Ultimate gets only the sanitizing fog.
+    if (NO_UPSELL.has(s.package) || s.intent === "emergency") return null;
     const find = (variant) => services.find((x) => x.family === "addon" && x.variant === variant && x.active !== false);
     const out = {};
     const df = find("dryerflex");
     if (df && !NO_DRYERFLEX.has(s.package)) {
       const was = ADDON_PROMOS.dryerflex?.wasCents;
-      out.dryerflex = { name: df.name, description: df.description, cents: df.priceCents, ...(was > df.priceCents ? { wasCents: was } : {}) };
+      out.dryerflex = { name: df.name, description: df.description, cents: df.priceCents, learnMore: DRYERFLEX_URL, ...(was > df.priceCents ? { wasCents: was } : {}) };
     }
     const fog = find("fogging");
     if (fog && s.package !== "restoration") out.fogging = { name: fog.name, description: fog.description, cents: fog.priceCents };
@@ -1279,7 +1307,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond("I can help with approved DVS services, prices, and booking requests. I can't change pricing or confirm an appointment outside the booking system.", s.intent ? ["Continue booking", "Ask a question"] : WELCOME.slice(0, 4));
   }
   if (/\b(?:are you (?:a |an )?(?:real person|human|ai|bot|robot)|who are you|is this (?:a |an )?(?:ai|bot|automated assistant))\b/.test(t)) {
-    return respond("I'm BOB, Dryer Vent Squad's automated online booking assistant — not a person. I can explain our services and prices, check the live schedule, and send a request to the team.", ["Request a callback", ...(s.intent ? ["Continue booking"] : [WELCOME[1], WELCOME[3]])]);
+    return respond("I'm BOB, Dryer Vent Squad's automated online booking assistant — not a person. I can explain our services and prices, check the live schedule, and send a request to the team.", ["Request a callback", ...(s.intent ? ["Continue booking"] : [CLEANING_START, REPAIR_START])]);
   }
   if (s.stage === "review" && !/^(?:continue|continue booking)$/.test(t)) {
     return respond("You can send the request below. The team will review it; no appointment or appointment change is confirmed by a request.", [], { action: "request" });
@@ -1304,7 +1332,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   }
   if (start === "repair" || (/^(?:vent issue or repair|book assessment|assessment)$/.test(t) && !s.intent)) {
     startIntent("repair");
-    ack = "I'd be happy to help you with your vent repair, reroute, or assessment.";
+    ack = "I'd be happy to help you with your vent repair, reroute, or upgrade.";
     return next();
   }
   if (start === "emergency" || /^emergency clog(?: relief)?$/.test(t)) {
@@ -1317,6 +1345,9 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.property.animals = "Yes";
     ack = "I'd be happy to help you with your bird or pest problem.";
     return next();
+  }
+  if (start === "other") {
+    return respond("No problem. Tell me what's going on in your own words, or pick one of these.", ["Help Me Choose a Cleaning", "Ask a question", "Talk to the team"]);
   }
   if (start === "faq" || /^(?:ask (?:a|another) question|faqs?)$/.test(t)) {
     const picks = approvedFaqs.slice(0, 5).map((f) => f.question);
@@ -1432,7 +1463,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   const cancelPick = /^(?:cancel(?: (?:this|the|my|that))? (?:package|selection)|change (?:my |the )?package)$/.test(t);
   if (cancelPick || /^(?:back to (?:packages|options))$/.test(t)) {
     // Cancelling on the emergency path goes back to the same-day and regular choices.
-    const emergencyChoices = s.intent === "emergency" && ((s.offerFamilies || []).includes("emergency") || s.sameDayUnavailable);
+    const emergencyChoices = s.intent === "emergency"; // back to the emergency choices, whichever package was picked
     if (cancelPick && s.package) ack = "No problem, that package is canceled.";
     s.package = null;
     s.serviceAccepted = false;
@@ -1514,6 +1545,24 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return next();
   }
 
+  // -- after-hours (on-call) service ---------------------------------------------------------
+  if (AFTER_HOURS_YES.test(t)) {
+    s.afterHours = true;
+    s.stage = "review";
+    s.pending = null;
+    const fee = afterHoursFee();
+    const family = s.package || s.suggested || (s.intent === "emergency" ? "ultimate" : null);
+    let base = "";
+    try { if (family && priced) { const q = quoteFor(family); base = ` on top of ${PACKAGES[family]?.short || q.name} (${money(q.priceCents)})`; } } catch {}
+    return respond(
+      `I'll send this to our on-call technician.${priced && fee ? ` The after-hours premium is ${money(fee)}${base}.` : ""} Share your details below and they'll call you to confirm whether they can come after hours. Nothing is booked until they confirm.`,
+      [],
+      { action: "request" },
+    );
+  }
+  if (/^keep (?:the )?regular (?:times|schedule)$/.test(t)) return resume("No problem, we'll stick with the regular schedule.");
+  if (asksForSooner(text, s)) return respond(`The times shown are our soonest regular openings. ${afterHoursOffer()}`, [AFTER_HOURS_BUTTON, "Keep regular times"]);
+
   // -- routing from free text ----------------------------------------------------------------
   const intent = classify(text, s);
   if (intent.route === "review" || intent.route === "appliance") {
@@ -1531,7 +1580,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   }
   if (intent.faq === "repair") {
     const yes = "Yes. For a vent repair concern, we start with an assessment, and repairs are quoted separately.";
-    if (!s.intent) return respond(`${yes} Is there a specific vent issue you need evaluated?`, [WELCOME[3], WELCOME[1], "Ask a question"]);
+    if (!s.intent) return respond(`${yes} Is there a specific vent issue you need evaluated?`, [REPAIR_START, CLEANING_START, "Ask a question"]);
     return resume(yes, { faq: true });
   }
   const early = ["welcome", "evaluating", "offer", "details"].includes(s.stage) && !s.serviceAccepted;
@@ -1621,7 +1670,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond("Send your details below and the team will follow up. A request doesn't book an appointment by itself.", [], { action: "request" });
   }
   if (intent.route === "clarify" || /^help me choose$/.test(t)) {
-    return respond("Are you looking to schedule a routine cleaning, or is there a specific vent problem you need evaluated?", [WELCOME[1], WELCOME[3]]);
+    return respond("Are you looking to schedule a routine cleaning, or is there a specific vent problem you need evaluated?", [CLEANING_START, REPAIR_START]);
   }
   if (!s.intent && /^(?:hi|hello|hey|good (?:morning|afternoon|evening))[.!]?$/.test(t)) return welcome();
   unresolved = true;

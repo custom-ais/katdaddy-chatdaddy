@@ -27,7 +27,7 @@ test('missing staff sender preserves request without attempting legacy fallback'
   const h = setup();
   h.args.sendStaffSms = undefined;
   h.args.lc = { configured: true, upsertContact: async () => { throw Error('must not call'); } };
-  assert.match(await captureAvailabilityRequest(h.args), /saved your availability request/);
+  assert.equal(await captureAvailabilityRequest(h.args), '', "the customer isn't told about an internal text that couldn't go out");
   assert.equal(h.requests.size, 1);
   assert.equal([...h.requests.values()][0].notification.status, 'failed');
   assert.equal(h.calls.length, 0);

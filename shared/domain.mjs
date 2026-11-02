@@ -1,5 +1,5 @@
 import { DEFAULT_MESSAGE_TEMPLATES, validateMessageTemplates } from './message-templates.mjs';
-import {SERVICE_CATALOG,RETIRED_FAMILIES,effectiveFamily,lineForService,addOnLines} from './catalog.mjs';
+import {SERVICE_CATALOG,RETIRED_FAMILIES,effectiveFamily,lineForService,addOnLines,RECENT_SERVICE_DISCOUNT,RECENT_SERVICE_DISCOUNT_CENTS} from './catalog.mjs';
 import {difficultyMinutes} from './airflow.mjs';
 import {COVERAGE_VERSION,COVERAGE_IN,COVERAGE_TRAVEL,validPoint,customCoverage} from './coverage.mjs';
 // Cleaning packages get extra time when the answers point to a restricted or severe vent.
@@ -125,6 +125,7 @@ export function serviceQuote(route,config=DEFAULT_CONFIG,ctx={}) {
  else throw new Error('Choose cleaning, assessment, or cleaning + assessment.');
  if(!base)throw new Error('That service is not available right now.');
  const lines=[base,...addOnLines(services,{family,route:route==='bundle'?'cleaning':route,property,addOns:ctx.addOns||{}})];
+ if(property.recentService==='Yes'&&RECENT_SERVICE_DISCOUNT_CENTS>0)lines.push({...RECENT_SERVICE_DISCOUNT,cents:-RECENT_SERVICE_DISCOUNT_CENTS,mins:0,certain:true});
  if(route==='bundle')lines.push({id:'assessment-with-cleaning',name:'Repair Assessment (with cleaning)',description:'Evaluation of the vent issue during the cleaning visit, with documented findings. Repairs are quoted separately.',cents:bundleAssessmentCents(config),mins:config.assessmentMinutes,certain:true});
  // With no dryer, Premium's usual time for cleaning the dryer covers the extra vent work, so no difficulty time is added.
  const noDryerPremium=property.hasDryer==='No'&&family==='premium';

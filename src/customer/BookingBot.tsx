@@ -1,5 +1,6 @@
 import { PhoneInput } from '../components/PhoneInput';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bird, Bot, Building, Calendar, Check, CheckCircle, ChevronDown, ChevronRight, Clock,
   Download, Droplet, Flame, HelpCircle, Home, Layers, List, Loader2, MapPin, MessageCircle, Minus, MoreHorizontal, Plus, Pencil, Phone, RotateCcw,
@@ -184,12 +185,14 @@ function UpsellOffer({ upsell, onDone }: { upsell: any; onDone: (sel: { dryerfle
               <p className="shrink-0 text-right leading-none">{df.wasCents ? <span className="block text-xs font-bold text-slate-400 line-through">{money(df.wasCents)}</span> : null}<span className="font-display text-2xl font-extrabold text-slate-900">{money(df.cents)}</span></p>
             </div>
             <ul className="mt-2 space-y-1 text-sm text-slate-600">
-              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Crush-resistant aluminum that keeps the full 4-inch airflow</li>
-              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Replaces thin foil or vinyl hoses that kink behind the dryer</li>
-              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Professionally installed with airtight clamps</li>
+              <li className="flex gap-2"><ShieldCheck size={15} className="text-emerald-600 mt-0.5 shrink-0" /><span><b className="text-slate-800">Backed by our 3-year warranty</b></span></li>
+              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />UL 2158A listed, with zero flame spread</li>
+              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Crush-resistant 5-layer aluminum keeps the full 4-inch airflow</li>
+              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Replaces foil or vinyl hoses that kink behind the dryer, installed with airtight clamps</li>
             </ul>
           </Tile>
         )}
+        {df?.learnMore && <a href={df.learnMore} target="_blank" rel="noopener noreferrer" className="block -mt-1 px-1 text-xs font-bold text-sky-700 hover:text-sky-900 underline underline-offset-2">Learn more about DryerFlex (manufacturer site)</a>}
         {fog && (
           <Tile on={sel.fogging} onClick={() => flip('fogging')} label={`Sanitizing fog treatment, ${money(fog.cents)}`}>
             <div className="flex items-start justify-between gap-3">
@@ -251,12 +254,12 @@ function RecommendationCard({ card, onChoose, active }: { card: any; onChoose: (
     <div className="space-y-3 w-full">
       {card.intro && <div className="p-4 rounded-2xl bg-white text-slate-800 border border-slate-200/90 text-sm sm:text-[15px] leading-relaxed whitespace-pre-wrap shadow-xs"><Rich text={card.intro} /></div>}
       {card.airflow && <AirflowGauge a={card.airflow} />}
-      {card.savings && <SavingsTile s={card.savings} />}
       {card.summary ? (
         <div className="p-4 rounded-2xl bg-white text-slate-800 border border-slate-200/90 text-sm sm:text-[15px] leading-relaxed shadow-xs"><Rich text={card.summary} /></div>
       ) : card.lead ? (
         <div className="p-4 rounded-2xl bg-white text-slate-800 border border-slate-200/90 text-sm sm:text-[15px] leading-relaxed whitespace-pre-wrap shadow-xs"><Rich text={card.lead} /></div>
       ) : null}
+      {card.savings && <SavingsTile s={card.savings} />}
       {card.question && <p className="font-extrabold text-slate-900 text-sm px-1 pt-1">{card.question}</p>}
       {(card.picks || []).map((p: any) => <PackageCard key={p.family} p={p} onChoose={onChoose} disabled={!active} />)}
       {card.note && <p className="text-xs text-slate-500 px-1">{card.note}</p>}
@@ -272,7 +275,7 @@ function iconFor(label: string) {
   if (/question|faq/.test(l)) return <MessageCircle size={18} className={`${c} text-blue-500`} />;
   if (/edit|gate code|back to/.test(l)) return <Pencil size={18} className={`${c} text-slate-400`} />;
   if (/don't know|not sure/.test(l)) return <HelpCircle size={18} className={`${c} text-slate-400`} />;
-  if (/callback|contact the team|person/.test(l)) return <Phone size={18} className={`${c} text-slate-500`} />;
+  if (/callback|contact the team|talk to the team|person/.test(l)) return <Phone size={18} className={`${c} text-slate-500`} />;
   if (/more services|other/.test(l)) return <MoreHorizontal size={18} className={`${c} text-slate-400`} />;
   if (l.includes('1-story')) return <Home size={18} className={`${c} text-blue-500`} />;
   if (l.includes('2-story')) return <Building size={18} className={`${c} text-blue-500`} />;
@@ -300,10 +303,11 @@ function iconFor(label: string) {
 }
 
 const WELCOME_CARDS: [string, React.ReactElement][] = [
+  ['Book a Cleaning', <Wind strokeWidth={2} size={26} />],
+  ['Repairs, Reroutes & Upgrades', <Wrench strokeWidth={2} size={26} />],
   ['Emergency Clog / Overheating', <Flame strokeWidth={2} size={26} />],
-  ['Standard Vent Cleaning', <Wind strokeWidth={2} size={26} />],
-  ['Help Me Choose Package', <Search strokeWidth={2} size={26} />],
-  ['Repair / Reroute / Assessment', <Wrench strokeWidth={2} size={26} />],
+  ['Pest / Nest Removal', <Bird strokeWidth={2} size={26} />],
+  ['Something Else', <MessageCircle strokeWidth={2} size={26} />],
 ];
 
 // ---- contact details, collected one question at a time ---------------------------------------
@@ -357,7 +361,7 @@ function LineItems({ items, total }: { items: any[]; total: number }) {
 }
 
 function RequestForm({ token, session, onDone }: { token: string; session: any; onDone: (id: string) => void }) {
-  const [form, setForm] = useState({ name: session?.contact?.name || '', phone: session?.contact?.phone || '', email: session?.contact?.email || '', zip: session?.zip || '', message: session?.concerns?.join('\n') || '', preference: 'phone', smsConsent: false });
+  const [form, setForm] = useState({ name: session?.contact?.name || '', phone: session?.contact?.phone || '', email: session?.contact?.email || '', zip: session?.zip || '', message: [session?.afterHours ? 'After-hours emergency visit requested.' : '', ...(session?.concerns || [])].filter(Boolean).join('\n'), preference: 'phone', smsConsent: false });
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const id = useRef(crypto.randomUUID());
   const input = 'w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-800 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 outline-none';
@@ -464,42 +468,117 @@ function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { t
   );
 }
 
-function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, onEdit }: { token: string; session: any; config: any; onBooked: (r: any, pending: boolean) => void; onApproval: (a: any) => void; onRequest: () => void; onEdit: () => void }) {
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+const LOADING_STEPS = ['Checking the schedule for openings…', 'Calculating routes…', 'Assigning a technician…', 'Gathering optional alternatives…'];
+const BOOKING_STEPS = ['Creating your account…', 'Assigning your technician…', 'Adding your visit to the schedule…', 'Sending your confirmation…'];
+
+/**
+ * A small popup while BOB loads openings or books the visit: steps check off one by one. It's shown
+ * on <body> so it covers the chat however the page is scrolled or animated.
+ */
+function ProgressPopup({ title, steps, done, every = 1000 }: { title: string; steps: string[]; done: boolean; every?: number }) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setI((n) => Math.min(n + 1, steps.length - 1)), every);
+    return () => clearInterval(t);
+  }, [steps.length, every]);
+  const current = done ? steps.length : i;
+  return createPortal(
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/45 backdrop-blur-[2px] p-4 animate-in" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="w-full max-w-sm rounded-3xl bg-white shadow-2xl border border-slate-200 p-6">
+        <div className="flex items-center gap-4">
+          <div className="relative size-16 shrink-0 flex items-center justify-center" aria-hidden="true">
+            <span className="absolute inset-0 rounded-full bg-orange-400/25 motion-safe:animate-ping" style={{ animationDuration: '1.8s' }} />
+            <span className="relative"><BobFace size={52} /></span>
+          </div>
+          <h3 className="font-extrabold text-slate-900 text-lg leading-snug">{title}</h3>
+        </div>
+        <ul className="mt-5 space-y-3" role="status" aria-live="polite">
+          {steps.map((step, k) => (
+            <li key={step} className={`flex items-center gap-3 text-sm font-semibold transition-colors ${k < current ? 'text-slate-700' : k === current ? 'text-slate-900' : 'text-slate-400'}`}>
+              {k < current ? <CheckCircle size={20} className="text-emerald-500 shrink-0" />
+                : k === current ? <Loader2 size={20} className="text-orange-500 animate-spin shrink-0" />
+                : <span className="size-5 shrink-0 rounded-full border-2 border-slate-200" aria-hidden="true" />}
+              {step}
+            </li>
+          ))}
+        </ul>
+        <div className="mt-5 h-1.5 rounded-full bg-slate-100 overflow-hidden" aria-hidden="true">
+          <div className="h-full bg-gradient-to-r from-orange-400 to-emerald-500 transition-[width] duration-700 ease-out" style={{ width: `${Math.max(8, (current / steps.length) * 100)}%` }} />
+        </div>
+        <p className="mt-4 text-xs font-bold text-slate-500 text-center">Please do not navigate away from this screen.</p>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** Shows a popup for at least `min` ms (so it never just flashes), then checks every step off before closing. */
+function useProgress(min: number) {
+  const [state, setState] = useState<'off' | 'on' | 'done'>('off');
+  const started = useRef(0);
+  const start = useCallback(() => { started.current = Date.now(); setState('on'); }, []);
+  const finish = useCallback(async () => {
+    await sleep(Math.max(0, min - (Date.now() - started.current)));
+    setState('done');
+    await sleep(450);
+    setState('off');
+  }, [min]);
+  const stop = useCallback(() => setState('off'), []);
+  return { state, start, finish, stop };
+}
+
+function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, onEdit, onSooner }: { token: string; session: any; config: any; onBooked: (r: any, pending: boolean) => void; onApproval: (a: any) => void; onRequest: () => void; onEdit: () => void; onSooner?: () => void }) {
   const [slots, setSlots] = useState<any[]>([]), [cursor, setCursor] = useState<number | null>(0), [date, setDate] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [hold, setHold] = useState<any>(null), [approved, setApproved] = useState(false), [enabled, setEnabled] = useState(true), [now, setNow] = useState(Date.now()), [quote, setQuote] = useState<any>(null);
   const idem = useRef(crypto.randomUUID()), generation = useRef(0), busyRef = useRef(false);
+  const loading = useProgress(2400), booking = useProgress(2600);
+  // The pressed time: outlined and filling while it's held, then solid green.
+  const [picking, setPicking] = useState<string | null>(null), [held, setHeld] = useState<string | null>(null);
+  const [confirmState, setConfirmState] = useState<'idle' | 'working' | 'done'>('idle');
+  const { start: startLoading, finish: finishLoading } = loading;
   const load = useCallback(async (nextCursor = 0, searchDate = '') => {
     const n = ++generation.current;
     setBusy(true); setError('');
+    startLoading();
     try {
       const r = await api(`/api/availability?cursor=${nextCursor}&date=${encodeURIComponent(searchDate)}`, { token });
       if (n !== generation.current) return;
       setSlots(r.slots); setCursor(r.nextCursor); setEnabled(r.enabled); if (r.quote) setQuote(r.quote);
-    } catch (err) { if (n === generation.current) setError((err as Error).message); } finally { if (n === generation.current) setBusy(false); }
-  }, [token]);
+    } catch (err) { if (n === generation.current) setError((err as Error).message); } finally {
+      if (n === generation.current) { setBusy(false); void finishLoading(); }
+    }
+  }, [token, startLoading, finishLoading]);
   useEffect(() => { void load(); return () => { generation.current++; }; }, [load]);
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t); }, []);
   const seconds = hold ? Math.max(0, Math.ceil((hold.expiresAt - now) / 1000)) : 0;
 
   const choose = async (slot: any) => {
     if (busyRef.current) return;
-    busyRef.current = true; setBusy(true); setError('');
+    busyRef.current = true; setBusy(true); setError(''); setPicking(slot.scheduledAt);
     try {
       const r = await api('/api/holds', { method: 'POST', token, body: { scheduledAt: slot.scheduledAt } });
-      setHold(r.hold); setApproved(false); setNow(Date.now()); idem.current = crypto.randomUUID();
-    } catch (err) { setError((err as Error).message); void load(0, date); } finally { setBusy(false); busyRef.current = false; }
+      setHeld(slot.scheduledAt);
+      await sleep(800); // let the customer see the time turn green before the review screen
+      setHold(r.hold); setApproved(false); setNow(Date.now()); idem.current = crypto.randomUUID(); setConfirmState('idle');
+    } catch (err) { setError((err as Error).message); void load(0, date); } finally { setPicking(null); setHeld(null); setBusy(false); busyRef.current = false; }
   };
   const confirm = async () => {
     if (!hold || !approved || seconds <= 0 || busyRef.current) return;
-    busyRef.current = true; setBusy(true); setError('');
+    busyRef.current = true; setBusy(true); setError(''); setConfirmState('working');
     try {
       if (hold.approvalRequired) {
         const r = await api('/api/approvals', { method: 'POST', token, body: { holdId: hold.id, approved: true } });
         onApproval(r.approval);
       } else {
+        booking.start();
         const r = await api('/api/bookings', { method: 'POST', token, body: { holdId: hold.id, idempotencyKey: idem.current, approved: true } });
+        await booking.finish();
+        setConfirmState('done');
+        await sleep(1000); // the button shows Confirmed before the receipt
         onBooked(r.receipt, Boolean(r.pending));
       }
     } catch (err) {
+      booking.stop(); setConfirmState('idle');
       setError((err as Error).message);
       if (err instanceof ApiError && err.status === 409) { setHold(null); setApproved(false); void load(0, date); }
     } finally { setBusy(false); busyRef.current = false; }
@@ -511,13 +590,15 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
     catch (err) { setError((err as Error).message); } finally { setBusy(false); }
   };
 
-  if (busy && !slots.length && !hold && !error) {
-    return <WorkingScreen title="Finding your openings" steps={['Checking the live schedule…', 'Finding technicians near you…', 'Lining up the soonest openings…', 'Almost there…']} loop={1} every={2500} />;
-  }
+  const popups = <>
+    {loading.state !== 'off' && <ProgressPopup title="Finding your openings" steps={LOADING_STEPS} done={loading.state === 'done'} every={650} />}
+    {booking.state !== 'off' && <ProgressPopup title="Booking your visit" steps={BOOKING_STEPS} done={booking.state === 'done'} every={850} />}
+  </>;
 
   if (!enabled) {
     return (
       <Card>
+        {popups}
         <h3 className="font-extrabold text-slate-800 text-lg">Online booking is paused</h3>
         <p className="text-sm text-slate-500 mt-1 mb-4">The office can still get you on the schedule. Send your preferred day and time and they'll confirm it with you.</p>
         <button className="w-full bg-gradient-to-r from-orange-500 to-orange-600 text-white font-extrabold py-3.5 rounded-2xl" onClick={onRequest}>Send a booking request</button>
@@ -530,6 +611,7 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
     const c = session.contact || {};
     return (
       <Card>
+        {popups}
         <div className="flex justify-between items-center mb-4 gap-3">
           <h3 className="font-extrabold text-slate-800 flex items-center gap-2.5 text-lg"><CheckCircle size={22} className="text-orange-500" />Review your visit</h3>
           <span role="timer" className={`text-xs font-mono px-3 py-1.5 rounded-full flex items-center gap-1.5 font-bold border ${seconds > 0 ? 'bg-orange-50 text-orange-700 border-orange-200/50' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
@@ -554,8 +636,18 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
           <span>The service, price, address, and arrival window are correct.</span>
         </label>
         {error && <div role="alert" className="mt-3 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">{error}</div>}
-        <button className="w-full mt-5 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-extrabold py-4 rounded-2xl shadow-lg shadow-orange-500/30 flex justify-center items-center gap-2 disabled:opacity-60 text-base" disabled={!approved || busy || seconds <= 0} onClick={confirm}>
-          {busy ? <><Loader2 className="animate-spin" size={20} />{hold.approvalRequired ? 'Sending for approval…' : 'Booking your visit…'}</> : hold.approvalRequired ? 'Request approval' : 'Confirm & book'}
+        <button
+          className={`relative overflow-hidden w-full mt-5 font-extrabold py-4 rounded-2xl flex justify-center items-center gap-2 text-base transition-colors ${
+            confirmState === 'done' ? 'bg-emerald-500 text-white border-2 border-emerald-500 shadow-lg shadow-emerald-500/30'
+            : confirmState === 'working' ? 'bg-white text-emerald-800 border-2 border-emerald-500'
+            : 'bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white border-2 border-transparent shadow-lg shadow-orange-500/30 disabled:opacity-60'}`}
+          disabled={!approved || busy || seconds <= 0} onClick={confirm} aria-live="polite">
+          {confirmState === 'working' && <span className="bob-fill absolute inset-0 bg-emerald-200/70" aria-hidden="true" />}
+          <span className="relative flex items-center gap-2">
+            {confirmState === 'done' ? <><CheckCircle size={20} />Confirmed</>
+              : confirmState === 'working' ? <><Loader2 className="animate-spin" size={20} />{hold.approvalRequired ? 'Sending for approval…' : 'Booking your visit…'}</>
+              : hold.approvalRequired ? 'Request approval' : 'Confirm & book'}
+          </span>
         </button>
         <div className="mt-3 flex justify-center gap-5 text-sm font-bold text-slate-500">
           <button onClick={release} disabled={busy} className="hover:text-slate-800">{seconds > 0 ? 'Pick a different time' : 'See open times again'}</button>
@@ -567,6 +659,7 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
 
   return (
     <Card>
+      {popups}
       <div className="flex justify-between items-center mb-3">
         <h3 className="font-extrabold text-slate-800 flex items-center gap-2.5 text-lg"><Calendar size={22} className="text-orange-500" />Select a time</h3>
         <span className="text-xs font-bold text-slate-400">Arizona time</span>
@@ -581,11 +674,17 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
       <div className="space-y-3" aria-busy={busy}>
         {slots.map((slot) => {
           const w = windowParts(slot.scheduledAt);
+          const isHeld = held === slot.scheduledAt, isPicking = picking === slot.scheduledAt && !isHeld;
           return (
-            <button key={slot.scheduledAt} onClick={() => choose(slot)} disabled={busy} className="w-full flex items-center justify-between gap-3 p-4 rounded-2xl border-2 text-left bg-white border-slate-100 hover:border-orange-300 hover:bg-orange-50/30 active:scale-[0.99] transition-all disabled:opacity-60">
-              <span>
-                <span className="block font-extrabold text-slate-800">{w.day}</span>
-                <span className="block text-sm font-semibold text-slate-500">{w.time}</span>
+            <button key={slot.scheduledAt} onClick={() => choose(slot)} disabled={busy} aria-pressed={isPicking || isHeld}
+              className={`relative overflow-hidden w-full flex items-center justify-between gap-3 p-4 rounded-2xl border-2 text-left transition-all ${
+                isHeld ? 'bg-emerald-500 border-emerald-500 text-white shadow-lg shadow-emerald-500/25'
+                : isPicking ? 'bg-white border-emerald-500 ring-4 ring-emerald-100'
+                : 'bg-white border-slate-100 hover:border-orange-300 hover:bg-orange-50/30 active:scale-[0.99] disabled:opacity-60'}`}>
+              {isPicking && <span className="bob-fill absolute inset-0 bg-emerald-100" aria-hidden="true" />}
+              <span className="relative">
+                <span className={`block font-extrabold ${isHeld ? 'text-white' : 'text-slate-800'}`}>{w.day}</span>
+                <span className={`block text-sm font-semibold ${isHeld ? 'text-emerald-50' : 'text-slate-500'}`}>{w.time}</span>
                 <span className="flex flex-wrap gap-1.5 mt-1.5">
                   {slot.bestFit && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">Best fit for our route</span>}
                   {slot.nearby && !slot.bestFit && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 flex items-center gap-1"><MapPin size={11} />We're nearby that day</span>}
@@ -593,12 +692,13 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
                   {slot.approval && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">Needs team approval</span>}
                 </span>
               </span>
-              <ChevronRight size={20} className="text-slate-300 shrink-0" />
+              {isHeld ? <span className="relative flex items-center gap-1.5 text-sm font-extrabold shrink-0"><CheckCircle size={20} />Held for you</span>
+                : isPicking ? <Loader2 size={20} className="relative text-emerald-600 animate-spin shrink-0" />
+                : <ChevronRight size={20} className="text-slate-300 shrink-0" />}
             </button>
           );
         })}
       </div>
-      {busy && <p role="status" className="mt-3 text-sm font-semibold text-slate-400 flex items-center gap-2"><Loader2 size={16} className="animate-spin" />Checking the live schedule…</p>}
       {!busy && slots.length === 0 && <p className="text-sm text-slate-500 mt-2">No openings match. Try another date, or send the team a request.</p>}
       <div className="mt-4 flex flex-wrap gap-2">
         <button className="px-4 py-2 rounded-xl text-sm font-extrabold bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-50" onClick={() => load(cursor || 0, date)} disabled={busy || cursor === null}>More times</button>
@@ -610,7 +710,8 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
         </label>
         <button className="px-4 py-2.5 rounded-xl text-sm font-extrabold bg-slate-900 text-white disabled:opacity-40" disabled={busy || !date}>Check day</button>
       </form>
-      <p className="mt-4 text-xs text-slate-400">Picking a time holds it for five minutes while you review. Nothing is booked until you confirm.</p>
+      {onSooner && <button type="button" className="mt-4 text-sm font-extrabold text-orange-600 hover:text-orange-700" onClick={onSooner} disabled={busy}>Need it sooner than these times?</button>}
+      <p className="mt-3 text-xs text-slate-400">Picking a time holds it for five minutes while you review. Nothing is booked until you confirm.</p>
       <button className="mt-2 w-full text-sm font-bold text-slate-500 hover:text-slate-800" onClick={onEdit} disabled={busy}>Edit details</button>
     </Card>
   );
@@ -919,7 +1020,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   }, [token, showChoices]);
   const addOnLabels = (s: any) =>
     (config?.addOns || [])
-      .filter((a: any) => !(a.key === 'fogging' && s?.package === 'restoration'))
+      .filter(() => !['emergency', 'nest', 'restoration'].includes(s?.package)) // no upgrades on these visits
       .filter((a: any) => !(a.key === 'dryerflex' && (['ultimate', 'restoration', 'express', 'inspection'].includes(s?.package) || s?.property?.hasDryer === 'No')))
       .map((a: any) => `${a.name}${config?.pricesApproved ? ` · +${money(a.cents)}` : ''}`);
 
@@ -1146,7 +1247,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     <div className={`bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden flex flex-col relative text-white ${minimized ? 'bob-minimized' : ''} ${shell}`}>
       <div className="bg-slate-800/90 backdrop-blur-md px-4 py-3 border-b border-slate-700/60 flex items-center justify-between z-20">
         <div className="flex items-center gap-3">
-          <BobFace size={40} />
+          <BobFace size={52} />
           <div>
             <h1 className="font-extrabold text-base text-white tracking-tight leading-none">Dryer Vent Squad West Valley</h1>
             <p className="text-[11px] font-semibold text-orange-400 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
@@ -1186,7 +1287,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       <div ref={scroll} className={`flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 ${started ? 'bg-slate-50 text-slate-800' : 'bg-slate-900'}`} aria-live="polite" aria-relevant="additions text">
         {!started ? (
           <div className="flex flex-col items-center max-w-xl mx-auto py-4 animate-in">
-            <div className="mb-5"><BobFace size={112} /></div>
+            <div className="mb-5"><BobFace size={128} /></div>
             <h2 className="text-2xl sm:text-3xl font-black text-white mb-2 text-center tracking-tight">👋 Hi! Welcome to Dryer Vent Squad West Valley!</h2>
             <p className="text-slate-300 text-center mb-6 text-sm max-w-sm leading-relaxed">I'm your AI Booking &amp; Diagnostic Assistant. How can I help restore your dryer exhaust system today?</p>
             {error && <div role="alert" className="mb-4 w-full text-sm font-semibold text-rose-200 bg-rose-950/60 border border-rose-400/40 rounded-xl p-3">{error} <button className="ml-2 underline font-bold" onClick={() => initialize()}>Reconnect</button></div>}
@@ -1209,7 +1310,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
                 <div key={i} data-msg={i} className={`flex w-full ${model ? 'justify-start' : 'justify-end'} animate-in`}>
                   <div className={`flex ${model && msg.card ? 'w-full sm:max-w-[88%]' : 'max-w-[90%] sm:max-w-[80%]'} gap-2.5 ${model ? 'flex-row' : 'flex-row-reverse'}`}>
                     <div className="shrink-0 mt-auto mb-1">
-                      {model ? <BobFace size={32} /> : <div className="bg-slate-700 text-slate-300 p-2 rounded-full border border-slate-600"><User size={16} /></div>}
+                      {model ? <BobFace size={38} /> : <div className="bg-slate-700 text-slate-300 p-2 rounded-full border border-slate-600"><User size={16} /></div>}
                     </div>
                     <div className={`min-w-0 ${model && msg.card ? 'w-full' : ''}`}>
                       {model && msg.card ? (
@@ -1275,7 +1376,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
             <div className="pl-9 sm:pl-10 space-y-4">
               {!receipt && !requestId && contactStep === 'addons' && session?.upsell && !busy && <UpsellOffer upsell={session.upsell} onDone={chooseUpsell} />}
               {!receipt && !requestId && action === 'verify' && verification && <VerifyPhone token={token} verification={verification} onVerified={(s) => { setSession(s); setVerification(null); setAction('slots'); say('model', `Thanks — your ${s.verifiedContact?.channel === 'email' ? 'email' : 'phone'} is confirmed. Here are the soonest openings for the full visit.`); }} onEdit={editDetails} onRequest={() => setAction('request')} />}
-              {!receipt && !requestId && action === 'slots' && <SlotPicker token={token} session={session} config={config} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); setAutoClose(!p && !preview); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
+              {!receipt && !requestId && action === 'slots' && <SlotPicker token={token} session={session} config={config} onSooner={() => void send('Do you have anything sooner?')} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); setAutoClose(!p && !preview); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
               {!receipt && !requestId && action === 'approval' && approval && <ApprovalWait token={token} initial={approval} onBooked={onApprovalBooked} onEnded={onApprovalEnded} onCancelled={onApprovalCancelled} />}
               {!receipt && !requestId && action === 'request' && <RequestForm token={token} session={session} onDone={(id) => { setRequestId(id); setAction(''); setOptions([]); }} />}
               {requestId && (

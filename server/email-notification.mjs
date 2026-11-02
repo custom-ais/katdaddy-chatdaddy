@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-const KINDS = new Set(['appointment_confirmed', 'approval_pending', 'booking_report']);
+const KINDS = new Set(['appointment_confirmed', 'approval_pending', 'booking_report', 'after_hours_request']);
 const normalizeRecipient = value => {
   const address = typeof value === 'string' ? value.trim().toLowerCase() : '';
   return address.length <= 254 && /^[^\s<>@,;]+@[^\s<>@,;]+\.[^\s<>@,;]+$/.test(address) ? address : null;
