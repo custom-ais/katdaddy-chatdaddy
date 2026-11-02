@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { createOwnerConsent } from '../server/owner-consent.mjs';
+import { OWNER_SMS_CONSENT_VERSION } from '../shared/owner-sms-consent.mjs';
 import { harness, contact } from './helpers.mjs';
 
 async function toggle(h, name, value) {
@@ -40,6 +43,9 @@ test('disabled verification refuses sends/checks and never becomes a bypass for 
 
 test('disabled appointment SMS leaves Verify independent and suppresses customer/owner alerts',async t=>{
   const h=await harness(t,{config:{bookingOwnerSmsEnabled:true,bookingOwnerSmsPhone:'6235550100'}});
+  const consent=createOwnerConsent({store:h.store});
+  await consent.record({action:'grant',revision:0,phone:'6235550100',consent:true,disclosureVersion:OWNER_SMS_CONSENT_VERSION,idempotencyKey:randomUUID()},'synthetic-owner-session');
+  assert.equal(await consent.allows('6235550100'),true,'owner consent must be eligible so the SMS integration switch is independently exercised');
   await toggle(h,'sms',false);
   const config=await h.call('/api/public/config');assert.equal(config.data.textMessages,false);assert.equal(config.data.bookingEnabled,true);
   const r=await h.book('cleaning',{...contact,smsConsent:true});

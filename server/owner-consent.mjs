@@ -1,12 +1,18 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {normalizePhone} from '../shared/domain.mjs';
-import {OWNER_SMS_CONSENT_VERSION,OWNER_SMS_PURPOSES,OWNER_SMS_DISCLOSURE} from '../shared/owner-sms-consent.mjs';
+import {OWNER_SMS_CONSENT_VERSION,OWNER_SMS_PURPOSES,OWNER_SMS_DISCLOSURE,OWNER_SMS_TERMS_URL,OWNER_SMS_PRIVACY_URL} from '../shared/owner-sms-consent.mjs';
 const CURRENT='owner-sms-consent:current';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
 export function createOwnerConsent({store,clock=Date.now}){
  async function current(){return await store.kvGet(CURRENT)||null;}
- async function snapshot(){const record=await current();const configuredPhone=normalizePhone((await store.config()).bookingOwnerSmsPhone);const matchesConfiguredPhone=Boolean(record&&record.phone===configuredPhone);return {matchesConfiguredPhone,effectiveActive:record?.active===true&&matchesConfiguredPhone&&record?.sendingAuthorized===true,sendingAuthorized:record?.sendingAuthorized===true,revision:record?.revision||0,current:record,disclosure:{version:OWNER_SMS_CONSENT_VERSION,text:OWNER_SMS_DISCLOSURE,purposes:[...OWNER_SMS_PURPOSES]},readiness:{stopHelpVerified:false,automaticActivation:false,operationalFailuresAvailable:false,programPoliciesVerified:false}};}
+ async function snapshot(){
+  const record=await current();
+  const configuredPhone=normalizePhone((await store.config()).bookingOwnerSmsPhone);
+  const matchesConfiguredPhone=Boolean(record&&configuredPhone&&record.phone===configuredPhone);
+  const currentVersion=record?.disclosureVersion===OWNER_SMS_CONSENT_VERSION;
+  return {revision:record?.revision||0,current:record,matchesConfiguredPhone,currentVersion,effectiveActive:record?.active===true&&matchesConfiguredPhone&&currentVersion,disclosure:{version:OWNER_SMS_CONSENT_VERSION,text:OWNER_SMS_DISCLOSURE,purposes:[...OWNER_SMS_PURPOSES],termsUrl:OWNER_SMS_TERMS_URL,privacyUrl:OWNER_SMS_PRIVACY_URL}};
+ }
  async function record(body,adminSession,actorUserId=null){
   if(!body||typeof body!=='object'||Array.isArray(body))throw failure('Invalid consent request.');
   if(!['grant','revoke'].includes(body.action)||!Number.isInteger(body.revision)||body.revision<0||typeof body.idempotencyKey!=='string'||!/^[a-f\d]{8}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{4}-[a-f\d]{12}$/i.test(body.idempotencyKey))throw failure('Invalid consent request.');
@@ -20,7 +26,7 @@ export function createOwnerConsent({store,clock=Date.now}){
   if(existing){if(existing.requestFingerprint!==fingerprint)throw failure('This request key was already used for a different consent change.',409);return {...await snapshot(),receipt:existing};}
   const old=await current();if((old?.revision||0)!==body.revision){const retry=await store.kvGet(key);if(retry?.requestFingerprint===fingerprint)return {...await snapshot(),receipt:retry};throw failure('Consent changed elsewhere. Refresh before saving.',409);}
   if(body.action==='revoke'&&!old)throw failure('There is no recorded consent to revoke.',409);
-  const receipt={id:randomUUID(),revision:body.revision+1,action:body.action,active:body.action==='grant',sendingAuthorized:false,phone:phone||old.phone,at:new Date(clock()).toISOString(),disclosureVersion:OWNER_SMS_CONSENT_VERSION,disclosure:OWNER_SMS_DISCLOSURE,purposes:[...OWNER_SMS_PURPOSES],actor:{type:actorUserId?'authenticated_admin_user':'authenticated_admin_session',...(actorUserId?{userId:actorUserId}:{}),reference:hash(adminSession)},requestFingerprint:fingerprint};
+  const receipt={id:randomUUID(),revision:body.revision+1,action:body.action,active:body.action==='grant',phone:phone||old.phone,at:new Date(clock()).toISOString(),disclosureVersion:OWNER_SMS_CONSENT_VERSION,disclosure:OWNER_SMS_DISCLOSURE,purposes:[...OWNER_SMS_PURPOSES],actor:{type:actorUserId?'authenticated_admin_user':'authenticated_admin_session',...(actorUserId?{userId:actorUserId}:{}),reference:hash(adminSession)},requestFingerprint:fingerprint};
   // One atomic block works through the existing REST RPC, which nests row-producing
   // queries in a CTE and cannot nest a data-changing CTE. No schema change is needed.
   // Hex keeps all request data out of SQL syntax and the RPC's keyword detection.
@@ -43,6 +49,15 @@ export function createOwnerConsent({store,clock=Date.now}){
   if(saved?.requestFingerprint!==fingerprint)throw failure('Consent changed elsewhere. Refresh before saving.',409);
   return {...await snapshot(),receipt:saved};
  }
- async function allows(phone){try{const receipt=await current();if(!receipt)return true;const configuredPhone=normalizePhone((await store.config()).bookingOwnerSmsPhone);return receipt.active===true&&receipt.sendingAuthorized===true&&receipt.phone===normalizePhone(phone)&&receipt.phone===configuredPhone;}catch{return false;}}
+ async function allows(phone){
+  try{
+   const configuredPhone=normalizePhone((await store.config()).bookingOwnerSmsPhone);
+   // Read the receipt after configuration so revocation during that await is observed.
+   const receipt=await current();
+   // v1 receipts must never authorize sending: that disclosure said saving did not enable alerts.
+   if(!receipt||receipt.active!==true||receipt.disclosureVersion!==OWNER_SMS_CONSENT_VERSION)return false;
+   return Boolean(configuredPhone)&&receipt.phone===normalizePhone(phone)&&receipt.phone===configuredPhone;
+  }catch{return false;}
+ }
  return {snapshot,record,allows};
 }

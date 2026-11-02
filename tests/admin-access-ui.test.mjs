@@ -5,6 +5,7 @@ import { createRequire } from 'node:module';
 import ts from 'typescript';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { parseDocument } from 'htmlparser2';
 import * as permissions from '../shared/admin-permissions.mjs';
 import * as domain from '../shared/domain.mjs';
 import * as catalog from '../shared/catalog.mjs';
@@ -19,7 +20,7 @@ const member=(keys=[])=>({id:'synthetic-member',role:'member',permissions:keys,n
 const ui={
  Field:({label,children})=>React.createElement('label',null,label,children),
  Section:({title,description,action,children})=>React.createElement('section',null,React.createElement('h3',null,title),description,action,children),
- Toggle:({label,checked,disabled})=>React.createElement('label',null,React.createElement('input',{type:'checkbox',checked:!!checked,disabled,readOnly:true}),label),
+ Toggle:({label,detail,checked,disabled})=>React.createElement('label',null,React.createElement('input',{type:'checkbox',checked:!!checked,disabled,readOnly:true}),label,detail),
  ErrorNote:({children})=>React.createElement('p',{role:'alert'},children),
 };
 
@@ -116,6 +117,21 @@ test('legacy owner alert settings remain available but only a named Master mount
  const staff=await settings(member(['settings.booking.view','settings.booking.manage']),'?tab=settings&settings=booking');
  assert.doesNotMatch(staff.html,/Owner booking alerts|owner-sms-consent|OWNER-CONSENT-CONTENT/);
  assert.equal(staff.mounted.includes('owner'),false);
+});
+
+test('owner alert controls use the exact consent-dependent copy and service-error toggle remains off and protected',async()=>{
+ const {html}=await settings({id:'synthetic-master',role:'master',permissions:[]},'?tab=settings&settings=booking');
+ const all=(node,predicate)=>[...(predicate(node)?[node]:[]),...(node.children||[]).flatMap(child=>all(child,predicate))];
+ const text=node=>node.type==='text'?node.data:(node.children||[]).map(text).join('');
+ const doc=parseDocument(html),labels=all(doc,node=>node.name==='label');
+ assert.ok(text(doc).includes('Optional texts to you after ChatDaddy confirms an appointment, and when something needs your attention. These are separate from emergency same-day approval requests and never hold up a booking.'));
+ const booking=labels.find(node=>text(node).startsWith('Text me when an appointment is booked'));
+ assert.equal(text(booking),'Text me when an appointment is bookedOff by default. Also needs the text message consent below for this number and an approved Twilio sender. Saving this setting does not send a test text.');
+ const errors=labels.find(node=>text(node).startsWith('Text me about service errors'));
+ assert.equal(text(errors),"Text me about service errorsOff by default. Texts you when a ChatDaddy booking needs your review, a customer can't finish booking because of a Jobber error, or the Jobber, phone-code, AI or email connection fails. At most one text per problem every 6 hours and 10 per day. Uses the number below and needs the text message consent below.");
+ assert.equal(Object.hasOwn(all(errors,node=>node.name==='input')[0].attribs,'checked'),false);
+ const staff=await settings(member(['settings.booking.view','settings.booking.manage']),'?tab=settings&settings=booking');
+ assert.doesNotMatch(staff.html,/Text me about service errors|Text me when an appointment is booked/);
 });
 
 test('non-master technician editing cannot change or remove the reserved SMS recipient',async()=>{

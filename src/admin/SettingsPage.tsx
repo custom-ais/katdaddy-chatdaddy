@@ -539,15 +539,16 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
         </div>
       </Section>
 
-            {can('ownerSms.manage') && <><Section icon={<MessageSquare size={18} />} title="Owner booking alerts" description="Optional texts after ChatDaddy successfully confirms an appointment. These are separate from emergency same-day approval requests and do not hold up a booking.">
-        <Toggle checked={c.bookingOwnerSmsEnabled === true} onChange={(v) => update('bookingOwnerSmsEnabled', v)} label="Text me when an appointment is booked" detail="Off by default. Requires the recipient number below and a configured, approved texting sender. Saving this setting does not send a test text." />
+            {can('ownerSms.manage') && <><Section icon={<MessageSquare size={18} />} title="Owner booking alerts" description="Optional texts to you after ChatDaddy confirms an appointment, and when something needs your attention. These are separate from emergency same-day approval requests and never hold up a booking.">
+        <Toggle checked={c.bookingOwnerSmsEnabled === true} onChange={(v) => update('bookingOwnerSmsEnabled', v)} label="Text me when an appointment is booked" detail="Off by default. Also needs the text message consent below for this number and an approved Twilio sender. Saving this setting does not send a test text." />
+        <Toggle checked={c.ownerErrorSmsEnabled === true} onChange={(v) => update('ownerErrorSmsEnabled', v)} label="Text me about service errors" detail="Off by default. Texts you when a ChatDaddy booking needs your review, a customer can't finish booking because of a Jobber error, or the Jobber, phone-code, AI or email connection fails. At most one text per problem every 6 hours and 10 per day. Uses the number below and needs the text message consent below." />
         <div className="max-w-md">
           <Field label="Your mobile number for booking alerts" hint="Required when enabled. Enter the number that should receive these alerts; no approver or customer number is used automatically.">
             <PhoneInput className={inputClass} type="tel" inputMode="tel" autoComplete="off" placeholder="Recipient mobile number" value={c.bookingOwnerSmsPhone || ''} onValueChange={(value) => update('bookingOwnerSmsPhone', value)} />
           </Field>
         </div>
-        {c.bookingOwnerSmsEnabled === true && !String(c.bookingOwnerSmsPhone || '').trim() && <p role="status" className="text-sm font-semibold text-amber-800">Enter your recipient mobile number before saving this option.</p>}
-        {c.bookingOwnerSmsEnabled === true && !data.integrations?.sms?.configured && <p role="status" className="text-sm font-semibold text-amber-800">The selected texting provider is not ready. Alerts cannot be sent until its sender is configured.</p>}
+        {(c.bookingOwnerSmsEnabled === true || c.ownerErrorSmsEnabled === true) && !String(c.bookingOwnerSmsPhone || '').trim() && <p role="status" className="text-sm font-semibold text-amber-800">Enter your recipient mobile number before saving this option.</p>}
+        {(c.bookingOwnerSmsEnabled === true || c.ownerErrorSmsEnabled === true) && !data.integrations?.sms?.configured && <p role="status" className="text-sm font-semibold text-amber-800">The selected texting provider is not ready. Alerts cannot be sent until its sender is configured.</p>}
       </Section>
 
       {data.access?.role === 'master' && <div id="owner-sms-consent" tabIndex={-1} className="scroll-mt-40"><OwnerSmsConsent /></div>}</>}

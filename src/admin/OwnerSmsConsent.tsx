@@ -4,8 +4,17 @@ import { PhoneInput } from '../components/PhoneInput';
 import { api } from '../lib/api';
 import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Section, inputClass, primaryButton, secondaryButton } from './ui';
+import { formatUsPhone } from '../../shared/phone-display.mjs';
+import { OWNER_SMS_PROGRAM, OWNER_SMS_TERMS_URL, OWNER_SMS_PRIVACY_URL, OWNER_SMS_SUPPORT_EMAIL } from '../../shared/owner-sms-consent.mjs';
 
-type ConsentSnapshot = { revision: number; effectiveActive?: boolean; matchesConfiguredPhone?: boolean; current: any; disclosure: {version: string; text: string; purposes: string[]}; readiness: {stopHelpVerified: boolean; automaticActivation: boolean} };
+type ConsentReceipt = { id: string; revision: number; action: 'grant' | 'revoke'; active: boolean; phone: string; at: string; disclosureVersion: string; disclosure: string; purposes: string[]; actor: {type: 'authenticated_admin_user' | 'authenticated_admin_session'; userId?: string; reference: string}; requestFingerprint: string };
+type ConsentSnapshot = { revision: number; effectiveActive: boolean; matchesConfiguredPhone: boolean; currentVersion: boolean; current: ConsentReceipt | null; disclosure: {version: string; text: string; purposes: string[]; termsUrl: string; privacyUrl: string} };
+const receiptDate = (at: string) => new Date(at).toLocaleDateString('en-US', { timeZone: 'America/Phoenix', year: 'numeric', month: 'long', day: 'numeric' });
+function linkedDisclosure(text: string) {
+  return text.split(/(https:\/\/\S+)/g).map((part, index) => part === OWNER_SMS_TERMS_URL || part === OWNER_SMS_PRIVACY_URL
+    ? <a key={index} className="break-all text-orange-700 underline" href={part} target="_blank" rel="noreferrer">{part}</a>
+    : part);
+}
 export function OwnerSmsConsent() {
   const { data } = useDashboard();
   const configuredPhone = data.config.bookingOwnerSmsPhone || '';
@@ -19,7 +28,7 @@ export function OwnerSmsConsent() {
   const load = async () => {
     const request = ++generation.current;
     setError(''); setAgreed(false);
-    try { const result = await api('/api/admin/owner-sms-consent'); if (mounted.current && generation.current === request) { if (result.revision !== snapshot?.revision) setNotice(''); setSnapshot(result); setAgreed(false); } }
+    try { const result = await api('/api/admin/owner-sms-consent'); if (mounted.current && generation.current === request) { if (result.revision !== snapshot?.revision || result.currentVersion !== snapshot?.currentVersion || result.matchesConfiguredPhone !== snapshot?.matchesConfiguredPhone) setNotice(''); setSnapshot(result); setAgreed(false); } }
     catch (e) { if (mounted.current && generation.current === request) setError((e as Error).message); }
   };
   useEffect(() => { setPhone(configuredPhone); setAgreed(false); setNotice(''); void load(); }, [configuredPhone]);
@@ -31,23 +40,21 @@ export function OwnerSmsConsent() {
       const result = await api('/api/admin/owner-sms-consent', { method: 'POST', body: { action, revision: snapshot.revision, idempotencyKey: crypto.randomUUID(), ...(action === 'grant' ? {phone,consent:true,disclosureVersion:snapshot.disclosure.version} : {}) } });
       if (!mounted.current || generation.current !== request) return;
       setSnapshot(result); setAgreed(false);
-      setNotice(action === 'grant' ? 'Consent saved. No SMS was sent and alerts were not activated. Owner SMS is held pending separate Custom-AIs setup and activation.' : 'Consent revoked. Owner SMS is blocked; existing alert switches are unchanged. No text was sent.');
+      setNotice(action === 'grant'
+        ? result.effectiveActive === true ? 'Consent saved. Owner alerts will go to this number while Owner booking alerts are on.' : ''
+        : result.current?.active === false ? 'Consent withdrawn. No owner alerts will be sent to this number.' : '');
     } catch (e) { if (mounted.current && generation.current === request) setError((e as Error).message); }
     finally { pending.current = false; if (mounted.current) setBusy(false); }
   };
-  return <Section icon={<MessageSquare size={18} />} title="Custom-AIs owner SMS consent" description="Planned Custom-AIs program: explicit opt-in for owner-only transactional notifications about confirmed ChatDaddy bookings and actionable failures. This form records consent only; it does not activate alerts, change customer messaging or send texts.">
-    <p className="text-sm text-amber-800">Setup review required: the owner SMS privacy section and SMS program terms have been published. STOP/HELP sender behavior has not been verified. Do not treat this form as proof the SMS program is ready to launch.</p>
-    <div className="space-y-1 text-sm"><p><a className="font-semibold text-orange-700 underline" href="https://custom-ais.com/privacy#sms-privacy" target="_blank" rel="noreferrer">Privacy policy — owner SMS section</a></p><p><a className="font-semibold text-orange-700 underline" href="https://custom-ais.com/sms-terms" target="_blank" rel="noreferrer">SMS program terms</a></p><p>Support: <a className="font-semibold text-orange-700 underline" href="mailto:support@custom-ais.com">support@custom-ais.com</a>. This is a support email, not verified SMS HELP handling.</p><p className="text-xs text-slate-500">The policy pages are published, but public accessibility has not been confirmed in this review.</p></div>
-    <Field label="Owner mobile number for this consent" hint="Starts with the saved owner-alert recipient. Changing it here does not change that setting; save a new recipient in Owner booking alerts first. A phone change requires new consent."><PhoneInput className={inputClass} type="tel" autoComplete="tel" value={phone} disabled={busy || !snapshot} onValueChange={value => { generation.current++; setPhone(value); setAgreed(false); setNotice(''); }} /></Field>
+  return <Section icon={<MessageSquare size={18} />} title={`${OWNER_SMS_PROGRAM} — text message consent`} description="Optional. Check the box below to get text alerts on this phone. You can withdraw consent here at any time or reply STOP to any alert.">
+    <Field label="Mobile number for owner alerts" hint="Must match the number saved in Owner booking alerts above. A different number needs new consent."><PhoneInput className={inputClass} type="tel" autoComplete="tel" value={phone} disabled={busy || !snapshot} onValueChange={value => { generation.current++; setPhone(value); setAgreed(false); setNotice(''); }} /></Field>
     {snapshot ? <>
-      <p className="whitespace-pre-wrap text-sm text-slate-700">{snapshot.disclosure.text}</p>
-      <p className="text-xs text-slate-500">Message frequency varies. Message and data rates may apply. STOP is intended to opt out and HELP to request assistance; these responses must be verified with the sender before alerts can be activated. Consent is optional.</p>
-      <label className="flex items-start gap-3 text-sm font-semibold text-slate-800"><input type="checkbox" className="mt-1" checked={agreed} disabled={busy} onChange={event => setAgreed(event.target.checked)} />I control this number and explicitly agree to the Custom-AIs transactional owner SMS purposes and disclosure above.</label>
-      {snapshot.current && <div className="rounded-xl bg-slate-50 p-3 text-sm"><p>Recorded consent: {snapshot.current.active ? snapshot.matchesConfiguredPhone === false ? 'not effective for the configured phone' : 'active receipt — owner SMS held pending activation' : 'inactive or revoked'}.</p><p>Phone: {snapshot.current.phone}</p><p>Recorded at: {snapshot.current.at}</p><p>Disclosure version: {snapshot.current.disclosureVersion}</p></div>}
-      <div className="flex flex-wrap gap-2"><button type="button" className={primaryButton} disabled={busy || !agreed || !phone.trim()} onClick={() => void submit('grant')}>{busy ? 'Saving…' : 'Save explicit consent'}</button><button type="button" className={secondaryButton} disabled={busy || !snapshot.current?.active} onClick={() => void submit('revoke')}>Revoke recorded consent</button><button type="button" className={secondaryButton} disabled={busy} onClick={() => void load()}>Refresh consent receipt</button></div>
+      <label className="flex items-start gap-3 text-sm font-semibold text-slate-800"><input type="checkbox" className="mt-1" checked={agreed} disabled={busy} onChange={event => setAgreed(event.target.checked)} /><span>{linkedDisclosure(snapshot.disclosure.text)}</span></label>
+      {snapshot.current && <div className="rounded-xl bg-slate-50 p-3 text-sm"><p>{snapshot.current.active ? snapshot.currentVersion === false ? 'Consent on file uses an older version of these terms. Check the box and save again to receive alerts.' : snapshot.matchesConfiguredPhone === false ? 'Consent on file is for a different number. Save consent for the number above to receive alerts.' : `Consent on file for ${formatUsPhone(snapshot.current.phone)} since ${receiptDate(snapshot.current.at)}.` : `Consent withdrawn on ${receiptDate(snapshot.current.at)}.`}</p><p>Terms version: {snapshot.current.disclosureVersion}</p></div>}
+      <div className="flex flex-wrap gap-2"><button type="button" className={primaryButton} disabled={busy || !agreed || !phone.trim()} onClick={() => void submit('grant')}>{busy ? 'Saving…' : 'Save consent'}</button><button type="button" className={secondaryButton} disabled={busy || !snapshot.current?.active} onClick={() => void submit('revoke')}>Withdraw consent</button><button type="button" className={secondaryButton} disabled={busy} onClick={() => void load()}>Refresh status</button></div>
     </> : <div className="space-y-2"><p className="text-sm text-slate-500">{error ? 'The saved disclosure and consent receipt could not be loaded.' : 'Loading the saved disclosure and consent receipt…'}</p><button type="button" className={secondaryButton} disabled={busy} onClick={() => void load()}>Retry loading consent form</button></div>}
     {error && <ErrorNote>{error}</ErrorNote>}
     {notice && <p role="status" className="rounded-xl bg-blue-50 p-3 text-sm text-blue-900">{notice}</p>}
-    <p className="text-xs text-slate-500">This separate consent receipt does not preselect from older booking-alert settings. Existing alert switches remain unchanged. Once this planned-program receipt exists, owner SMS stays held until separate setup and activation; revocation blocks owner SMS. Review the linked privacy policy and SMS program terms before recording consent.</p>
+    <p className="text-xs text-slate-500">Questions? Email <a className="text-orange-700 underline" href={`mailto:${OWNER_SMS_SUPPORT_EMAIL}`}>{OWNER_SMS_SUPPORT_EMAIL}</a>.</p>
   </Section>;
 }

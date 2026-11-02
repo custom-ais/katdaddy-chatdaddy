@@ -50,7 +50,7 @@ export const CONFIG_FIELD_PERMISSIONS = Object.freeze({
   scheduleSource:'integrations.manage', requirePhoneVerification:'integrations.manage', aiAssistant:'integrations.manage', aiProvider:'integrations.manage',
   'integrations.jobber':'integrations.manage', 'integrations.maps':'integrations.manage', 'integrations.verification':'integrations.manage', 'integrations.sms':'integrations.manage', 'integrations.email':'integrations.manage',
   smsConfirmations:'integrations.manage', emailConfirmations:'integrations.manage',
-  bookingOwnerSmsEnabled:'ownerSms.manage', bookingOwnerSmsPhone:'ownerSms.manage',
+  bookingOwnerSmsEnabled:'ownerSms.manage', ownerErrorSmsEnabled:'ownerSms.manage', bookingOwnerSmsPhone:'ownerSms.manage',
   'messageTemplates.ownerBookingSms':'ownerSms.manage', 'messageTemplates.confirmationSms':'integrations.manage',
   'messageTemplates.confirmationEmailSubject':'settings.templates.manage', 'messageTemplates.confirmationEmailBody':'settings.templates.manage', messageEmailFormat:'settings.templates.manage',
   emergencyLeadHours:'settings.booking.manage', approvalServices:'settings.booking.manage',

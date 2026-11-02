@@ -18,9 +18,10 @@ export function createIntegrationControls({ store }) {
   // Required in addition to method wrappers for providers whose compound methods
   // make multiple requests (Jobber client/property/job/visit, OAuth refresh, etc.).
   function fetchFor(nameOrResolver, fetchImpl = fetch) {
-    return async (input, init) => {
+    return async (input, init, beforeSend) => {
       const name = typeof nameOrResolver === 'function' ? nameOrResolver(input, init) : nameOrResolver;
       await requireEnabled(name);
+      await beforeSend?.();
       return fetchImpl(input, init);
     };
   }
@@ -61,6 +62,7 @@ export function controlProviders({ controls, jobber, geo, twilio, sendgrid }) {
   });
   const twilioOut = wrap(twilio, (key, fn) => async (...args) => {
     await controls.requireEnabled(key === 'sendSms' ? 'sms' : 'verification');
+    if (key === 'sendSms') await args[2]?.beforeSend?.();
     return fn(...args);
   });
   const sendgridOut = wrap(sendgrid, (_key, fn) => async (...args) => {
