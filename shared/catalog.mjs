@@ -36,6 +36,7 @@ export const SERVICE_CATALOG = [
   s("addon-fogging", "addon", "fogging", "Sanitation Fogging Add-On", "Antimicrobial fogging treatment", "Add-Ons", 79, 15),
   s("addon-gas", "addon", "gas", "Gas Appliance Safety Procedure", "Shut off the gas, safely disconnect and reconnect the dryer, and perform a gas leak test before leaving", "Add-Ons", 49, 15),
   s("addon-tool", "addon", "tool", "Tool Retrieval", "Foreign object removal from vent system", "Add-Ons", 69, 30),
+  s("addon-dryerflex", "addon", "dryerflex", "DryerFlex Transition Hose Upgrade", "Commercial-grade, crush-resistant DryerFlex aluminum transition hose that holds its full 4-inch airflow, professionally installed with airtight clamps", "Add-Ons", 79, 15),
   s("addon-pedestal", "addon", "pedestal", "Fixed Pedestal Setup", "Extra labor for a dryer on a fixed pedestal: moving the raised dryer and pedestal out together without tipping, reaching the vent connection, and setting it back securely", "Add-Ons", 20, 10),
   s("addon-stacked", "addon", "stacked", "Stacked Washer/Dryer Setup", "Stacked washer and dryer moved with air sleds so the pair slides out safely and goes back into place", "Add-Ons", 45, 15),
   s("emergency", "emergency", "any", "Emergency Same-Day Clog Relief", "Urgent blockage removal, airflow restoration, live camera inspection during service, and airflow verification", "Emergency", 349, 75),
@@ -58,6 +59,12 @@ export const TIERS = ["premium", "ultimate"];
 export const MORE = ["inspection", "express", "postservice", "nest", "restoration", "emergency"];
 const VARIANT_FAMILIES = new Set(["premium", "ultimate", "inspection", "express", "postservice"]);
 const APPLIANCE_FREE = new Set(["express", "inspection"]); // no dryer to disconnect
+// End-of-booking upsell. DryerFlex is $79 as an add-on (regular $99); Ultimate and Restoration
+// already include it, and Express has no dryer to connect it to. Added together, DryerFlex and the
+// sanitizing fog save $20 (taken off the fog line, so there's never a negative line item).
+export const ADDON_PROMOS = Object.freeze({ dryerflex: Object.freeze({ wasCents: 9900 }) });
+export const ADDON_BUNDLE_SAVINGS_CENTS = 2000;
+export const NO_DRYERFLEX = new Set(["ultimate", "restoration", "express", "inspection"]);
 // Setup surcharges (pedestal, stacked) apply to the core packages, per the assistant rules manual.
 const SETUP_FAMILIES = new Set(["premium", "ultimate", "postservice"]);
 
@@ -123,7 +130,16 @@ export function addOnLines(services, { family, route, property = {}, addOns = {}
   if (appliance && property.power === "Gas" && !APPLIANCE_FREE.has(family)) add("gas");
   if (appliance && property.mount === "Pedestal" && SETUP_FAMILIES.has(family)) add("pedestal");
   if (appliance && property.mount === "Stacked" && SETUP_FAMILIES.has(family)) add("stacked");
-  if (addOns.fogging && family !== "restoration") add("fogging"); // Restoration already includes fogging
+  const dryerflex = addOns.dryerflex && appliance && !NO_DRYERFLEX.has(family);
+  if (dryerflex) add("dryerflex");
+  if (addOns.fogging && family !== "restoration") { // Restoration already includes fogging
+    add("fogging");
+    const fog = lines.at(-1);
+    if (dryerflex && fog?.id === "addon-fogging" && lines.some((l) => l.id === "addon-dryerflex")) {
+      fog.cents = Math.max(0, fog.cents - ADDON_BUNDLE_SAVINGS_CENTS);
+      fog.name = `${fog.name} (bundle price with DryerFlex)`;
+    }
+  }
   if (addOns.toolRetrieval) add("tool");
   return lines;
 }

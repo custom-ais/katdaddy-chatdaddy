@@ -7,7 +7,7 @@ import { PhoneInput } from '../components/PhoneInput';
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Technician } from './DashboardContext';
-import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, MapPin, MessageSquare, Plus, RotateCcw, Route, Save, ShieldCheck, Tag, Trash2, Users } from 'lucide-react';
+import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, Mail, MapPin, MessageSquare, Plus, RotateCcw, Route, Save, ShieldCheck, Tag, Trash2, Users } from 'lucide-react';
 import { api, saveText } from '../lib/api';
 import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Modal, Section, Toggle, inputClass, primaryButton, secondaryButton, subtleButton } from './ui';
@@ -309,7 +309,7 @@ function Answers({ active = true }: { active?: boolean }) {
         <Modal title={faqs.some((f) => f.id === editing.id) ? 'Edit answer' : 'New answer'} onClose={() => setEditing(null)}>
           <form className="space-y-4" onSubmit={save}>
             <Field label="Question"><input className={inputClass} required value={editing.question} onChange={(e) => setEditing({ ...editing, question: e.target.value })} /></Field>
-            <Field label="Answer" hint="Don't include prices here — BOB quotes prices from Services and prices."><textarea rows={5} required className={inputClass} value={editing.answer} onChange={(e) => setEditing({ ...editing, answer: e.target.value })} /></Field>
+            <Field label="Answer" hint="Don't include prices here — BOB quotes prices from Services and prices."><textarea rows={Math.min(12, Math.max(5, Math.ceil(String(editing.answer || '').length / 80) + 1))} required className={inputClass} value={editing.answer} onChange={(e) => setEditing({ ...editing, answer: e.target.value })} /></Field>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Field label="Category"><input className={inputClass} value={editing.category} onChange={(e) => setEditing({ ...editing, category: e.target.value })} /></Field>
               <Field label="Status"><select className={inputClass} value={editing.status || 'approved'} onChange={(e) => setEditing({ ...editing, status: e.target.value })}><option value="approved">Approved — customers see it</option><option value="draft">Draft — hidden</option></select></Field>
@@ -320,6 +320,29 @@ function Answers({ active = true }: { active?: boolean }) {
           </form>
         </Modal>
       )}
+    </Section>
+  );
+}
+
+/** Master Admin: send a sample booking report to check the email arrives. */
+function BookingReportTest() {
+  const [busy, setBusy] = useState(false), [result, setResult] = useState<{ status: string; to: string } | null>(null), [error, setError] = useState('');
+  const send = async () => {
+    setBusy(true); setError(''); setResult(null);
+    try { setResult(await api('/api/admin/booking-report/test', { method: 'POST', body: {} })); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  const message = !result ? '' : result.status === 'accepted' ? `SendGrid accepted the test email to ${result.to}. Check that inbox, and its spam folder.`
+    : result.status === 'off' ? 'The booking report is turned off (BOOKING_REPORT_EMAIL is "off").'
+    : result.status === 'not_configured' ? 'SendGrid isn\'t fully set up, so no email was sent. Check the SendGrid settings in Vercel.'
+    : result.status === 'rejected' ? `SendGrid rejected the email to ${result.to}. Check the sender verification in SendGrid.`
+    : `SendGrid didn't confirm the email to ${result.to}. Check SendGrid's activity feed before trying again.`;
+  return (
+    <Section icon={<Mail size={18} />} title="Booking report email" description="Every confirmed ChatDaddy booking emails the operator the customer, the job, and running counts, revenue and commission. Send a test to check it arrives.">
+      <div className="flex flex-wrap items-center gap-3">
+        <button type="button" className={secondaryButton} disabled={busy} onClick={() => void send()}>{busy ? 'Sending…' : 'Send test report'}</button>
+        {message && <p role="status" className={`text-sm font-semibold ${result?.status === 'accepted' ? 'text-emerald-700' : 'text-amber-800'}`}>{message}</p>}
+      </div>
+      {error && <ErrorNote>{error}</ErrorNote>}
     </Section>
   );
 }
@@ -551,7 +574,8 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
         {(c.bookingOwnerSmsEnabled === true || c.ownerErrorSmsEnabled === true) && !data.integrations?.sms?.configured && <p role="status" className="text-sm font-semibold text-amber-800">The selected texting provider is not ready. Alerts cannot be sent until its sender is configured.</p>}
       </Section>
 
-      {data.access?.role === 'master' && <div id="owner-sms-consent" tabIndex={-1} className="scroll-mt-40"><OwnerSmsConsent /></div>}</>}
+      {data.access?.role === 'master' && <div id="owner-sms-consent" tabIndex={-1} className="scroll-mt-40"><OwnerSmsConsent /></div>}
+      {data.access?.role === 'master' && <BookingReportTest />}</>}
 
             <Section icon={<ShieldCheck size={18} />} title="Approvals" description="Only emergency same-day visits use online approval and company approval texts. The time is held for up to 30 minutes. Other configured approval-only services and unsafe overflow exceptions remain office-only; these selections do not bypass those safeguards.">
         <div className="flex flex-wrap gap-x-6">

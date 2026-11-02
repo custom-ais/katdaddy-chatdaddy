@@ -26,7 +26,7 @@
 // facts below; every decision about price and booking happens here or on the server.
 
 import { DEFAULT_CONFIG, money, serviceQuote, areaFor, bundleAssessmentCents } from "./domain.mjs";
-import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant, noDryerNeedsPremium } from "./catalog.mjs";
+import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant, noDryerNeedsPremium, ADDON_PROMOS, ADDON_BUNDLE_SAVINGS_CENTS, NO_DRYERFLEX } from "./catalog.mjs";
 import { restrictionScore, restrictionLevel } from "./airflow.mjs";
 
 export const initialSession = () => ({
@@ -148,6 +148,17 @@ const normalize = (t) => String(t || "").toLowerCase().replace(/[’‘]/g, "'")
 export const FIRE_SAFE = "Everyone is safe & fire/smoke is handled";
 /** The rules engine's reply when it has no approved answer; the conversational layer may replace it. */
 export const UNANSWERED = "I don't have a verified answer to that yet. I can send the question to the team, or we can keep going with your booking.";
+/** Same-day isn't promised: it depends on whether a technician can get there today. */
+export const EMERGENCY_PENDING = "**Emergency Same-Day Clog Relief** depends on availability. If you're interested, we'll check whether a technician can get to you today, and nothing is booked until we confirm.";
+/** The reply when the customer doesn't know an answer: it's fine, and the technician checks it on site. */
+export const NOTED = "That's okay. I'll make a note, and your technician will double-check it when they get there.";
+// The answer each question records, so "Not sure" can be recognized when acknowledging it.
+const ANSWER_FIELD = { hasDryer: "hasDryer", recentService: "recentService", stories: "stories", laundryFloor: "laundryFloor", power: "power", mount: "mount", animals: "animals", repairPerf: "dryerWorking" };
+/** True when the question pending in `before` is now recorded as "Not sure" in `after`. */
+export function answeredUnsure(before, after) {
+  const field = ANSWER_FIELD[before?.pending];
+  return Boolean(field) && before.property?.[field] !== "Not sure" && after?.property?.[field] === "Not sure";
+}
 const FIRE_ALERT =
   "⚠️ **SAFETY ALERT:** If there is active smoke or fire, please prioritize your safety immediately!\n\n" +
   "1. **Evacuate the area** if needed and call **911** or your local fire department right away.\n" +
@@ -169,7 +180,8 @@ const NO_CLEAN = /\b(no cleaning|not cleaning|don't (?:need|want) (?:a |the )?cl
 const NEST = /\b(nests?|birds?|rodents?|pests?|critters?|squirrels?|mouse|mice|rats?|chirping)\b/;
 const URGENT = /\b(emergency|urgent|urgently|asap|same[- ]day|right away|today|completely (?:clogged|blocked)|totally (?:clogged|blocked)|fully (?:clogged|blocked))\b/;
 const CLOG = /\b(clog\w*|blocked|blockage|no airflow|lint (?:buildup|build-up))\b/;
-const UNKNOWN = /^(?:i(?:'m| am)? )?(?:don't know|do not know|not sure|unsure|unknown|no idea|i don't know)[.!]?$/;
+// "I don't know" in the ways people type it: "idk", "i dont know", "honestly not sure", "no clue lol".
+const UNKNOWN = /^(?:(?:um+|uh+|hmm+|honestly|actually|sorry|oh)[,.]? )*(?:i(?:'m| am)? )?(?:(?:really |honestly |actually )?(?:don'?t|do not)(?: really)? know|dunno|idk|not (?:really |totally |100% |quite )?sure|unsure|unknown|no idea|i have no idea|no clue|not certain|beats me)(?: (?:to be honest|tbh|honestly|lol|sorry|either))?[.!?]*$/;
 const PICKS = [
   ["premium", /^premium(?: 1-2-3)?\b/],
   ["ultimate", /^ultimate(?: protection)?\b/],
@@ -474,7 +486,8 @@ export function questionOrder(s) {
   }
   if (s.intent === "emergency") {
     // Safety comes first on the emergency path; the address follows what's happening.
-    return ["safetyCheck", s.dryerHot && "powerOff", "triage", "serviceAddress", ...layout, hasDryer(s) && "power"].filter(Boolean);
+    // A regular package picked from the emergency offer also needs the dryer setup for its price.
+    return ["safetyCheck", s.dryerHot && "powerOff", "triage", "serviceAddress", ...layout, hasDryer(s) && "power", TIERS.includes(s.package) && hasDryer(s) && "mount"].filter(Boolean);
   }
   // nest: what price and access depend on
   return ["serviceAddress", "hasDryer", ...layout, hasDryer(s) && "power"].filter(Boolean);
@@ -528,6 +541,38 @@ export function dryingEfficiency(p = {}) {
   return null;
 }
 
+/**
+ * Averages behind the savings estimate: DOE / ENERGY STAR assume about 283 dryer loads a year (5.4 a
+ * week), a typical cycle is about 45 minutes and 2.5 kWh, and EIA puts Arizona's average residential
+ * electricity price at about 15¢ per kWh (2026). Rounded down where in doubt.
+ */
+export const SAVINGS_AVERAGES = Object.freeze({ loadsPerWeek: 5, minutesPerCycle: 45, kwhPerCycle: 2.5, centsPerKwh: 15 });
+
+/**
+ * What a clear vent could save, from how many cycles a load takes now: the extra cycles times average
+ * laundry, cycle length and Arizona electric rates. Gas dryers get the time only, since gas prices vary
+ * too much to estimate honestly. Null when loads already dry in one cycle or the cycles aren't known.
+ */
+export function savingsEstimate(p = {}, a = SAVINGS_AVERAGES) {
+  const sym = p.symptoms || [];
+  const extra = p.hasDryer === "No" ? 0 : sym.includes("three") ? 2 : sym.includes("two") ? 1 : 0;
+  if (!extra) return null;
+  const cyclesPerWeek = a.loadsPerWeek * extra;
+  const hoursPerWeek = Math.round(((cyclesPerWeek * a.minutesPerCycle) / 60) * 2) / 2;
+  const hoursPerYear = Math.round((cyclesPerWeek * 52 * a.minutesPerCycle) / 60 / 5) * 5;
+  const gas = p.power === "Gas";
+  const dollarsPerYear = gas ? null : Math.round((cyclesPerWeek * 52 * a.kwhPerCycle * a.centsPerKwh) / 100 / 5) * 5;
+  const hours = `${hoursPerWeek} hour${hoursPerWeek === 1 ? "" : "s"}`;
+  const sentence = gas
+    ? `A clear vent could save you about ${hours} of drying a week.`
+    : `A clear vent could save you about $${dollarsPerYear} a year and ${hours} of drying a week.`;
+  const basis =
+    `Estimate based on averages: ${a.loadsPerWeek} loads a week and ${a.minutesPerCycle}-minute cycles` +
+    (gas ? "." : `, about ${a.kwhPerCycle} kWh per cycle at ${a.centsPerKwh}¢ per kWh (typical Arizona rate)${p.power === "Electric" ? "" : ", for an electric dryer"}.`) +
+    " Your savings depend on your dryer and how much laundry you do.";
+  return { extraCyclesPerLoad: extra, hoursPerWeek, hoursPerYear, dollarsPerYear, gas, sentence, basis };
+}
+
 /** The airflow analysis shown under the prices: estimate, causes, energy cost, and why this package. */
 export function airflowAnalysis(p = {}, recommended = recommendTier(p)) {
   const sym = p.symptoms || [];
@@ -545,9 +590,10 @@ export function airflowAnalysis(p = {}, recommended = recommendTier(p)) {
   if (p.mount === "Stacked" || p.mount === "Pedestal") parts.push(`With a ${p.mount === "Stacked" ? "stacked" : "pedestal"} setup, the transition hose behind the dryer is often kinked or crushed, which the DryerFlex hose upgrade fixes.`);
   if (p.power === "Gas") parts.push("Gas dryers also get our Gas Appliance Safety Procedure: a safe disconnect and reconnect, plus a gas leak test before we leave.");
   paragraphs.push(parts.splice(0).join(" "));
+  const save = savingsEstimate(p);
   parts.push(
     eff
-      ? `At ${eff.percent} efficiency you're paying for ${eff.times} the drying time on every load. Restoring airflow brings that back down and saves energy and wear on the dryer.`
+      ? `At ${eff.percent} efficiency you're paying for ${eff.times} the drying time on every load. Restoring airflow brings that back down and saves energy and wear on the dryer.${save ? ` ${save.sentence}` : ""}`
       : sym.includes("overheat")
         ? "Restoring airflow lets the hot air escape again, so the dryer runs cooler and safer."
         : "A clear vent keeps drying times short, which saves energy and wear on the dryer.",
@@ -647,6 +693,8 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       if (s.unresolved === 3) reply = `${reply}\n\nIf it's easier, the team can call you instead.`;
     }
     const parts = { ack, warn, body: reply };
+    // A card replaces the message text on screen, so it carries the acknowledgement and any warning.
+    if (extra.card && (ack || warn)) extra = { ...extra, card: { ...extra.card, intro: [ack, warn].filter(Boolean).join("\n\n") } };
     reply = [ack, warn, reply].filter(Boolean).join("\n\n");
     ack = "";
     warn = "";
@@ -768,6 +816,9 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   };
   const ackFor = (key) => {
     const p = s.property;
+    // "I don't know" is a fine answer: say so, and the technician checks it on site.
+    if (p[ANSWER_FIELD[key]] === "Not sure" || (key === "stories" && p.laundryFloor === "Not sure")) return NOTED;
+    if ((key === "symptoms" || key === "symptomClarify") && !(p.symptoms || []).length) return NOTED;
     switch (key) {
       case "zip":
         return `Thanks, ZIP ${s.zip}.`;
@@ -780,7 +831,6 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
         return p.recentService === "Yes" ? "Thanks, a new or recently serviced dryer." : "Thanks.";
       case "stories":
       case "laundryFloor":
-        if (p.stories === "Not sure" || p.laundryFloor === "Not sure") return "No problem, your technician will confirm the layout.";
         if (p.stories === "2-story" && p.laundryFloor === "2nd floor") return "Understood, second-floor laundry setup.";
         return layoutPhrase() ? `Got it, ${layoutPhrase()} setup.` : "Got it.";
       case "power":
@@ -789,11 +839,11 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
           const fee = feeLabel("gas").replace(/[ ()+]/g, "");
           return `Got it, a gas dryer line. ${fee ? `The ${fee} Gas Appliance Safety Procedure means` : "For gas dryers,"} ${SETUP_WHY.gas}.`;
         }
-        return p.power === "Electric" ? "Understood, an electric dryer." : "No problem, your technician will confirm it on site.";
+        return p.power === "Electric" ? "Understood, an electric dryer." : "";
       case "mount": {
         if (p.mount !== "Stacked" && p.mount !== "Pedestal") return "Got it.";
         const key = p.mount === "Stacked" ? "stacked" : "pedestal";
-        const fee = s.intent === "cleaning" ? feeLabel(key).replace(/[ ()+]/g, "") : "";
+        const fee = s.intent === "cleaning" || TIERS.includes(s.package) ? feeLabel(key).replace(/[ ()+]/g, "") : "";
         const why = SETUP_WHY[key].replace(/^./, (c) => c.toUpperCase());
         return p.mount === "Stacked"
           ? `Got it, a stacked setup. ${fee ? `The ${fee} stacked setup fee covers moving it with air sleds, so the washer and dryer slide out safely and go back into place.` : `${why}.`}`
@@ -803,7 +853,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       case "symptomClarify":
         return "Thanks, that helps me match the right service.";
       case "animals":
-        return p.animals === "Yes" ? "Got it, signs of animals at the vent." : p.animals === "No" ? "Good, no signs of animals." : "No problem.";
+        return p.animals === "Yes" ? "Got it, signs of animals at the vent." : p.animals === "No" ? "Good, no signs of animals." : "";
       case "safetyCheck":
         return s.dryerHot ? "" : "Good. That reduces risk.";
       case "powerOff":
@@ -829,8 +879,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   };
   const optionsFor = (key) => {
     const q = QUESTIONS[key];
-    if (key === "power" && s.intent !== "repair") return q.options.map((o) => (o === "Gas Dryer" ? `Gas Dryer${feeLabel("gas")}` : o));
-    if (key === "mount" && s.intent === "cleaning") return q.options.map((o) => (o === "Fixed Pedestal" ? `Fixed Pedestal${feeLabel("pedestal")}` : o === "Stacked Washer/Dryer" ? `Stacked Washer/Dryer${feeLabel("stacked")}` : o));
+    // Setup fees aren't shown on the buttons: BOB explains a fee when the customer says it applies.
     return q.options;
   };
   const ask = (key) => {
@@ -882,6 +931,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     const card = {
       kind: "recommendation",
       airflow: { ...airflow, factors: airflowFactors(p) },
+      ...(savingsEstimate(p) ? { savings: savingsEstimate(p) } : {}),
       lead,
       summary: airflowSummary(p, suggested),
       question: "Which package would you like?",
@@ -936,13 +986,17 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
 
   const offer = (brief = false) => {
     if (s.intent === "repair") return assessmentOffer(brief);
+    if (s.intent === "emergency" && s.sameDayUnavailable) {
+      return specialOffer(["premium", "ultimate"], "premium", "We couldn't get a technician to you today. You can book **Premium 1-2-3** or **Ultimate Protection** on our regular schedule. Please keep the dryer off until then.", brief, ["Request a callback"]);
+    }
     if (s.intent === "emergency") {
+      // Same-day depends on who's free today, so the regular packages are offered alongside it.
       return specialOffer(
-        ["emergency"],
+        ["emergency", "premium", "ultimate"],
         "emergency",
-        "For an urgent blockage, our **Emergency Same-Day Clog Relief** is the right service: urgent blockage removal and airflow restoration. Same-day visits need a quick approval from our team before they're confirmed. You'll pick a time and we'll ask them right away. Keep the dryer off until the technician arrives.",
+        `${EMERGENCY_PENDING} You can also book **Premium 1-2-3** or **Ultimate Protection** on our regular schedule. Please keep the dryer off until then.`,
         brief,
-        ["Schedule regular cleaning", "Ask a question"],
+        ["Ask a question"],
       );
     }
     if (s.intent === "nest" || s.property.animals === "Yes") {
@@ -982,7 +1036,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     // Cleaning + Assessment is one simple choice: accept it, or switch to just the cleaning.
     const options = bundle
       ? ["Accept", "Just the cleaning", "Ask a question"]
-      : ["Accept", s.intent === "cleaning" && TIERS.includes(q.package) && s.property.hasDryer !== "No" ? "Compare Packages" : "Back to options", "Ask a question"];
+      : ["Accept", ...(s.intent === "cleaning" && TIERS.includes(q.package) && s.property.hasDryer !== "No" ? ["Compare Packages"] : []), "Cancel package", "Ask a question"];
     const title = `**${q.name}${priced ? ` — ${money(q.priceCents)}` : ""}**`;
     if (brief) return respond(`Ready to continue with ${title}?`, options);
     const switched =
@@ -1005,20 +1059,47 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       .map((x) => "• " + x.trim().replace(/^./, (c) => c.toUpperCase()))
       .join("\n") + (noDryer ? "\n\nWith no dryer installed, the time for the lint screen and dryer cavity goes into the vent line." : "") + (fine.length ? `\n\n${finePrint}` : "");
     const extras = q.lineItems.slice(1);
-    const covers = extras.filter((l) => SETUP_KEY[l.name]).map((l) => `• **${l.name}:** ${SETUP_WHY[SETUP_KEY[l.name]].replace(/^./, (c) => c.toUpperCase())}.`);
+    // Each setup fee was explained when the customer mentioned it, so the summary just lists it.
     const total = priced
       ? extras.length
-        ? `\n\n${q.lineItems.map((l) => `${l.name}: ${money(l.cents)}`).join("\n")}\n**Total: ${money(q.priceCents)}**${covers.length ? `\n\n**What the extras cover**\n${covers.join("\n")}` : ""}`
+        ? `\n\n${q.lineItems.map((l) => `${l.name}: ${money(l.cents)}`).join("\n")}\n**Total: ${money(q.priceCents)}**`
         : ""
       : `\n\n${unverified}`;
     const note = q.priceNote && priced ? `\n\n${q.priceNote}` : "";
-    const approval = needsApproval(q.package) ? "\n\nThis service needs approval from our team before it's confirmed." : "";
+    const approval = q.package === "emergency" ? `\n\n${EMERGENCY_PENDING}` : needsApproval(q.package) ? "\n\nThis service needs approval from our team before it's confirmed." : "";
     return respond(`${switched}${title}\n${bullets}${total}${note}${approval}\n\n**Transparent Pricing Promise**\nMost dryer vent cleanings are completed at the package price selected.`, options, { info: ["pricing"] });
+  };
+
+  /**
+   * The end-of-booking upsell, priced for this home and package: DryerFlex (promo), the sanitizing
+   * fog, the deal for both, and the Ultimate upgrade for Premium. Null when prices aren't approved
+   * or nothing applies, and the add-ons step falls back to its plain list.
+   */
+  const upsellFor = () => {
+    if (!priced || !["cleaning", "bundle"].includes(s.route) || s.property.hasDryer === "No" || !s.package) return null;
+    const find = (variant) => services.find((x) => x.family === "addon" && x.variant === variant && x.active !== false);
+    const out = {};
+    const df = find("dryerflex");
+    if (df && !NO_DRYERFLEX.has(s.package)) {
+      const was = ADDON_PROMOS.dryerflex?.wasCents;
+      out.dryerflex = { name: df.name, description: df.description, cents: df.priceCents, ...(was > df.priceCents ? { wasCents: was } : {}) };
+    }
+    const fog = find("fogging");
+    if (fog && s.package !== "restoration") out.fogging = { name: fog.name, description: fog.description, cents: fog.priceCents };
+    if (out.dryerflex && out.fogging) out.bundleSavingsCents = Math.min(ADDON_BUNDLE_SAVINGS_CENTS, out.fogging.cents);
+    if (s.package === "premium") {
+      try {
+        const now = quoteFor("premium"), up = quoteFor("ultimate");
+        if (up.priceCents > now.priceCents) out.ultimate = { name: PACKAGES.ultimate.label, extraCents: up.priceCents - now.priceCents, pitch: UPGRADES.ultimate };
+      } catch {}
+    }
+    return Object.keys(out).length ? out : null;
   };
 
   const contactStep = () => {
     s.stage = "contact";
     s.pending = null;
+    s.upsell = upsellFor();
     let locked = "";
     try {
       const q = s.route === "assessment" ? serviceQuote("assessment", config) : quoteFor(s.package);
@@ -1348,11 +1429,15 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.serviceAccepted = false;
     return respond("Here are our other services:\n" + MORE.map((f) => line(f)).join("\n"), [...MORE.map(label), "Back to packages"]);
   }
-  if (/^(?:back to (?:packages|options))$/.test(t)) {
+  const cancelPick = /^(?:cancel(?: (?:this|the|my|that))? (?:package|selection)|change (?:my |the )?package)$/.test(t);
+  if (cancelPick || /^(?:back to (?:packages|options))$/.test(t)) {
+    // Cancelling on the emergency path goes back to the same-day and regular choices.
+    const emergencyChoices = s.intent === "emergency" && ((s.offerFamilies || []).includes("emergency") || s.sameDayUnavailable);
+    if (cancelPick && s.package) ack = "No problem, that package is canceled.";
     s.package = null;
     s.serviceAccepted = false;
     if (!s.intent || s.intent === "repair") s.intent = "cleaning";
-    if (s.intent === "emergency" || s.intent === "nest") s.intent = "cleaning";
+    if ((s.intent === "emergency" && !emergencyChoices) || s.intent === "nest") s.intent = "cleaning";
     if (!s.bundleAccepted) s.route = "cleaning"; // an accepted Cleaning + Assessment stays
     return next();
   }
@@ -1485,7 +1570,10 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     let answer;
     if (s.route === "bundle" || (s.offered && !s.bundleDeclined)) {
       const price = priced ? bundlePrice() : "";
-      answer = price ? `The **Cleaning + Assessment** is **${price}**: our Premium 1-2-3 cleaning plus an assessment of the issue in one visit. Gas dryers and stacked or pedestal setups add their usual fee. Repairs are quoted separately.` : unverified;
+      // A setup fee is mentioned only when the customer has that setup.
+      const setups = [s.property.power === "Gas" && "gas dryer", s.property.mount === "Stacked" && "stacked setup", s.property.mount === "Pedestal" && "pedestal setup"].filter(Boolean);
+      const setupFee = setups.length ? ` Your ${setups.join(" and ")} ${setups.length > 1 ? "add their" : "adds its"} usual fee.` : "";
+      answer = price ? `The **Cleaning + Assessment** is **${price}**: our Premium 1-2-3 cleaning plus an assessment of the issue in one visit.${setupFee} Repairs are quoted separately.` : unverified;
     }
     else if (s.intent === "repair" || /\b(?:repair|assessment)\b/.test(t)) {
       const process = bare ? "" : explain("assessment");
@@ -1518,8 +1606,8 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   // -- answers to the pending question ---------------------------------------------------------
   if (s.stage === "evaluating" || (s.intent && !s.serviceAccepted && !["offer", "details", "bundle_offer"].includes(s.stage))) {
     if (changed(current) !== changed(s)) return next();
-    if (s.pending === "zip") return respond("Please enter the five-digit ZIP code for the service address.", []);
-    if (s.pending === "serviceAddress") return respond("Please enter the street address for the service location, including the city or ZIP code.", []);
+    if (s.pending === "zip") { unresolved = true; return respond("Please enter the five-digit ZIP code for the service address.", []); }
+    if (s.pending === "serviceAddress") { unresolved = true; return respond("Please enter the street address for the service location, including the city or ZIP code.", []); }
     if (s.pending && !isQuestion) {
       ack = "Sorry, I didn't catch that.";
       unresolved = true;

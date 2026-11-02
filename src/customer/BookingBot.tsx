@@ -5,7 +5,8 @@ import {
   Download, Droplet, Flame, HelpCircle, Home, Layers, List, Loader2, MapPin, MessageCircle, Minus, MoreHorizontal, Plus, Pencil, Phone, RotateCcw,
   Search, Send, Shield, ShieldCheck, Sparkles, Star, Thermometer, Timer, User, Wind, Wrench, X, Zap,
 } from 'lucide-react';
-import { api, ApiError, saveText } from '../lib/api';
+import { api, ApiError, saveBlob, saveText } from '../lib/api';
+import { renderAppointmentCard } from './appointmentCard';
 import { money, phoenixDate } from '../../shared/domain.mjs';
 import { CODE_DIGITS } from '../../shared/verification-code.mjs';
 
@@ -125,6 +126,102 @@ function AirflowGauge({ a }: { a: { score: number; level: string; headline: stri
   );
 }
 
+/** What a clear vent could save: two numbers, estimated from the customer's drying cycles and typical use. */
+function SavingsTile({ s }: { s: { hoursPerWeek: number; dollarsPerYear: number | null; basis: string } }) {
+  const stat = (value: string, unit: string) => (
+    <div className="rounded-xl bg-white border border-emerald-100 px-3 py-2.5">
+      <p className="font-display text-2xl font-extrabold text-slate-900 leading-none">{value}</p>
+      <p className="mt-1 text-xs font-bold text-slate-500">{unit}</p>
+    </div>
+  );
+  return (
+    <div className="rounded-2xl bg-emerald-50 border border-emerald-200 p-4" title={s.basis}>
+      <p className="font-extrabold text-emerald-900 text-sm">A clear vent could save you</p>
+      <div className={`mt-2.5 grid gap-2.5 ${s.dollarsPerYear != null ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        {s.dollarsPerYear != null && stat(`$${s.dollarsPerYear}`, 'a year')}
+        {stat(`${s.hoursPerWeek} hrs`, 'of drying a week')}
+      </div>
+      <p className="text-[11px] text-emerald-800/70 mt-2">Estimate based on typical use.</p>
+    </div>
+  );
+}
+
+/** One selectable upsell option. */
+function Tile({ on, onClick, disabled, children, accent, label }: { on: boolean; onClick: () => void; disabled?: boolean; children: React.ReactNode; accent?: boolean; label: string }) {
+  return (
+    <button type="button" role="checkbox" aria-checked={on} aria-label={label} disabled={disabled} onClick={onClick}
+      className={`w-full text-left rounded-2xl border-2 p-4 transition-colors disabled:opacity-60 ${on ? 'border-orange-500 bg-orange-50/60' : accent ? 'border-orange-200 bg-white hover:border-orange-300' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
+      <div className="flex items-start gap-3">
+        <span className={`mt-0.5 size-5 shrink-0 rounded-md border-2 flex items-center justify-center ${on ? 'bg-orange-500 border-orange-500 text-white' : 'border-slate-300 bg-white'}`} aria-hidden="true">{on && <Check size={14} strokeWidth={3} />}</span>
+        <div className="min-w-0 flex-1">{children}</div>
+      </div>
+    </button>
+  );
+}
+
+/** End-of-booking upgrades: DryerFlex (promo), the sanitizing fog, a deal for both, and Ultimate for Premium. */
+function UpsellOffer({ upsell, onDone }: { upsell: any; onDone: (sel: { dryerflex: boolean; fogging: boolean; ultimate: boolean }) => void }) {
+  const [sel, setSel] = useState({ dryerflex: false, fogging: false, ultimate: false });
+  const flip = (k: 'dryerflex' | 'fogging' | 'ultimate') => setSel((x) => ({ ...x, [k]: !x[k] }));
+  const df = upsell.dryerflex, fog = upsell.fogging, up = upsell.ultimate;
+  const dfOn = Boolean(df && sel.dryerflex && !sel.ultimate);
+  const deal = dfOn && sel.fogging && upsell.bundleSavingsCents ? upsell.bundleSavingsCents : 0;
+  const extra = (sel.ultimate && up ? up.extraCents : 0) + (dfOn ? df.cents : 0) + (sel.fogging && fog ? fog.cents : 0) - deal;
+  const any = sel.ultimate || dfOn || sel.fogging;
+  return (
+    <Card className="!p-4 sm:!p-5">
+      <p className="text-xs font-extrabold uppercase tracking-wide text-orange-600">Optional add-ons</p>
+      <h3 className="font-extrabold text-slate-900 text-lg mt-0.5">Upgrade your visit</h3>
+      <div className="mt-3 space-y-2.5">
+        {df && (
+          <Tile on={dfOn} onClick={() => flip('dryerflex')} disabled={sel.ultimate} accent label={`DryerFlex hose upgrade, ${money(df.cents)}${df.wasCents ? `, was ${money(df.wasCents)}` : ''}${sel.ultimate ? ', included with Ultimate' : ''}`}>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-extrabold uppercase tracking-wide bg-orange-500 text-white rounded-full px-2.5 py-0.5">Online booking special</span>
+              {sel.ultimate && <span className="text-[11px] font-bold text-emerald-700">Included with Ultimate</span>}
+            </div>
+            <div className="mt-1.5 flex items-start justify-between gap-3">
+              <p className="font-extrabold text-slate-900 flex items-center gap-1.5"><Wind size={17} className="text-orange-500 shrink-0" />DryerFlex hose upgrade</p>
+              <p className="shrink-0 text-right leading-none">{df.wasCents ? <span className="block text-xs font-bold text-slate-400 line-through">{money(df.wasCents)}</span> : null}<span className="font-display text-2xl font-extrabold text-slate-900">{money(df.cents)}</span></p>
+            </div>
+            <ul className="mt-2 space-y-1 text-sm text-slate-600">
+              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Crush-resistant aluminum that keeps the full 4-inch airflow</li>
+              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Replaces thin foil or vinyl hoses that kink behind the dryer</li>
+              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Professionally installed with airtight clamps</li>
+            </ul>
+          </Tile>
+        )}
+        {fog && (
+          <Tile on={sel.fogging} onClick={() => flip('fogging')} label={`Sanitizing fog treatment, ${money(fog.cents)}`}>
+            <div className="flex items-start justify-between gap-3">
+              <p className="font-extrabold text-slate-900 flex items-center gap-1.5"><Sparkles size={17} className="text-sky-500 shrink-0" />Sanitizing fog treatment</p>
+              <p className="shrink-0 font-display text-2xl font-extrabold text-slate-900 leading-none">{money(fog.cents)}</p>
+            </div>
+            <p className="mt-1.5 text-sm text-slate-600">An antimicrobial fogging treatment inside the vent line. A good finishing step after pests, nests or musty smells.</p>
+          </Tile>
+        )}
+        {df && fog && upsell.bundleSavingsCents ? (
+          <p className={`rounded-xl px-3 py-2 text-sm font-bold ${deal ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-amber-50 text-amber-900 border border-amber-200'}`}>
+            {deal ? `Bundle deal applied: you save ${money(deal)}.` : sel.ultimate ? `Add the sanitizing fog to Ultimate for ${money(fog.cents)}.` : `Add both and save ${money(upsell.bundleSavingsCents)}.`}
+          </p>
+        ) : null}
+        {up && (
+          <Tile on={sel.ultimate} onClick={() => flip('ultimate')} label={`Upgrade to ${up.name}, ${money(up.extraCents)} more`}>
+            <div className="flex items-start justify-between gap-3">
+              <p className="font-extrabold text-slate-900 flex items-center gap-1.5"><Shield size={17} className="text-indigo-500 shrink-0" />Upgrade to {up.name}</p>
+              <p className="shrink-0 font-display text-xl font-extrabold text-slate-900 leading-none">+{money(up.extraCents)}</p>
+            </div>
+            <p className="mt-1.5 text-sm text-slate-600">Adds {up.pitch}.</p>
+          </Tile>
+        )}
+      </div>
+      <div className="mt-4 flex flex-col sm:flex-row gap-2">
+        <button type="button" disabled={!any} onClick={() => onDone(sel)} className="flex-1 py-3 rounded-xl font-extrabold text-sm bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-40">{any ? `Add to my visit · +${money(extra)}` : 'Choose an upgrade'}</button>
+        <button type="button" onClick={() => onDone({ dryerflex: false, fogging: false, ultimate: false })} className="sm:w-40 py-3 rounded-xl font-extrabold text-sm bg-slate-100 hover:bg-slate-200 text-slate-700">No thanks</button>
+      </div>
+    </Card>
+  );
+}
+
 function PackageCard({ p, onChoose, disabled }: { p: any; onChoose: (option: string) => void; disabled: boolean }) {
   const short = String(p.name).replace(/ See-It-Clean$/, '').replace(/^Dryer Vent /, '');
   return (
@@ -152,7 +249,9 @@ function PackageCard({ p, onChoose, disabled }: { p: any; onChoose: (option: str
 function RecommendationCard({ card, onChoose, active }: { card: any; onChoose: (option: string) => void; active: boolean }) {
   return (
     <div className="space-y-3 w-full">
+      {card.intro && <div className="p-4 rounded-2xl bg-white text-slate-800 border border-slate-200/90 text-sm sm:text-[15px] leading-relaxed whitespace-pre-wrap shadow-xs"><Rich text={card.intro} /></div>}
       {card.airflow && <AirflowGauge a={card.airflow} />}
+      {card.savings && <SavingsTile s={card.savings} />}
       {card.summary ? (
         <div className="p-4 rounded-2xl bg-white text-slate-800 border border-slate-200/90 text-sm sm:text-[15px] leading-relaxed shadow-xs"><Rich text={card.summary} /></div>
       ) : card.lead ? (
@@ -182,7 +281,7 @@ function iconFor(label: string) {
   if (l.includes('roof')) return <ArrowUp size={18} className={`${c} text-amber-500`} />;
   if (l.includes('side wall')) return <ArrowRight size={18} className={`${c} text-emerald-500`} />;
   if (/one normal cycle|1 normal cycle|no signs|have dryer|^yes|no gate code|no special notes|cleaning only|just the cleaning|dryer is off|turned off|everyone is safe/.test(l)) return <Check size={18} className={`${c} text-emerald-500`} />;
-  if (/^no$|no dryer|^no thanks|^no,/.test(l)) return <X size={18} className={`${c} text-rose-500`} />;
+  if (/^no$|no dryer|^no thanks|^no,|^cancel package/.test(l)) return <X size={18} className={`${c} text-rose-500`} />;
   if (l.includes('express')) return <Timer size={18} className={`${c} text-teal-500`} />;
   if (l.includes('premium')) return <Star size={18} className={`${c} text-orange-500`} />;
   if (l.includes('ultimate')) return <Shield size={18} className={`${c} text-indigo-500`} />;
@@ -224,7 +323,7 @@ const contactPrompt = (step: ContactStep, d: any, cfg?: any): string => {
     case 'city': return 'And the city?';
     case 'notes': return `${d?.addressFromChat ? 'Got it.' : 'Thanks for providing that address.'} Are there any gate codes, parking instructions, or pets we should be aware of?`;
     case 'gate': return "What's the gate code, and anything else the technician should know?";
-    case 'addons': return 'Want to add anything to your visit?';
+    case 'addons': return cfg?.upsellReady ? 'Before we pick a time, here are a few upgrades for your visit.' : 'Want to add anything to your visit?';
   }
 };
 const INPUT_FOR: Partial<Record<ContactStep, { type: string; autoComplete: string; placeholder: string; inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'] }>> = {
@@ -412,6 +511,10 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
     catch (err) { setError((err as Error).message); } finally { setBusy(false); }
   };
 
+  if (busy && !slots.length && !hold && !error) {
+    return <WorkingScreen title="Finding your openings" steps={['Checking the live schedule…', 'Finding technicians near you…', 'Lining up the soonest openings…', 'Almost there…']} loop={1} every={2500} />;
+  }
+
   if (!enabled) {
     return (
       <Card>
@@ -513,14 +616,57 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
   );
 }
 
-function ApprovalWait({ token, initial, onBooked, onEnded }: { token: string; initial: any; onBooked: (r: any, pending: boolean) => void; onEnded: (status: string) => void }) {
-  const [approval, setApproval] = useState<any>(initial), [error, setError] = useState('');
+/**
+ * A waiting screen that shows BOB is working: a pulsing animation and short updates that change
+ * every few seconds. After the last update it keeps rotating the final "still waiting" lines.
+ */
+function WorkingScreen({ title, steps, loop = 2, every = 4500, children }: { title: string; steps: string[]; loop?: number; every?: number; children?: React.ReactNode }) {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setI((n) => n + 1), every);
+    return () => clearInterval(t);
+  }, [every]);
+  const tail = Math.max(1, Math.min(loop, steps.length));
+  const index = i < steps.length ? i : steps.length - tail + ((i - steps.length) % tail);
+  const progress = Math.min(i, steps.length - 1);
+  return (
+    <Card>
+      <div className="flex flex-col items-center text-center py-2">
+        <div className="relative size-24 flex items-center justify-center" aria-hidden="true">
+          <span className="absolute inset-0 rounded-full bg-orange-400/20 motion-safe:animate-ping" style={{ animationDuration: '2.2s' }} />
+          <span className="absolute inset-3 rounded-full bg-orange-400/25 motion-safe:animate-ping" style={{ animationDuration: '2.2s', animationDelay: '0.6s' }} />
+          <span className="relative"><BobFace size={64} /></span>
+        </div>
+        <h3 className="font-extrabold text-slate-800 text-lg mt-4">{title}</h3>
+        <p key={index} role="status" aria-live="polite" className="text-sm font-semibold text-slate-600 mt-1.5 min-h-[2.5rem] animate-in">{steps[index]}</p>
+        <div className="flex gap-1.5 mt-3" aria-hidden="true">
+          {steps.map((_, k) => <span key={k} className={`h-1.5 rounded-full transition-all duration-500 ${k <= progress ? 'w-6 bg-orange-500' : 'w-3 bg-slate-200'}`} />)}
+        </div>
+        {children}
+      </div>
+    </Card>
+  );
+}
+
+const SAME_DAY_STEPS = [
+  'Sending your request to the team…',
+  'The team is checking which technician can get to you today…',
+  "Looking at today's route and drive times…",
+  'Waiting for a technician to confirm…',
+  'Still working on it. Thanks for waiting.',
+  'Keep this page open. The answer will show up here.',
+];
+
+function ApprovalWait({ token, initial, onBooked, onEnded, onCancelled }: { token: string; initial: any; onBooked: (r: any, pending: boolean) => void; onEnded: (status: string) => void; onCancelled: (r: any) => void }) {
+  const [approval, setApproval] = useState<any>(initial), [error, setError] = useState(''), [confirming, setConfirming] = useState(false), [cancelling, setCancelling] = useState(false);
+  const stopped = useRef(false);
   useEffect(() => {
     let stop = false;
     const tick = async () => {
+      if (stopped.current) return;
       try {
         const r = await api('/api/approvals/current', { token });
-        if (stop) return;
+        if (stop || stopped.current) return;
         setApproval(r.approval);
         if (r.receipt) return onBooked(r.receipt, Boolean(r.pending));
         if (['declined', 'expired', 'failed'].includes(r.approval.status)) return onEnded(r.approval.status);
@@ -530,26 +676,81 @@ function ApprovalWait({ token, initial, onBooked, onEnded }: { token: string; in
     let timer = setTimeout(tick, 4000);
     return () => { stop = true; clearTimeout(timer); };
   }, [token, onBooked, onEnded]);
+  const cancel = async () => {
+    setCancelling(true); setError('');
+    try {
+      stopped.current = true;
+      onCancelled(await api('/api/approvals/current/cancel', { method: 'POST', token, body: {} }));
+    } catch (err) {
+      stopped.current = false;
+      setError((err as Error).message); setConfirming(false);
+    } finally { setCancelling(false); }
+  };
   const w = windowParts(approval.scheduledAt);
+  const closes = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' }).format(approval.expiresAt);
   return (
-    <Card>
-      <div className="flex items-start gap-4">
-        <div className="size-11 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center shrink-0"><Loader2 className="animate-spin" size={22} /></div>
-        <div>
-          <h3 className="font-extrabold text-slate-800 text-lg">Waiting for approval</h3>
-          <p className="text-sm text-slate-500 mt-1">{approval.approverName || 'Our team'} has your request for <b className="text-slate-700">{approval.service}</b> on <b className="text-slate-700">{w.day}, {w.time}</b>. Keep this page open — you'll see the answer here.</p>
-          <p className="text-xs text-slate-400 mt-2">Reference {approval.id}. Not booked yet. The request closes at {new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' }).format(approval.expiresAt)} if there's no answer.</p>
-          {error && <p className="text-xs text-rose-600 mt-2">{error}</p>}
-        </div>
+    <WorkingScreen title="Checking same-day availability" steps={SAME_DAY_STEPS}>
+      <div className="mt-4 w-full rounded-2xl bg-slate-50 border border-slate-200 p-3.5 text-left">
+        <p className="text-sm text-slate-700"><b className="text-slate-900">{approval.service}</b></p>
+        <p className="text-sm text-slate-600">{w.day}, {w.time}</p>
+        <p className="text-xs text-slate-500 mt-1">Not booked yet. Reference {approval.id}. If there's no answer by {closes}, the request closes and you can book a regular visit.</p>
       </div>
-    </Card>
+      {error && <p className="text-xs text-rose-600 mt-2">{error}</p>}
+      {confirming ? (
+        <div className="mt-3 w-full flex flex-col sm:flex-row gap-2">
+          <button className="flex-1 px-4 py-2.5 rounded-xl text-sm font-extrabold bg-slate-900 text-white disabled:opacity-60" onClick={() => void cancel()} disabled={cancelling}>{cancelling ? 'Cancelling…' : 'Yes, cancel same-day'}</button>
+          <button className="flex-1 px-4 py-2.5 rounded-xl text-sm font-extrabold bg-slate-100 text-slate-700" onClick={() => setConfirming(false)} disabled={cancelling}>Keep waiting</button>
+        </div>
+      ) : (
+        <button className="mt-3 text-sm font-bold text-slate-500 hover:text-slate-800" onClick={() => setConfirming(true)}>Cancel request</button>
+      )}
+    </WorkingScreen>
   );
 }
 
-function Receipt({ receipt, pending, onRestart }: { receipt: any; pending: boolean; onRestart: () => void }) {
+const AUTO_CLOSE_SECONDS = 20;
+/** Where the standalone chat page goes back to (and returns to after a booking). */
+const SITE_URL = 'https://dryerventsquadaz.com';
+
+function Receipt({ receipt, pending, onRestart, business, autoClose, closeLabel, onAutoClose, onStay }: { receipt: any; pending: boolean; onRestart: () => void; business?: { businessName?: string; phone?: string; email?: string }; autoClose?: boolean; closeLabel?: string; onAutoClose?: () => void; onStay?: () => void }) {
   const w = windowParts(receipt.scheduledAt);
+  const [saving, setSaving] = useState(false);
+  // After a confirmed booking the chat closes itself shortly; it pauses while the card is saved.
+  const [left, setLeft] = useState(AUTO_CLOSE_SECONDS);
+  const closeRef = useRef(onAutoClose); closeRef.current = onAutoClose;
+  useEffect(() => {
+    if (!autoClose || saving) return;
+    const t = setInterval(() => setLeft((n) => Math.max(0, n - 1)), 1000);
+    return () => clearInterval(t);
+  }, [autoClose, saving]);
+  useEffect(() => { if (autoClose && left === 0) closeRef.current?.(); }, [autoClose, left]);
+  const items = receipt.lineItems?.length ? receipt.lineItems : [{ name: receipt.service, cents: receipt.priceCents }];
   const text = () =>
-    [receipt.id, `${w.day}, ${w.time} (Arizona time)`, ...(receipt.lineItems || []).map((l: any) => `${l.name}: ${money(l.cents)}`), `Total: ${money(receipt.priceCents)}`, receipt.name, receipt.address, `${receipt.city}, AZ ${receipt.zip}`, receipt.route !== 'cleaning' ? 'Repairs and parts are quoted separately.' : '', '', receipt.preparation].join('\n');
+    [receipt.id, `${w.day}, ${w.time} (Arizona time)`, ...items.map((l: any) => `${l.name}: ${money(l.cents)}`), `Total: ${money(receipt.priceCents)}`, receipt.name, receipt.address, `${receipt.city}, AZ ${receipt.zip}`, receipt.route !== 'cleaning' ? 'Repairs and parts are quoted separately.' : '', '', receipt.preparation].join('\n');
+  // A designed image of the appointment. iPhones get the share sheet ("Save Image"); everything
+  // else downloads the PNG. If drawing fails, the plain-text version is saved instead.
+  const save = async () => {
+    setSaving(true);
+    try {
+      const blob = await renderAppointmentCard({
+        businessName: business?.businessName || 'Dryer Vent Squad West Valley', phone: business?.phone, email: business?.email,
+        pending, reference: receipt.id, jobNumber: receipt.jobberJobNumber, day: w.day, time: w.time,
+        lineItems: items, totalCents: receipt.priceCents, repairsNote: receipt.route !== 'cleaning' ? 'Repairs and parts are quoted separately.' : '',
+        name: receipt.name, address: receipt.address, cityLine: `${receipt.city}, AZ ${receipt.zip}`, preparation: receipt.preparation,
+      });
+      const name = `${receipt.id}-appointment.png`;
+      const file = typeof File === 'function' ? new File([blob], name, { type: 'image/png' }) : null;
+      const ios = /iP(?:hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      if (ios && file && navigator.canShare?.({ files: [file] })) {
+        try { await navigator.share({ files: [file], title: 'Your appointment' }); return; } catch (err) { if ((err as Error).name === 'AbortError') return; }
+      }
+      saveBlob(name, blob);
+    } catch {
+      saveText(`${receipt.id}.txt`, text());
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
     <div className={`border p-6 rounded-3xl space-y-4 animate-in ${pending ? 'bg-amber-50 border-amber-200' : 'bg-emerald-50 border-emerald-200'}`}>
       <div className="text-center space-y-1">
@@ -566,9 +767,18 @@ function Receipt({ receipt, pending, onRestart }: { receipt: any; pending: boole
       <p className="text-sm text-slate-700"><b>Before we arrive:</b> {receipt.preparation}</p>
       <p className="text-xs text-slate-500">{receipt.notification}</p>
       <div className="flex flex-wrap gap-2 justify-center">
-        <button className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 font-extrabold text-sm rounded-xl flex items-center gap-2" onClick={() => saveText(`${receipt.id}.txt`, text())}><Download size={16} />Save confirmation</button>
+        <button className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 font-extrabold text-sm rounded-xl flex items-center gap-2 disabled:opacity-60" onClick={() => void save()} disabled={saving}>{saving ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}Save confirmation</button>
         <button className="px-4 py-2.5 text-slate-500 font-extrabold text-sm rounded-xl" onClick={onRestart}>Start over</button>
       </div>
+      {autoClose && !pending && (
+        <div className="rounded-2xl bg-white/80 border border-emerald-200 px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <p role="timer" aria-live="off" className="text-sm font-semibold text-slate-600">{closeLabel || 'This chat will close'} in {left}s{saving ? ' (paused)' : ''}.</p>
+            <button type="button" className="shrink-0 whitespace-nowrap text-sm font-extrabold text-emerald-700 hover:text-emerald-900" onClick={onStay}>Stay open</button>
+          </div>
+          <div className="mt-2 h-1 rounded-full bg-emerald-100 overflow-hidden" aria-hidden="true"><div className="h-full bg-emerald-500 transition-[width] duration-1000 ease-linear" style={{ width: `${(left / AUTO_CLOSE_SECONDS) * 100}%` }} /></div>
+        </div>
+      )}
     </div>
   );
 }
@@ -577,6 +787,7 @@ function Receipt({ receipt, pending, onRestart }: { receipt: any; pending: boole
 
 export function BookingBot({ embedded = false, preview = false }: { embedded?: boolean; preview?: boolean }) {
   const [token, setToken] = useState(''), [session, setSession] = useState<any>(null), [config, setConfig] = useState<any>(null);
+  const [autoClose, setAutoClose] = useState(false);
   const [minimized, setMinimized] = useState(() => { try { return sessionStorage.getItem(preview ? 'bob.preview.minimized' : 'bob.minimized') === '1'; } catch { return false; } });
   const expandRef = useRef<HTMLButtonElement>(null);
   const changeMinimized = (value: boolean) => {
@@ -615,7 +826,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const storageKey = preview ? 'bob.preview.session' : 'bob.session';
 
   const initialize = useCallback(async (fresh = false) => {
-    setReady(false); setError(''); setReceipt(null); setPending(false); setRequestId(''); setAction(''); setContactStep(null); setVerification(null); setApproval(null);
+    setReady(false); setError(''); setReceipt(null); setPending(false); setAutoClose(false); setRequestId(''); setAction(''); setContactStep(null); setVerification(null); setApproval(null);
     try {
       let stored = '';
       try { stored = fresh ? '' : sessionStorage.getItem(storageKey) || ''; } catch {}
@@ -686,20 +897,30 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   }, [messages, busy, action, receipt, requestId, contactStep, options.length]);
 
   const say = (role: Msg['role'], t: string, extra: Partial<Msg> = {}) => setMessages((m) => [...m, { role, text: t, local: true, ...extra }]);
-  const onApprovalBooked = useCallback((r: any, p: boolean) => { setReceipt(r); setPending(p); setAction(''); }, []);
-  const onApprovalEnded = useCallback((status: string) => {
+  const onApprovalBooked = useCallback((r: any, p: boolean) => { setReceipt(r); setPending(p); setAction(''); setAutoClose(!p && !preview); }, [preview]);
+  /** Back to the package choices after a same-day request is cancelled or can't happen. */
+  const showChoices = useCallback((r: any, lead = '') => {
     setApproval(null);
-    setAction('request');
-    setMessages((m) => [...m, {
-      role: 'model', local: true,
-      text: status === 'declined' ? "The team couldn't approve that visit. Send a request below and they'll find another option with you."
-        : status === 'expired' ? "The approval request timed out before the team answered. Send a request and they'll reach out."
-        : 'That time is no longer available. Send a request and the team will find another time.',
-    }]);
+    setAction('');
+    setSession(r.session);
+    setMessages((m) => [...m, ...(lead ? [{ role: 'model' as const, local: true, text: lead }] : []), { role: 'model', text: r.reply, info: r.info, ...(r.card ? { card: r.card } : {}) }]);
+    setOptions(r.options || []); setMulti(false); setSuggested(r.suggested || '');
   }, []);
+  const onApprovalCancelled = useCallback((r: any) => showChoices(r), [showChoices]);
+  const onApprovalEnded = useCallback(async (status: string) => {
+    const lead = status === 'expired' ? "The team didn't answer in time, so the same-day request closed." : status === 'failed' ? "That time couldn't be booked after all." : '';
+    try {
+      showChoices(await api('/api/approvals/current/cancel', { method: 'POST', token, body: {} }), lead);
+    } catch {
+      setApproval(null);
+      setAction('request');
+      setMessages((m) => [...m, { role: 'model', local: true, text: `${lead ? `${lead} ` : ''}Send a request below and the team will find another option with you.` }]);
+    }
+  }, [token, showChoices]);
   const addOnLabels = (s: any) =>
     (config?.addOns || [])
       .filter((a: any) => !(a.key === 'fogging' && s?.package === 'restoration'))
+      .filter((a: any) => !(a.key === 'dryerflex' && (['ultimate', 'restoration', 'express', 'inspection'].includes(s?.package) || s?.property?.hasDryer === 'No')))
       .map((a: any) => `${a.name}${config?.pricesApproved ? ` · +${money(a.cents)}` : ''}`);
 
   const send = async (message = text) => {
@@ -753,14 +974,15 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   // The address from the first question isn't asked again (the summary still shows it, and Edit details can change it).
   const stepsFor = (s: any): ContactStep[] => [
     ...CONTACT_ORDER.filter((k) => !(k === 'address' && s?.serviceAddress?.street) && !(k === 'city' && s?.serviceAddress?.street && s?.serviceAddress?.city) && !(k === 'sms' && config?.textMessages === false)),
-    ...(s?.route === 'cleaning' && addOnLabels(s).length ? (['addons'] as ContactStep[]) : []),
+    ...(['cleaning', 'bundle'].includes(s?.route) && (s?.upsell || addOnLabels(s).length) ? (['addons'] as ContactStep[]) : []),
   ];
   const askContact = (step: ContactStep, d: any = draft) => {
     if (step === 'address') { addrSession.current = crypto.randomUUID(); addrPicked.current = ''; }
     setContactStep(step);
-    say('model', contactPrompt(step, d, config));
-    setOptions(step === 'email' ? ['Skip'] : step === 'notes' ? ['No special notes', 'Gate code required'] : step === 'sms' ? ['Yes, SMS updates are fine', 'No, call or email only'] : step === 'addons' ? [...addOnLabels(session), 'No add-ons'] : []);
-    setMulti(step === 'addons');
+    const upsell = step === 'addons' && session?.upsell;
+    say('model', contactPrompt(step, d, { ...config, upsellReady: Boolean(upsell) }));
+    setOptions(step === 'email' ? ['Skip'] : step === 'notes' ? ['No special notes', 'Gate code required'] : step === 'sms' ? ['Yes, SMS updates are fine', 'No, call or email only'] : step === 'addons' && !upsell ? [...addOnLabels(session), 'No add-ons'] : []);
+    setMulti(step === 'addons' && !upsell);
     setSuggested('');
   };
   function startContact(s: any) {
@@ -871,6 +1093,16 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     setDraft(d);
     setPicked([]);
     nextContact(step, d);
+  };
+  /** The upsell panel's answer: DryerFlex, the sanitizing fog, and/or Ultimate in place of Premium. */
+  const chooseUpsell = (sel: { dryerflex: boolean; fogging: boolean; ultimate: boolean }) => {
+    remember('contact');
+    const d = { ...draft, addOns: { ...(draft.addOns || {}), dryerflex: sel.dryerflex && !sel.ultimate, fogging: sel.fogging, toolRetrieval: false }, upgrade: sel.ultimate ? 'ultimate' : undefined };
+    const chosen = [sel.ultimate && 'the Ultimate Protection upgrade', sel.dryerflex && !sel.ultimate && 'the DryerFlex upgrade', sel.fogging && 'the sanitizing fog treatment'].filter(Boolean);
+    say('user', chosen.length ? `Add ${chosen.join(' and ')}` : 'No thanks');
+    setDraft(d);
+    setPicked([]);
+    nextContact('addons', d);
   };
   const submitContact = async (d: any) => {
     setContactStep(null); setOptions([]); setMulti(false);
@@ -1041,9 +1273,10 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
             )}
 
             <div className="pl-9 sm:pl-10 space-y-4">
+              {!receipt && !requestId && contactStep === 'addons' && session?.upsell && !busy && <UpsellOffer upsell={session.upsell} onDone={chooseUpsell} />}
               {!receipt && !requestId && action === 'verify' && verification && <VerifyPhone token={token} verification={verification} onVerified={(s) => { setSession(s); setVerification(null); setAction('slots'); say('model', `Thanks — your ${s.verifiedContact?.channel === 'email' ? 'email' : 'phone'} is confirmed. Here are the soonest openings for the full visit.`); }} onEdit={editDetails} onRequest={() => setAction('request')} />}
-              {!receipt && !requestId && action === 'slots' && <SlotPicker token={token} session={session} config={config} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
-              {!receipt && !requestId && action === 'approval' && approval && <ApprovalWait token={token} initial={approval} onBooked={onApprovalBooked} onEnded={onApprovalEnded} />}
+              {!receipt && !requestId && action === 'slots' && <SlotPicker token={token} session={session} config={config} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); setAutoClose(!p && !preview); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
+              {!receipt && !requestId && action === 'approval' && approval && <ApprovalWait token={token} initial={approval} onBooked={onApprovalBooked} onEnded={onApprovalEnded} onCancelled={onApprovalCancelled} />}
               {!receipt && !requestId && action === 'request' && <RequestForm token={token} session={session} onDone={(id) => { setRequestId(id); setAction(''); setOptions([]); }} />}
               {requestId && (
                 <Card>
@@ -1052,7 +1285,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
                   <button className="mt-4 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl font-extrabold text-sm text-slate-700" onClick={restart}>Start a new conversation</button>
                 </Card>
               )}
-              {receipt && <Receipt receipt={receipt} pending={pending} onRestart={restart} />}
+              {receipt && <Receipt receipt={receipt} pending={pending} onRestart={restart} business={config} autoClose={autoClose} closeLabel={embedded ? 'This chat will close' : 'Returning to dryerventsquadaz.com'} onStay={() => setAutoClose(false)} onAutoClose={() => { setAutoClose(false); if (embedded) changeMinimized(true); else window.location.assign(SITE_URL); }} />}
             </div>
           </>
         )}
@@ -1116,7 +1349,7 @@ export function CustomerPage() {
   return (
     <div className="min-h-dvh bg-slate-100 px-4 py-4 sm:py-8">
       <div className="max-w-3xl mx-auto mb-3 flex items-center justify-between text-sm">
-        <a href="https://dryerventsquadaz.com" className="font-bold text-slate-600 hover:text-slate-900 flex items-center gap-1.5"><ArrowLeft size={16} />Dryer Vent Squad West Valley</a>
+        <a href={SITE_URL} className="font-bold text-slate-600 hover:text-slate-900 flex items-center gap-1.5"><ArrowLeft size={16} />Dryer Vent Squad West Valley</a>
         <span className="text-slate-400 font-semibold hidden sm:inline">Veteran-owned · West Valley, AZ</span>
       </div>
       <BookingBot />

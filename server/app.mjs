@@ -21,6 +21,7 @@ import { sanitizeDiagnostic } from "./integration-status.mjs";
 
 import { deliverEmailOnce } from "./email-notification.mjs";
 import { notifyBookingOwner } from "./owner-notification.mjs";
+import { BOOKING_REPORT_TO, COMMISSION_CENTS, bookingTotals, bookingReportEmail } from "./booking-report.mjs";
 import { createVerification } from "./verification.mjs";
 import { waitForRequestLock } from "./request-lock.mjs";
 import { approvalPolicy } from "./approval-policy.mjs";
@@ -32,7 +33,7 @@ import {
   DEFAULT_CONFIG, INITIAL_FAQS, bookingQuote, travelFeeFor, validateContact,
   validateConfig, normalizePhone, isBookable, BUNDLE_PRICE_CENTS, phoenixDate, areaFor, drivingAreaFor,
 } from "../shared/domain.mjs";
-import { initialSession, WELCOME, detectSafety } from "../shared/conversation.mjs";
+import { initialSession, WELCOME, detectSafety, turn } from "../shared/conversation.mjs";
 import { territoryFor, WEST_VALLEY_ZIPS } from "../shared/territory.mjs";
 import { chatTurn } from "./chat.mjs";
 import { confirmationEmail, confirmationSms, approvalRequestText } from "./messages.mjs";
@@ -174,6 +175,26 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       } });
     } catch { return { status: 'failed', reason: 'notification_unavailable' }; }
   };
+  // Custom-AIs booking report: every confirmed ChatDaddy booking, with running counts, revenue and
+  // commission. BOOKING_REPORT_EMAIL changes the recipient ("off" stops it); it doesn't depend on the
+  // office's customer-email switches, only on a configured SendGrid sender. Sent at most once per booking.
+  const bookingReportTo = () => {
+    const value = String(env.BOOKING_REPORT_EMAIL ?? BOOKING_REPORT_TO).trim();
+    return /^(?:off|none|false|)$/i.test(value) ? "" : value;
+  };
+  const commissionCents = Number.isInteger(Number(env.BOOKING_COMMISSION_CENTS)) && Number(env.BOOKING_COMMISSION_CENTS) >= 0 && env.BOOKING_COMMISSION_CENTS !== undefined && env.BOOKING_COMMISSION_CENTS !== "" ? Number(env.BOOKING_COMMISSION_CENTS) : COMMISSION_CENTS;
+  const sendBookingReport = async (appointment, config) => {
+    try {
+      const to = bookingReportTo();
+      if (!to || appointment.source !== "ai_bot" || appointment.status !== "confirmed") return { status: "skipped" };
+      const totals = bookingTotals(await store.appointments(), appointment, { commissionCents });
+      return await deliverEmailOnce({ store, kind: "booking_report", id: appointment.id, to, clock,
+        enabled: true, configured: useSendGrid && Boolean(sendgrid?.configured),
+        message: bookingReportEmail(appointment, totals, config),
+        sendEmail: async ({ to: recipient, ...content }) => sendgrid.sendEmail(recipient, content),
+      });
+    } catch { return { status: "failed_or_uncertain", reason: "report_unavailable" }; }
+  };
   const notifyOwnerProblem = async (kind, appointment) => {
     try {
       return await notifyOwnerError({ store, kind, details: { appointmentId: appointment.id, at: clock() },
@@ -278,7 +299,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       textMessages: !ownerAlertsOnly && smsReady(c) && c.smsConfirmations !== false, // off: no SMS consent question and no texts to customers
       approverName: c.approver?.name || "",
       // Optional extras the customer can tick on the details form.
-      addOns: [["fogging", "fogging"], ["toolRetrieval", "tool"]].flatMap(([key, variant]) => {
+      addOns: [["dryerflex", "dryerflex"], ["fogging", "fogging"], ["toolRetrieval", "tool"]].flatMap(([key, variant]) => {
         const item = (c.services || []).find((x) => x.family === "addon" && x.variant === variant && x.active !== false);
         return item ? [{ key, name: item.name, description: item.description, cents: item.priceCents }] : [];
       }),
@@ -453,6 +474,13 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     };
   }
 
+  /** Answers the customer didn't know, as one line the technician can't miss. */
+  const UNSURE_LABELS = { hasDryer: "whether a dryer is installed", recentService: "recent dryer purchase or service", stories: "number of stories", laundryFloor: "laundry floor", power: "gas or electric", mount: "dryer setup (standard, pedestal or stacked)", exit: "where the vent exits", animals: "signs of animals", dryerWorking: "how the dryer is working" };
+  const unsureNote = (property) => {
+    const unsure = Object.keys(UNSURE_LABELS).filter((k) => property?.[k] === "Not sure").map((k) => UNSURE_LABELS[k]);
+    return unsure.length ? `Tech to double-check on site (customer wasn't sure): ${unsure.join("; ")}.` : "";
+  };
+
   /** Jobber: client + property + job + scheduled visit. Returns appointment.jobber details. */
   async function pushToJobber(appt, slot, notes) {
     if (!slot.jobberUserId || !jobber.verifyAssignment) throw new Error("The selected technician needs a verified Jobber user mapping before booking.");
@@ -469,6 +497,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     const instructions = [
       `Booked by BOB (${appt.source === "ai_bot" ? "website chat" : "office"}) · ref ${appt.id}`,
       appt.property && Object.keys(appt.property).length ? `Home: ${Object.entries(appt.property).map(([k, v]) => `${k} ${Array.isArray(v) ? v.join("+") : v}`).join(", ")}` : "",
+      unsureNote(appt.property),
       appt.concerns?.length ? `Customer concerns: ${appt.concerns.join(" | ")}` : "",
       notes ? `Access notes: ${notes}` : "",
       slot.nearestJobMin != null ? `Nearest job that day ~${slot.nearestJobMin} min away.` : "",
@@ -707,6 +736,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       await notifyOwner(appt, c);
       appt.notifications = await sendConfirmations(appt, c);
       await store.updateAppointment(appt);
+      await sendBookingReport(appt, c);
       await dispatch();
     }
     return { appt, pending };
@@ -919,7 +949,11 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           const to = pending?.channel === 'email' ? data.contact.email.toLowerCase() : data.contact.phone;
           if (pending?.provider === 'twilio' && pending.to !== to) delete data.verification;
         }
-        data.addOns = data.route === "cleaning" ? { fogging: body.addOns?.fogging === true, toolRetrieval: body.addOns?.toolRetrieval === true } : {};
+        // End-of-booking upsell: Premium can move up to Ultimate (which already includes DryerFlex).
+        if (body.upgrade === "ultimate" && data.package === "premium" && ["cleaning", "bundle"].includes(data.route) && data.property?.hasDryer !== "No") data.package = "ultimate";
+        data.addOns = ["cleaning", "bundle"].includes(data.route)
+          ? { fogging: body.addOns?.fogging === true, toolRetrieval: body.addOns?.toolRetrieval === true, dryerflex: body.addOns?.dryerflex === true && data.package !== "ultimate" }
+          : {};
         data.zip = body.zip;
         data.location = where.location;
         data.driveFromBaseMin = where.driveFromBaseMin;
@@ -1086,6 +1120,31 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         await store.audit("approval.requested", a.id);
         return send(201, { approval: publicApproval(a, c) });
       }
+      // The customer changed their mind while a same-day request waits: cancel it, free the held time,
+      // and go back to the choices so they can book a regular package instead.
+      if (method === "POST" && pathname === "/api/approvals/current/cancel") {
+        const { token, data } = await session(req);
+        if (!data.approvalId) fail(404, "There's no approval request in this conversation.");
+        const [a] = await sweepApprovals([await store.approval(data.approvalId)].filter(Boolean));
+        if (!a) fail(404, "There's no approval request in this conversation.");
+        if (["booked", "action_needed"].includes(a.status)) fail(409, "This visit was already approved and booked.");
+        const c = await store.config();
+        let result;
+        if (a.status === "pending") {
+          a.status = "cancelled";
+          a.cancelledAt = clock();
+          await store.updateApproval(a);
+          await store.releaseHold(a.holdId);
+          await store.audit("approval.cancelled", a.id);
+          await record(req, "approval.cancelled_by_customer", { approvalId: a.id, service: a.service });
+          result = turn("Cancel package", { ...data, approvalId: null, stage: "details", serviceAccepted: false }, c, await store.get("faqs"));
+        } else {
+          // Declined, timed out or couldn't be booked: same-day isn't happening, so offer the regular packages.
+          result = turn("Back to packages", { ...data, approvalId: null, stage: "details", serviceAccepted: false, sameDayUnavailable: true }, c, await store.get("faqs"));
+        }
+        await store.saveSession(token, result.session);
+        return send(200, { ...result, via: "rules" });
+      }
       if (method === "GET" && pathname === "/api/approvals/current") {
         const { data } = await session(req);
         if (!data.approvalId) fail(404, "There's no approval request in this conversation.");
@@ -1224,6 +1283,30 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         if (method === 'POST' && /^\/api\/admin\/invitations\/[^/]+\/revoke$/.test(pathname)) {
           return send(200, await adminAuth.revokeInvite(req.adminPrincipal, decodeURIComponent(pathname.split('/')[4])));
         }
+        if (method === "POST" && pathname === "/api/admin/booking-report/test") {
+          await rate(req, "booking-report-test", 5, 600_000);
+          const to = bookingReportTo();
+          if (!to) return send(200, { status: "off", to: "" });
+          if (!(useSendGrid && sendgrid?.configured)) return send(200, { status: "not_configured", to });
+          const c = await store.config();
+          const now = new Date(clock()).toISOString();
+          const sample = {
+            id: "TEST-REPORT", createdAt: now, price: 179, source: "ai_bot", status: "confirmed",
+            customerName: "Test Customer", phone: "6235550100", email: "test@example.com", address: "123 W Test St", city: "Buckeye", zip: "85326",
+            package: "Premium 1-2-3 See-It-Clean", lineItems: [{ name: "Premium 1-2-3 See-It-Clean", cents: 17900 }],
+            scheduledAt: new Date(clock() + 2 * 86_400_000).toISOString(), durationMins: 60, technicianName: "Test Technician",
+            concerns: ["This is a test email from the ChatDaddy dashboard. No appointment was booked."],
+          };
+          const email = bookingReportEmail(sample, bookingTotals(await store.appointments(), sample, { commissionCents }), c);
+          try {
+            const r = await sendgrid.sendEmail(to, { ...email, subject: `[TEST] ${email.subject}` });
+            await record(req, "booking_report.test", { status: r?.status === "accepted" ? "accepted" : "uncertain" });
+            return send(200, { status: r?.status === "accepted" ? "accepted" : "uncertain", to });
+          } catch (error) {
+            await record(req, "booking_report.test", { status: error?.code === "SENDGRID_REJECTED" ? "rejected" : "failed" }, "warning");
+            return send(200, { status: error?.code === "SENDGRID_REJECTED" ? "rejected" : "failed", to });
+          }
+        }
         if(pathname==='/api/admin/owner-sms-consent'&&['GET','POST'].includes(method)) {
           if(method==='GET')return send(200,await ownerConsent.snapshot());
           const body=await readBody(req);
@@ -1251,6 +1334,12 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         }
         if (method === "GET" && pathname === "/api/admin/data") return send(200, await snapshot());
         if (method === "GET" && pathname === "/api/admin/activity") return send(200, await store.activity({ sessionId: (url.searchParams.get("session") || "").slice(0, 32), level: url.searchParams.get("level") || "", cursor: url.searchParams.get("cursor") || "", limit: 100 }));
+        // The browser Maps key is separate from the server key: it's restricted to the dashboard's web
+        // address in Google Cloud, so it's safe to send to the browser. Without it the map uses OpenStreetMap.
+        if (method === "GET" && pathname === "/api/admin/maps-key") {
+          const key = String(env.GOOGLE_MAPS_BROWSER_KEY || "").trim();
+          return send(200, { key: /^[A-Za-z0-9_-]{20,100}$/.test(key) ? key : "" });
+        }
         if (method === "POST" && pathname === "/api/admin/service-area/map") {
           await rate(req, "area-map", 5);
           const b = await readBody(req), c = { ...await store.config(), ...Object.fromEntries(["baseAddress", "baseLocation", "serviceAreaMode", "serviceAreaMiles", "travelAreaMiles", "customServiceAreas"].filter((key) => key in b).map((key) => [key, b[key]])) };
@@ -1576,6 +1665,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
             await notifyOwner(a, c);
             a.notifications = await sendConfirmations(a, c);
             await store.updateAppointment(a);
+            await sendBookingReport(a, c);
             await store.audit("appointment.resolved_in_jobber", id);
           } else if (b.outcome === "not_in_jobber") {
             a.jobberState = "not_created";

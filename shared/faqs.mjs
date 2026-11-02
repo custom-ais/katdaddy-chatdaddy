@@ -13,7 +13,7 @@ const f = (id, category, subcategory, question, answer, keywords, status = "appr
 
 export const INITIAL_FAQS = [
   f("faq-1", "Pricing", "Cost", "How much does it cost to get my dryer vent cleaned?",
-    "Premium 1-2-3 See-It-Clean is $179 for a 1-story home, $219 for a 2-story with first-floor laundry, and $199 with second-floor laundry. Ultimate Protection is $299, $339, and $319. A Dryer Vent Safety Inspection is $119, $139, and $129, and the fee applies toward approved repairs. Vent-only Express cleaning, for when no dryer is installed, starts at $149. Gas dryers add the $49 Gas Appliance Safety Procedure, a fixed pedestal adds $20, and a stacked washer and dryer adds $45.",
+    "Premium 1-2-3 See-It-Clean is $179 for a 1-story home, $219 for a 2-story with first-floor laundry, and $199 with second-floor laundry. Ultimate Protection is $299, $339, and $319. A Dryer Vent Safety Inspection is $119, $139, and $129, and the fee applies toward approved repairs. Vent-only Express cleaning, for when no dryer is installed, starts at $149.",
     ["cost", "price", "pricing", "how much", "rate", "quote", "estimate", "fee"]),
   f("faq-2", "Service", "Process", "What is the cleaning process?",
     "Premium 1-2-3 See-It-Clean starts with a live camera inspection, cleans the lint screen and dryer cavity, runs a rotary brush along the full path from the appliance to the exterior termination with a sealed HEPA-filter vacuum (no blow-back into your home), and finishes with a post-clean camera check so you can see the result. Ultimate Protection adds exterior termination cleanout, a DryerFlex transition upgrade, before-and-after photos, a 3-year parts and labor warranty, and a 4-pack of wool dryer balls.",
@@ -41,7 +41,7 @@ export const INITIAL_FAQS = [
     "We inspect the transition hose behind the dryer during every visit. Ultimate Protection includes a DryerFlex transition upgrade with professional installation. Thin foil and vinyl hoses crush easily and aren't recommended.",
     ["transition hose", "flexible hose", "pipe behind dryer", "silver hose", "foil hose"]),
   f("faq-10", "Service", "Access", "Do you move the dryer?",
-    "Yes. Your technician pulls the dryer out to reach the vent, including stacked and pedestal setups. Please don't move or disconnect the dryer yourself. Gas dryers include the $49 Gas Appliance Safety Procedure for the safe disconnect and reconnect.",
+    "Yes. Your technician pulls the dryer out to reach the vent, including stacked and pedestal setups. Please don't move or disconnect the dryer yourself.",
     ["move dryer", "pull out dryer", "heavy appliances", "pedestal", "stacked"]),
   f("faq-11", "Scheduling", "Hours", "Do you have evening or weekend appointments?",
     "The booking assistant shows real openings on weekdays and Saturdays. We're closed on Sundays.",
@@ -106,7 +106,7 @@ export const INITIAL_FAQS = [
     "Yes. For a repair concern, we start with an assessment to evaluate the issue and recommend options. Repair work is quoted separately.",
     ["do you repair", "do repairs", "rerouting", "repair vents"]),
   f("faq-bundle", "Pricing", "Cleaning + assessment", "Can I get a cleaning and an assessment together?",
-    "Yes. Our Cleaning + Assessment is $239 for a 1-story home ($259 for a 2-story home with upstairs laundry, $279 with first-floor laundry): the Premium 1-2-3 cleaning plus an assessment of the issue in one visit. Gas dryers and stacked or pedestal setups add their usual fee. If you book just a cleaning and our technician finds a problem: if the damage keeps us from cleaning, your visit becomes an assessment ($119) instead; if we can still clean, you can add an assessment for an upgrade, reroute, or minor damage for just $60. Repairs, parts, and replacement work are quoted separately for your approval.",
+    "Yes. Our Cleaning + Assessment is $239 for a 1-story home ($259 for a 2-story home with upstairs laundry, $279 with first-floor laundry): the Premium 1-2-3 cleaning plus an assessment of the issue in one visit. If you book just a cleaning and our technician finds a problem: if the damage keeps us from cleaning, your visit becomes an assessment ($119) instead; if we can still clean, you can add an assessment for an upgrade, reroute, or minor damage for just $60. Repairs, parts, and replacement work are quoted separately for your approval.",
     ["includes repairs", "include repairs", "239", "248", "cleaning and assessment", "cleaning + assessment", "assessment with cleaning", "discount assessment", "half off", "50% off", "something broken", "add an assessment", "can't clean"]),
   f("faq-commitment", "Booking", "No obligation", "Do I have to book to get a price?",
     "No. You can get your exact price first. Nothing is booked until you pick a time and approve the final summary, which shows the full price.",
@@ -119,9 +119,17 @@ export const INITIAL_FAQS = [
 // Answers revised on Oct 30 2026 (website packages and prices). A saved answer that still has the
 // earlier default wording gets the new wording; an answer the office edited is left alone.
 const REVISED = {
- "faq-1": {
+ "faq-1": [{
   "question": "How much does it cost to get my dryer vent cleaned?",
   "answer": "Our See-It-Clean packages start at $189 for Essential, $249 for Performance (adds before-and-after photos and a DryerFlex transition hose upgrade), and $349 for Total System. Vent-only Express cleaning, for when no dryer is installed, starts at $149. Your exact price depends on whether your home is 1-story or 2-story and which floor the laundry is on. Gas dryers add the $49 Gas Appliance Safety Procedure."
+ }, {
+  // Nov 2 2026: setup fees (gas, pedestal, stacked) are explained when the customer has that setup.
+  "question": "How much does it cost to get my dryer vent cleaned?",
+  "answer": "Premium 1-2-3 See-It-Clean is $179 for a 1-story home, $219 for a 2-story with first-floor laundry, and $199 with second-floor laundry. Ultimate Protection is $299, $339, and $319. A Dryer Vent Safety Inspection is $119, $139, and $129, and the fee applies toward approved repairs. Vent-only Express cleaning, for when no dryer is installed, starts at $149. Gas dryers add the $49 Gas Appliance Safety Procedure, a fixed pedestal adds $20, and a stacked washer and dryer adds $45."
+ }],
+ "faq-10": {
+  "question": "Do you move the dryer?",
+  "answer": "Yes. Your technician pulls the dryer out to reach the vent, including stacked and pedestal setups. Please don't move or disconnect the dryer yourself. Gas dryers include the $49 Gas Appliance Safety Procedure for the safe disconnect and reconnect."
  },
  "faq-2": {
   "question": "What is the cleaning process?",
@@ -154,6 +162,9 @@ const REVISED = {
   // Nov 2 2026: the half-off assessment became Cleaning + Assessment ($239 for a 1-story home).
   "question": "Is the assessment cheaper with a cleaning?",
   "answer": "Yes. Added to a cleaning, the assessment is 50% off. It covers evaluating the issue and recommending repair options; repairs, parts, and replacement work are quoted separately for your approval."
+ }, {
+  "question": "Can I get a cleaning and an assessment together?",
+  "answer": "Yes. Our Cleaning + Assessment is $239 for a 1-story home ($259 for a 2-story home with upstairs laundry, $279 with first-floor laundry): the Premium 1-2-3 cleaning plus an assessment of the issue in one visit. Gas dryers and stacked or pedestal setups add their usual fee. If you book just a cleaning and our technician finds a problem: if the damage keeps us from cleaning, your visit becomes an assessment ($119) instead; if we can still clean, you can add an assessment for an upgrade, reroute, or minor damage for just $60. Repairs, parts, and replacement work are quoted separately for your approval."
  }]
 };
 export function refreshFaqs(saved) {

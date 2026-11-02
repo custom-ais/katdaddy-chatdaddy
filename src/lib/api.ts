@@ -45,8 +45,12 @@ export async function api<T = any>(path: string, {
   }
 }
 
-export function saveText(name: string, text: string, type = 'text/plain') {
-  const a = document.createElement('a'), url = URL.createObjectURL(new Blob([text], { type }));
+export function saveBlob(name: string, blob: Blob) {
+  const a = document.createElement('a'), url = URL.createObjectURL(blob);
   a.href = url; a.download = name; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function saveText(name: string, text: string, type = 'text/plain') {
+  saveBlob(name, new Blob([text], { type }));
 }

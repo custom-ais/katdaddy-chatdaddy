@@ -1,8 +1,8 @@
 // One chat turn: rules engine first for anything exact, Gemini for free-typed messages.
 
-import { turn, detectSafety, applyFacts, WELCOME, START_LABELS, UNANSWERED } from "../shared/conversation.mjs";
+import { turn, detectSafety, applyFacts, answeredUnsure, WELCOME, START_LABELS, UNANSWERED, NOTED } from "../shared/conversation.mjs";
 
-const DIRECT = /^(?:continue(?: booking)?|start over|restart|reset|accept(?: & continue)?|compare packages|more services|back to (?:packages|options)|book this service|book assessment|include assessment|cleaning (?:\+|and) assessment|cleaning only|just (?:the )?cleaning|skip|not sure|i don't know|yes|no|ask a question(?: \(faqs\))?|request a callback|\d{5})$/i;
+const DIRECT = /^(?:continue(?: booking)?|start over|restart|reset|accept(?: & continue)?|compare packages|more services|back to (?:packages|options)|book this service|book assessment|include assessment|cleaning (?:\+|and) assessment|cleaning only|just (?:the )?cleaning|cancel package|skip|not sure|i don't know|yes|no|ask a question(?: \(faqs\))?|request a callback|\d{5})$/i;
 const PICK_LABEL = /^(?:select )?(?:premium 1-2-3|ultimate protection|safety inspection|essential|performance|total system|express|post-service|nest removal \+ cleaning|full system restoration|emergency same-day)(?: ⭐)?(?: · \$[\d,.]+\+?| \(\$[\d,.]+\+?\))?$/i;
 
 const isDirect = (message, session) => {
@@ -56,6 +56,8 @@ async function withVoice(result, { message, session, config, faqs, assistant }) 
   if (typeof assistant?.speak !== "function" || !result?.parts) return result;
   const s = result.session;
   if (FIXED_STAGES.has(s.stage) || FIXED_STAGES.has(session.stage) || s.safety || result.action === "emergency") return result;
+  // "I don't know" gets the same reassurance every time: it's fine, and the technician checks on site.
+  if (result.parts.ack === NOTED) return result;
   const body = result.unanswered ? String(result.parts.body).replace(UNANSWERED, "").replace(/^\s+/, "") : result.parts.body;
   const next = [result.parts.warn, body].filter(Boolean).join("\n\n");
   let response;
@@ -136,6 +138,8 @@ async function decide({ message, session, config, faqs, assistant, place = null 
     result = restoreWords(turn(message, working, config, faqs, { answer: ai.answer }), message);
   } else if (factsChanged) {
     result = restoreWords(turn("continue", working, config, faqs), message);
+    // The AI recorded "I don't know" for the question BOB asked: same reassurance as the button.
+    if (answeredUnsure(session, result.session) && !result.parts?.ack) result = { ...prepend(result, NOTED), parts: { ...result.parts, ack: NOTED } };
   } else {
     // Gemini added nothing usable: the rules engine handles the raw text, and the voice answers it.
     return { ...turn(message, working, config, faqs), via: "rules", voiceable: true, aiRejected: ai.rejected };
@@ -144,6 +148,7 @@ async function decide({ message, session, config, faqs, assistant, place = null 
   // interpreter's short lead kept only as the fallback when the voice can't be used.
   if (ai.answer) return { ...result, via: "ai", aiRejected: ai.rejected };
   const fallback = ai.lead && !["emergency", "review"].includes(result.session.stage) ? prepend(result, ai.lead) : result;
+  if (result.parts?.ack === NOTED) return { ...result, via: "ai", aiRejected: ai.rejected };
   return { ...fallback, parts: result.parts, via: "ai", voiceable: true, aiRejected: ai.rejected };
 }
 

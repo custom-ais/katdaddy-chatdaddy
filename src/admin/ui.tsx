@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { AlertCircle, AlertTriangle, CheckCircle, Clock, Info, Loader2, Play, X, XCircle } from 'lucide-react';
 import type { Appointment, ToastMessage } from './DashboardContext';
 import { attentionReason } from './DashboardContext';
@@ -55,15 +56,25 @@ export function Banner({ tone = 'dark', eyebrow, title, children, actions }: { t
   );
 }
 
+/**
+ * A dialog centered on the screen. Rendered on <body>: a page's entrance animation leaves a transform
+ * that would otherwise pin the fixed overlay to the (long) page, so the dialog opened far down it.
+ */
 export function Modal({ title, subtitle, badge, onClose, children, footer, wide }: { title: string; subtitle?: React.ReactNode; badge?: React.ReactNode; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode; wide?: boolean }) {
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
-  return (
+  // The page behind stays put while the dialog is open.
+  React.useEffect(() => {
+    const body = document.body, before = body.style.overflow;
+    body.style.overflow = 'hidden';
+    return () => { body.style.overflow = before; };
+  }, []);
+  return createPortal(
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-start sm:items-center justify-center p-4 sm:p-6 animate-in" role="dialog" aria-modal="true" aria-label={title}>
-      <div className={`bg-white rounded-3xl shadow-2xl border border-slate-200 w-full ${wide ? 'max-w-3xl' : 'max-w-2xl'} overflow-hidden my-8`}>
+      <div className={`bg-white rounded-3xl shadow-2xl border border-slate-200 w-full ${wide ? 'max-w-3xl' : 'max-w-2xl'} overflow-hidden my-auto`}>
         <div className="bg-slate-50 px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             {badge}
@@ -74,7 +85,8 @@ export function Modal({ title, subtitle, badge, onClose, children, footer, wide 
         <div className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">{children}</div>
         {footer && <div className="bg-slate-50 px-6 py-4 border-t border-slate-200 flex items-center justify-between gap-3 flex-wrap">{footer}</div>}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

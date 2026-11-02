@@ -10,7 +10,7 @@
 // API credentials are server-only; a ChatGPT subscription is not an API key.
 
 import { PACKAGES, TIERS, MORE } from "../shared/catalog.mjs";
-import { QUESTIONS, FACT_VALUES, SYMPTOMS, WELCOME } from "../shared/conversation.mjs";
+import { QUESTIONS, FACT_VALUES, SYMPTOMS, WELCOME, SAVINGS_AVERAGES, savingsEstimate } from "../shared/conversation.mjs";
 import { bundleAssessmentCents, money, serviceQuote } from "../shared/domain.mjs";
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -116,7 +116,9 @@ Write "response": BOB's reply to the customer's latest message, placed before NE
 - Sound calm, confident and matter-of-fact, like someone who knows the work. Never eager, salesy, or pleading.
 - If they're unsure, just browsing, or asking about price, answer plainly and let NEXT MESSAGE continue. Don't push, don't over-reassure, and don't say things like "no pressure". Mention that nothing is booked until they approve the final summary only if they ask about commitment or booking.
 - If they're frustrated or confused, apologize briefly and make the next step clear.
+- If they don't know the answer to something BOB asked, tell them that's okay: BOB will make a note and the technician will double-check it on site.
 - If they say something off-topic, reply briefly and kindly, then let NEXT MESSAGE bring things back.
+- If their message doesn't make sense or doesn't answer the question, don't pretend it did: no "Got it" or "Thanks". Keep it short and let NEXT MESSAGE ask again.
 - If they ask something KNOWLEDGE doesn't cover, say you'll make sure the team can answer it. Don't guess.
 - Keep it to 1–3 short sentences in plain, warm language. No greetings after the first message, no emojis, no markdown headings, no lists.
 - Don't repeat or paraphrase NEXT MESSAGE, and don't ask the question it asks. If NEXT MESSAGE asks a question, don't ask one yourself.
@@ -173,12 +175,13 @@ SERVICES:
 ${svc}
 ADD-ONS:
 ${addons}
-Gas dryers: the Gas Appliance Safety Procedure is added automatically to cleaning visits (not Express, not an inspection or assessment). A fixed pedestal and a stacked washer/dryer add their setup fees to Premium 1-2-3 and Ultimate Protection.
+Gas dryers: the Gas Appliance Safety Procedure is added automatically to cleaning visits (not Express, not an inspection or assessment). A fixed pedestal and a stacked washer/dryer add their setup fees to Premium 1-2-3 and Ultimate Protection. Bring up a gas, pedestal or stacked fee only when the customer has said they have that setup (see known home details) or asks about it.
 ASSESSMENT: ${config.assessmentProcess}${priced ? ` Price ${money(config.assessmentPriceCents)}.` : ""} Repairs, parts and replacement are quoted separately.
 CLEANING + ASSESSMENT: suggested when a customer wants a cleaning but thinks something may be broken. It is the Premium 1-2-3 cleaning plus an assessment of the issue in one visit${priced ? `: ${bundleTotals(config)}` : ""}. Gas dryers and stacked or pedestal setups add their usual fee. If the customer books just a cleaning and the technician finds a problem: when the damage prevents the cleaning, the visit becomes an assessment (the standalone assessment price) instead of the cleaning; when the cleaning can still be done, the customer can add an assessment for an upgrade, reroute, or minor damage at the add-on price${priced ? ` (${money(bundleAssessmentCents(config))})` : ""}. Repairs are quoted separately.
 No dryer installed → the visit is Express Vent Cleaning (vent only).
 Emergency Same-Day Clog Relief needs approval from the team before it's confirmed.
 Before booking, the customer completes the verification method offered by the booking form, then picks a live time and approves the final summary. Email verification proves email ownership only, not phone ownership.
+${savingsKnowledge()}
 NO OBLIGATION: getting a price or chatting doesn't commit the customer to anything. Nothing is booked until they pick a time and approve the final summary, which shows the full price. Say this only when they ask about commitment or booking.
 PREPARATION: ${config.preparation}
 
@@ -201,9 +204,17 @@ RECENT MESSAGES:
 ${recent || "(none)"}`;
 }
 
+/** The savings estimate in words, from the same averages the offer card uses. */
+function savingsKnowledge() {
+  const a = SAVINGS_AVERAGES, two = savingsEstimate({ symptoms: ["two"] }), three = savingsEstimate({ symptoms: ["three"] });
+  return `SAVINGS ESTIMATE (only when asked what cleaning could save; always call it an estimate, and never promise one-cycle drying): from averages of ${a.loadsPerWeek} loads a week, ${a.minutesPerCycle}-minute cycles, ${a.kwhPerCycle} kWh per cycle and about ${a.centsPerKwh}¢ per kWh in Arizona. If cleaning brings each load back to one cycle: a dryer taking about 2 cycles saves about ${two.hoursPerWeek} hours of drying a week and about $${two.dollarsPerYear} a year in electricity; 3 or more cycles saves about ${three.hoursPerWeek} hours a week and about $${three.dollarsPerYear} a year. Gas dryers save the same time; gas costs vary, so give no dollar figure for gas. Savings depend on the dryer and how much laundry they do.`;
+}
+
 /** Money amounts BOB may say, in cents. */
 export function allowedMoney(config, faqs) {
   const set = new Set();
+  // The savings estimate isn't a price, so it may be said even before prices are approved.
+  for (const symptoms of [["two"], ["three"]]) set.add(savingsEstimate({ symptoms }).dollarsPerYear * 100);
   if (!config.pricesAcknowledged) return set;
   set.add(bundleAssessmentCents(config));
   for (const [, cents] of bundleQuotes(config)) set.add(cents);
