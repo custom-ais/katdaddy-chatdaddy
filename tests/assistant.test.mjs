@@ -79,7 +79,7 @@ test("cleaning plus a vent problem gets the Cleaning + Assessment offer with the
   const r = await step("want it cleaned, also the hose behind the dryer is all squished", initialSession(), assistant);
   assert.equal(r.session.stage, "bundle_offer");
   assert.match(r.reply, /Cleaning \+ Assessment: \$239 for a 1-story home/);
-  assert.match(r.reply, /get both at the lower combined price/);
+  assert.match(r.reply, /If damage keeps us from cleaning/);
   assert.doesNotMatch(r.reply, /50% off|\$59\.50/);
   assert.deepEqual(r.session.concerns, ["hose behind the dryer is squished"]);
   assert.equal(r.session.bundleAccepted, false, "an offer is not acceptance");

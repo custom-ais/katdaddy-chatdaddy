@@ -15,8 +15,9 @@
 //     until it's cleaned; Ultimate Protection suggested) and the booking carries on
 //   • a repair-first visit starts with an assessment; repairs are quoted separately
 //   • cleaning + a possible problem is offered Cleaning + Assessment ($239 for a 1-story home), added
-//     only on a yes; just the cleaning stays available, and if something is broken on site the visit
-//     is switched to Cleaning + Assessment, so the customer gets both at the lower combined price
+//     only on a yes; just the cleaning stays available: if damage keeps the technician from cleaning,
+//     the visit becomes an assessment instead; if the cleaning can still be done, an assessment for an
+//     upgrade, reroute or minor damage can be added on site at the add-on price ($60)
 //   • appliance problems, commercial work, complaints and "talk to a person" go to the team
 //   • facts already given are reused, "Not sure" is accepted, and a question asked mid-booking
 //     is answered before returning to the unfinished step
@@ -24,7 +25,7 @@
 // The AI layer (server/assistant.mjs) only translates free text into the commands and
 // facts below; every decision about price and booking happens here or on the server.
 
-import { DEFAULT_CONFIG, money, serviceQuote, areaFor } from "./domain.mjs";
+import { DEFAULT_CONFIG, money, serviceQuote, areaFor, bundleAssessmentCents } from "./domain.mjs";
 import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant, noDryerNeedsPremium } from "./catalog.mjs";
 import { restrictionScore, restrictionLevel } from "./airflow.mjs";
 
@@ -615,7 +616,11 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   s.history = [...(s.history || []).slice(-39), { role: "user", text: String(text).slice(0, 2000) }];
 
   let ack = "", warn = "";
-  const SWITCH_PROMISE = "If our technician finds something broken when they arrive, we'll switch your visit to the Cleaning + Assessment, so you get both at the lower combined price.";
+  // What happens if a cleaning-only visit finds a problem: damage that prevents the cleaning turns the
+  // visit into an assessment; otherwise the assessment can be added to the cleaning at the add-on price.
+  const SWITCH_PROMISE = priced
+    ? `If damage keeps us from cleaning when we arrive, we'll switch your visit to an assessment (${money(config.assessmentPriceCents ?? 11900)}) instead. If we can still clean, you can add an assessment for an upgrade, reroute, or minor damage for just ${money(bundleAssessmentCents(config))}.`
+    : "If damage keeps us from cleaning when we arrive, we'll switch your visit to an assessment instead. If we can still clean, you can add an assessment for an upgrade, reroute, or minor damage at the lower add-on price.";
   const respond = (reply, options = [], extra = {}) => {
     // The parts let the conversational layer replace the short acknowledgement with its own
     // reply while the warning and the required body (question, offer, summary) stay as written.
