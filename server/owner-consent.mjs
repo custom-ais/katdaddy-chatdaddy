@@ -1,6 +1,8 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {normalizePhone} from '../shared/domain.mjs';
-import {OWNER_SMS_CONSENT_VERSION,OWNER_SMS_PURPOSES,OWNER_SMS_DISCLOSURE,OWNER_SMS_TERMS_URL,OWNER_SMS_PRIVACY_URL} from '../shared/owner-sms-consent.mjs';
+import {OWNER_SMS_CONSENT_VERSION,OWNER_SMS_PURPOSES,OWNER_SMS_LEGACY_PURPOSES,OWNER_SMS_DISCLOSURE,OWNER_SMS_TERMS_URL,OWNER_SMS_PRIVACY_URL} from '../shared/owner-sms-consent.mjs';
+/** What a receipt's terms covered: the current version covers every purpose; v2 covers bookings and errors. */
+const covered=receipt=>receipt?.disclosureVersion===OWNER_SMS_CONSENT_VERSION?[...OWNER_SMS_PURPOSES]:[...(OWNER_SMS_LEGACY_PURPOSES[receipt?.disclosureVersion]||[])];
 const CURRENT='owner-sms-consent:current';
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const failure=(message,status=400)=>Object.assign(new Error(message),{status});
@@ -11,7 +13,9 @@ export function createOwnerConsent({store,clock=Date.now}){
   const configuredPhone=normalizePhone((await store.config()).bookingOwnerSmsPhone);
   const matchesConfiguredPhone=Boolean(record&&configuredPhone&&record.phone===configuredPhone);
   const currentVersion=record?.disclosureVersion===OWNER_SMS_CONSENT_VERSION;
-  return {revision:record?.revision||0,current:record,matchesConfiguredPhone,currentVersion,effectiveActive:record?.active===true&&matchesConfiguredPhone&&currentVersion,disclosure:{version:OWNER_SMS_CONSENT_VERSION,text:OWNER_SMS_DISCLOSURE,purposes:[...OWNER_SMS_PURPOSES],termsUrl:OWNER_SMS_TERMS_URL,privacyUrl:OWNER_SMS_PRIVACY_URL}};
+  const covers=record?.active===true&&matchesConfiguredPhone?covered(record):[];
+  // v2 consent keeps booking and error alerts going; only the after-hours texts need the new terms.
+  return {revision:record?.revision||0,current:record,matchesConfiguredPhone,currentVersion,effectiveActive:covers.includes('booking_success'),covers,disclosure:{version:OWNER_SMS_CONSENT_VERSION,text:OWNER_SMS_DISCLOSURE,purposes:[...OWNER_SMS_PURPOSES],termsUrl:OWNER_SMS_TERMS_URL,privacyUrl:OWNER_SMS_PRIVACY_URL}};
  }
  async function record(body,adminSession,actorUserId=null){
   if(!body||typeof body!=='object'||Array.isArray(body))throw failure('Invalid consent request.');
@@ -49,13 +53,13 @@ export function createOwnerConsent({store,clock=Date.now}){
   if(saved?.requestFingerprint!==fingerprint)throw failure('Consent changed elsewhere. Refresh before saving.',409);
   return {...await snapshot(),receipt:saved};
  }
- async function allows(phone){
+ async function allows(phone,purpose='booking_success'){
   try{
    const configuredPhone=normalizePhone((await store.config()).bookingOwnerSmsPhone);
    // Read the receipt after configuration so revocation during that await is observed.
    const receipt=await current();
    // v1 receipts must never authorize sending: that disclosure said saving did not enable alerts.
-   if(!receipt||receipt.active!==true||receipt.disclosureVersion!==OWNER_SMS_CONSENT_VERSION)return false;
+   if(!receipt||receipt.active!==true||!covered(receipt).includes(purpose))return false;
    return Boolean(configuredPhone)&&receipt.phone===normalizePhone(phone)&&receipt.phone===configuredPhone;
   }catch{return false;}
  }
