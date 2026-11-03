@@ -302,6 +302,9 @@ function iconFor(label: string) {
   return <ChevronRight size={18} className={`${c} text-slate-400`} />;
 }
 
+/** The website nudge's topics, each starting the matching menu path. */
+const NUDGE_STARTS: Record<string, string> = { cleaning: 'Book a Cleaning', repair: 'Repairs, Reroutes & Upgrades', emergency: 'Emergency Clog / Overheating', pest: 'Pest / Nest Removal' };
+
 const WELCOME_CARDS: [string, React.ReactElement][] = [
   ['Book a Cleaning', <Wind strokeWidth={2} size={26} />],
   ['Repairs, Reroutes & Upgrades', <Wrench strokeWidth={2} size={26} />],
@@ -888,6 +891,9 @@ function Receipt({ receipt, pending, onRestart, business, autoClose, closeLabel,
 
 export function BookingBot({ embedded = false, preview = false }: { embedded?: boolean; preview?: boolean }) {
   const [token, setToken] = useState(''), [session, setSession] = useState<any>(null), [config, setConfig] = useState<any>(null);
+  // A starting path from the website nudge (?start=repair), begun once the chat is ready and empty.
+  const pageStart = useRef<string | null>(embedded ? new URLSearchParams(window.location.search).get('start') : null);
+  const [startTick, setStartTick] = useState(0);
   const [autoClose, setAutoClose] = useState(false);
   const [minimized, setMinimized] = useState(() => { try { return sessionStorage.getItem(preview ? 'bob.preview.minimized' : 'bob.minimized') === '1'; } catch { return false; } });
   const expandRef = useRef<HTMLButtonElement>(null);
@@ -907,6 +913,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     const receive = (event: MessageEvent) => {
       let parentOrigin = ''; try { parentOrigin = new URL(document.referrer).origin; } catch {}
       if (event.source === window.parent && parentOrigin && event.origin === parentOrigin && event.data?.type === 'bob:restore') { setMinimized(false); try { sessionStorage.removeItem(preview ? 'bob.preview.minimized' : 'bob.minimized'); } catch {} }
+      if (event.source === window.parent && parentOrigin && event.origin === parentOrigin && event.data?.type === 'bob:start' && NUDGE_STARTS[event.data.start]) { pageStart.current = event.data.start; setStartTick((n) => n + 1); }
     };
     window.addEventListener('message', receive); return () => window.removeEventListener('message', receive);
   }, [embedded, preview]);
@@ -1049,6 +1056,15 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       if (err instanceof ApiError && err.status === 401) setReady(false);
     } finally { setBusy(false); busyRef.current = false; }
   };
+  useEffect(() => {
+    const key = pageStart.current;
+    if (!key || !ready || messages.length || receipt) return;
+    pageStart.current = null;
+    const label = NUDGE_STARTS[key];
+    if (!label) return;
+    void send(label);
+    if (token) void api('/api/activity', { method: 'POST', token, body: { kind: 'widget.nudge_opened', topic: key } }).catch(() => {});
+  }, [ready, messages.length, receipt, startTick]);
   const goBack = async () => {
     if (busyRef.current || !undo.current.length) return;
     const snap = undo.current[undo.current.length - 1];
@@ -1241,7 +1257,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const showOptions = !busy && !receipt && !requestId && options.length > 0 && (last?.role === 'model' || !!contactStep);
   const started = messages.length > 0;
 
-  const shell = minimized ? 'h-auto rounded-3xl max-w-3xl mx-auto' : embedded ? 'h-dvh rounded-none border-0' : preview ? 'h-[780px] rounded-3xl max-w-4xl mx-auto' : 'h-[min(820px,calc(100dvh-2rem))] rounded-3xl max-w-3xl mx-auto';
+  const shell = minimized ? 'h-auto rounded-3xl max-w-3xl mx-auto' : embedded ? 'h-dvh rounded-none border-0' : preview ? 'h-[780px] rounded-3xl max-w-4xl mx-auto' : 'h-[calc(100dvh-4.5rem)] sm:h-[calc(100dvh-6.5rem)] min-h-[520px] max-h-[1400px] rounded-3xl max-w-3xl mx-auto'; // fills the screen under the page's back link
 
   return (
     <div className={`bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden flex flex-col relative text-white ${minimized ? 'bob-minimized' : ''} ${shell}`}>
