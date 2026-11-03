@@ -52,7 +52,7 @@ test('invitation capture only uses explicit invite mode and fragment token',()=>
 });
 
 test('permission editor maintains page prerequisites and cannot select master capabilities',async()=>{
- const component=await load('UsersPage.tsx',{'../../shared/admin-permissions.mjs':permissions,'./DashboardContext':{},'../lib/api':{},'./ui':ui});
+ const component=await load('UsersPage.tsx',{'../../shared/admin-permissions.mjs':permissions,'./DashboardContext':{},'../lib/api':{},'./ui':ui,'../components/ConfirmDialog':{askConfirm:async()=>false}});
  assert.deepEqual(new Set(component.updatePermissionSelection([],'appointments.manage',true)),new Set(['appointments.manage','appointments.view']));
  const templ=component.updatePermissionSelection([],'settings.templates.manage',true);
  assert.ok(templ.includes('settings.templates.view'));assert.ok(templ.includes('finance.view'));
@@ -77,7 +77,7 @@ async function settings(principal,search){
   react:{...React,lazy:()=>()=>null},
   '../../shared/admin-permissions.mjs':permissions,'./access':access,'./DashboardContext':{useDashboard:()=>context},'./ui':ui,
   '../../shared/domain.mjs':domain,'../../shared/catalog.mjs':catalog,'../../shared/coverage.mjs':coverage,
-  '../lib/api':{api(){throw new Error('Unexpected request');}},'../components/PhoneInput':{PhoneInput:({onValueChange,...props})=>React.createElement('input',{...props,readOnly:true})},
+  '../lib/api':{api(){throw new Error('Unexpected request');}},'../components/PhoneInput':{PhoneInput:({onValueChange,...props})=>React.createElement('input',{...props,readOnly:true})},'../components/ConfirmDialog':{askConfirm:async()=>false},
   './OwnerSmsConsent':{OwnerSmsConsent:()=>{mounted.push('owner');return React.createElement('p',null,'OWNER-CONSENT-CONTENT');}},
   './ClientHubSettings':{ClientHubSettings:()=>{mounted.push('client-hub');return null;}},
   './MessageTemplates':{MessageTemplates:props=>{mounted.push(['templates',props.allowOwner,props.allowMessaging]);return null;}},

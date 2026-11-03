@@ -71,7 +71,7 @@ test('account names refresh is explicit and separate from passive status refresh
 
 test('connection switches edit draft integration config, with blocking warnings and no provider calls', () => {
   assert.ok(source.includes("onChange('integrations', { ...config.integrations, [key]: value })"));
-  assert.ok(source.includes('!confirm(offWarning[key])'));
+  assert.ok(source.includes('!(await askConfirm({ danger: true, title: `Turn off ${label}?`'), 'a branded warning, not the browser confirm()');
   for (const key of ['jobber','maps','verification','sms','email']) assert.match(source, new RegExp(`switchFor\\('${key}'`));
   assert.doesNotMatch(source, /switchFor\('database'/);
   assert.match(source, /Turning Jobber off pauses online booking/);
@@ -89,10 +89,10 @@ test('Verify and SMS remain visible unconfigured; provider selection and API cos
   assert.match(source, /a ChatGPT subscription does not include API usage/);
   assert.match(source, /verified confirmation-email sender/);
 });
-test('rendered controls preserve other integration flags and decline disabling without changing drafts', () => {
+test('rendered controls preserve other integration flags and decline disabling without changing drafts', async () => {
   const toggles = [], fields = [], changes = []; let providerCalls = 0;
   const part = source.slice(source.indexOf('const when ='), source.indexOf('/** Edits are saved'));
-  const prelude = `const {useState}=require('react'); const {useDashboard,api,Toggle,Field,Section,Dot,ErrorNote,Link2}=require('ui-test'); const inputClass='',subtleButton='',primaryButton='',secondaryButton='';`;
+  const prelude = `const {useState}=require('react'); const {useDashboard,api,Toggle,Field,Section,Dot,ErrorNote,Link2,askConfirm}=require('ui-test'); const inputClass='',subtleButton='',primaryButton='',secondaryButton='';`;
   const code = ts.transpileModule(`${prelude}\n${part}\nexport {Connections};`, { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS } }).outputText;
   const stubs = {
     useDashboard: () => ({ data: {integrations:{assistant:{providers:{gemini:{configured:true,model:'test'},openai:{configured:false}}}}}, refresh:()=>{providerCalls++;}, mutate:()=>{providerCalls++;}, showToast:()=>{}, loading:false }),
@@ -100,6 +100,7 @@ test('rendered controls preserve other integration flags and decline disabling w
     Toggle: props => {toggles.push(props);return React.createElement('span',null,props.label);},
     Field: props => {fields.push(props);return React.createElement('div',null,props.children);},
     Section: props => React.createElement('section',null,props.children), Dot:()=>null,ErrorNote:()=>null,Link2:()=>null,
+    askConfirm: async () => globalThis.confirmAnswer,
   };
   const out={};new Function('require','exports',code)(id=>id==='ui-test'?stubs:require(id),out);
   const config={integrations:{jobber:true,maps:true,verification:true,sms:false},aiProvider:'gemini',aiAssistant:true};
@@ -107,15 +108,15 @@ test('rendered controls preserve other integration flags and decline disabling w
   assert.doesNotMatch(html,/LeadConnector/); assert.match(html,/Twilio Verify/); assert.match(html,/Twilio appointment texts/); assert.match(html,/SendGrid appointment emails/); assert.match(html,/Unavailable: configure SendGrid/);
   const previousConfirm=globalThis.confirm;
   try {
-    globalThis.confirm=()=>false;toggles.find(t=>t.label==='Enable Jobber').onChange(false);assert.equal(changes.length,0);
-    globalThis.confirm=()=>true;toggles.find(t=>t.label==='Enable Jobber').onChange(false);
+    globalThis.confirmAnswer=false;await toggles.find(t=>t.label==='Enable Jobber').onChange(false);assert.equal(changes.length,0);
+    globalThis.confirmAnswer=true;await toggles.find(t=>t.label==='Enable Jobber').onChange(false);
     assert.deepEqual(changes.shift(),['integrations',{jobber:false,maps:true,verification:true,sms:false}]);
     toggles.find(t=>t.label==='Enable Smart chat').onChange(false);assert.deepEqual(changes.shift(),['aiAssistant',false]);
     fields.find(f=>f.label==='Smart chat provider').children.props.onChange({target:{value:'openai'}});assert.deepEqual(changes.shift(),['aiProvider','openai']);
     toggles.find(t=>t.label==='Enable appointment emails').onChange(false);assert.deepEqual(changes.shift(),['integrations',{jobber:true,maps:true,verification:true,sms:false,email:false}]);
     assert.equal(providerCalls,0);
     assert.deepEqual(config.integrations,{jobber:true,maps:true,verification:true,sms:false});
-  } finally {if(previousConfirm===undefined)delete globalThis.confirm;else globalThis.confirm=previousConfirm;}
+  } finally {delete globalThis.confirmAnswer;if(previousConfirm===undefined)delete globalThis.confirm;else globalThis.confirm=previousConfirm;}
 });
 
  test('saved policy information and disabled Maps history do not imply active readiness', () => {

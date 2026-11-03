@@ -1,4 +1,5 @@
 import { PhoneInput } from '../components/PhoneInput';
+import { askConfirm } from '../components/ConfirmDialog';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -1245,8 +1246,8 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   };
   const editDetails = () => { setAction('contact'); setVerification(null); startContact(session); };
 
-  const restart = () => {
-    if ((messages.length || receipt) && !confirm('Start over? A visit you already booked stays booked.')) return;
+  const restart = async () => {
+    if ((messages.length || receipt) && !(await askConfirm({ brand: 'chat', danger: true, title: 'Start over?', message: 'This clears our conversation. A visit you already booked stays booked.', confirmLabel: 'Start over', cancelLabel: 'Keep chatting' }))) return;
     void api('/api/holds', { method: 'DELETE', token }).catch(() => {});
     setMessages([]); forget(); void initialize(true);
   };
