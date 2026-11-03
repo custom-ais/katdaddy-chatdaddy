@@ -246,3 +246,34 @@ test("after same-day falls through, only the regular packages are offered", () =
   assert.deepEqual(r.card.picks.map((p) => p.family), ["premium", "ultimate"]);
   assert.ok(r.options.includes("Request a callback"));
 });
+
+test("an answer the AI already recorded moves on instead of looping on 'Sorry, I didn't catch that'", async () => {
+  const { chatTurn } = await import("../server/chat.mjs");
+  const atAnimals = run(["Book a Cleaning", "85326", "Have Dryer Installed", "No", "1-Story Home", "Electric Dryer", "Standard Floor Setup", "Dries in one normal cycle"]).session;
+  assert.equal(atAnimals.pending, "animals");
+  // The interpreter both records "no animals" and sends a "No thanks" command for the same message.
+  const assistant = { configured: true, async interpret() { return { command: "DECLINE", commandText: "No thanks", facts: { animals: "No" }, question: false, answer: null, lead: null, rejected: [] }; }, async voice() { return null; } };
+  const r = await chatTurn({ message: "nope, none", session: atAnimals, config, faqs: INITIAL_FAQS, assistant });
+  assert.doesNotMatch(r.reply, /didn't catch that/);
+  assert.match(r.reply, /^Good, no signs of animals\./);
+  assert.equal(r.session.pending, null);
+  assert.equal(r.session.stage, "offer");
+  // And if the state is already stuck that way, the button gets it moving again.
+  const stuck = { ...atAnimals, property: { ...atAnimals.property, animals: "No" } };
+  for (const answer of ["No signs", "no"]) {
+    const next = chat(answer, stuck);
+    assert.doesNotMatch(next.reply, /didn't catch that/, answer);
+    assert.equal(next.session.stage, "offer", answer);
+  }
+});
+
+test("a booking says why no confirmation went out, so the office can see it", async (t) => {
+  const sendgrid = { configured: true, calls: [], async sendEmail(to, m) { this.calls.push({ to, ...m }); return { status: "accepted" }; } };
+  const h = await harness(t, { sendgrid, env: { BOOKING_EMAIL_PROVIDER: "sendgrid" } });
+  const skipped = await h.book("cleaning", { name: "No Email Test", phone: "6235551234", email: "", address: "100 W Test St", city: "Buckeye", zip: "85326", notes: "" });
+  assert.equal(skipped.status, 201, JSON.stringify(skipped.data));
+  const appt = await h.store.appointment(skipped.data.receipt?.id || skipped.data.appointment?.id || (await h.store.appointments()).at(-1).id);
+  assert.equal(appt.notifications.email, "skipped");
+  assert.equal(appt.notifications.emailReason, "no_email");
+  assert.equal(sendgrid.calls.filter((c) => /You're booked/.test(c.subject || "")).length, 0);
+});

@@ -16,7 +16,7 @@ export interface Appointment {
   lineItems?: { id?: string; name: string; cents: number }[]; route?: string; concerns?: string[]; property?: Record<string, any>;
   jobber?: { jobNumber?: number; webUri?: string; visitId?: string | null } | null; jobberState?: string; jobberError?: string;
   approval?: { id: string; by: string; at: number } | null; overflow?: boolean; sameDay?: boolean; phoneVerified?: boolean;
-  notifications?: { sms?: string; email?: string }; territory?: { city: string; zone: number; micro: string; corridor: string } | null; smsConsent?: boolean;
+  notifications?: { sms?: string; email?: string; smsReason?: string; emailReason?: string }; territory?: { city: string; zone: number; micro: string; corridor: string } | null; smsConsent?: boolean;
 }
 
 export interface Technician {

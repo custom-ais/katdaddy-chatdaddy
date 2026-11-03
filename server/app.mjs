@@ -555,6 +555,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     } else if (appt.email && c.emailConfirmations && appt.status === 'confirmed') {
       try { applyEmailResult(result, await deliverEmail('appointment_confirmed', appt.id, appt.email, confirmationEmail(appt, c, {clientHubUrl: emailReady(await store.config()) ? await clientHub.resolve(appt) : ''}))); }
       catch { result.email = 'failed_or_uncertain'; result.emailDelivery = 'not_confirmed'; }
+    } else if (result.email === 'skipped') {
+      // Say why, so the office can see it on the appointment.
+      result.emailReason = !appt.email ? 'no_email' : !c.emailConfirmations ? 'email_confirmations_off' : appt.status !== 'confirmed' ? 'not_confirmed' : 'skipped';
     }
     return result;
   }
