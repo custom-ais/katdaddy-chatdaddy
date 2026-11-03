@@ -1257,7 +1257,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const showOptions = !busy && !receipt && !requestId && options.length > 0 && (last?.role === 'model' || !!contactStep);
   const started = messages.length > 0;
 
-  const shell = minimized ? 'h-auto rounded-3xl max-w-3xl mx-auto' : embedded ? 'h-dvh rounded-none border-0' : preview ? 'h-[780px] rounded-3xl max-w-4xl mx-auto' : 'h-[min(820px,calc(100dvh-2rem))] rounded-3xl max-w-3xl mx-auto';
+  const shell = minimized ? 'h-auto rounded-3xl max-w-3xl mx-auto' : embedded ? 'h-dvh rounded-none border-0' : preview ? 'h-[780px] rounded-3xl max-w-4xl mx-auto' : 'h-[calc(100dvh-4.5rem)] sm:h-[calc(100dvh-6.5rem)] min-h-[520px] max-h-[1400px] rounded-3xl max-w-3xl mx-auto'; // fills the screen under the page's back link
 
   return (
     <div className={`bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden flex flex-col relative text-white ${minimized ? 'bob-minimized' : ''} ${shell}`}>
