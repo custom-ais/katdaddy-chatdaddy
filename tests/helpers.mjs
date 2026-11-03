@@ -72,6 +72,11 @@ export function fakeJobber({ connected = true } = {}) {
       if (!j.isConnected) throw new JobberNotConnected();
       return j.visits.filter((v) => v.start >= from && v.start < to).map((v) => ({ ...v }));
     },
+    assessments: [],
+    async readAssessments(from, to) {
+      if (!j.isConnected) throw new JobberNotConnected();
+      return j.assessments.filter((v) => v.start >= from && v.start < to).map((v) => ({ ...v }));
+    },
     async listUsers() {
       return [{ id: "J-RYAN", name: "Ryan Boucher" }, { id: "J-ANDREW", name: "Andrew Sulanke" }];
     },

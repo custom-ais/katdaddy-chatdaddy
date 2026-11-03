@@ -20,27 +20,36 @@ export function createScheduler({ store, jobber, geo }) {
     const out = [];
     if (config.scheduleSource === "Jobber") {
       const byJobberUser = new Map(technicians.filter((t) => t.jobberUserId).map((t) => [t.jobberUserId, t.id]));
-      for (const v of await jobber.readVisits(from, to, { fresh })) {
-        out.push({
-          id: `j:${v.id}`,
-          kind: "jobber",
-          start: v.start,
-          end: v.end,
-          allDay: v.allDay,
-          // Unassigned visit blocks everyone; assigned visits block the mapped BOB techs.
-          techIds: v.jobberUserIds.length ? v.jobberUserIds.map((u) => byJobberUser.get(u)).filter(Boolean) : null,
-          address: v.address,
-          location: null,
-        });
+      // Assigned to linked BOB techs: blocks those techs. Unassigned, or assigned only to Jobber team
+      // members no BOB tech is linked to (a BidBee or office booking under another login): blocks
+      // everyone, because BOB can't tell that person isn't the crew it is booking.
+      const crew = (userIds) => {
+        const ids = userIds.map((u) => byJobberUser.get(u)).filter(Boolean);
+        return ids.length ? ids : null;
+      };
+      const [visits, assessments] = await Promise.all([
+        jobber.readVisits(from, to, { fresh }),
+        typeof jobber.readAssessments === "function" ? jobber.readAssessments(from, to, { fresh }) : [],
+      ]);
+      for (const v of visits) {
+        out.push({ id: `j:${v.id}`, kind: "jobber", start: v.start, end: v.end, allDay: v.allDay, techIds: crew(v.jobberUserIds), address: v.address, location: null });
+      }
+      for (const v of assessments) {
+        out.push({ id: `ja:${v.id}`, kind: "jobber", source: "assessment", start: v.start, end: v.end, allDay: v.allDay, techIds: crew(v.jobberUserIds), address: v.address, location: null });
       }
     }
     for (const a of await store.activeAppointments(from, to, ignoreAppointmentId)) {
       // Only a verified confirmed appointment observed on the current Jobber board
       // can replace its local reservation. Uncertain/readback-mismatched visits
       // must continue protecting the intended technician and interval.
-      if (config.scheduleSource === "Jobber" && a.status === "confirmed" && a.jobberVisitId && out.some(b => b.id === `j:${a.jobberVisitId}` && !b.allDay && b.start === a.start && b.end === a.end && b.techIds?.length === 1 && b.techIds[0] === a.tech)) continue;
+      const mirror = config.scheduleSource === "Jobber" && a.status === "confirmed" && a.jobberVisitId && out.find(b => b.id === `j:${a.jobberVisitId}` && !b.allDay && b.start === a.start && b.end === a.end && b.techIds?.length === 1 && b.techIds[0] === a.tech);
+      if (mirror) { mirror.own = true; continue; }
       out.push({ id: `a:${a.id}`, kind: "appointment", start: a.start, end: a.end, allDay: false, techIds: [a.tech], address: a.address, location: a.location, overflow: Boolean(a.overflow) });
     }
+    // Calendar items BOB didn't book (BidBee, the office) often carry a default or short length.
+    // Each takes at least the standard visit length; BOB's own verified bookings keep their real one.
+    const floor = Math.max(0, Number(config.minVisitMinutes) || 0) * 60_000;
+    for (const b of out) if (b.kind === "jobber" && !b.own && !b.allDay && b.end - b.start < floor) b.end = b.start + floor;
     for (const h of await store.activeHolds(from, to, excludeSession)) {
       out.push({ id: `h:${h.id}`, kind: "hold", start: h.start, end: h.end, allDay: false, techIds: [h.tech], address: h.address, location: h.location, overflow: Boolean(h.overflow) });
     }

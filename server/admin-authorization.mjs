@@ -152,7 +152,7 @@ function blankConfig() {
     sameDay:{enabled:false,cutoffHour:0,minNoticeHours:0,requireNearby:false},
     overflow:{enabled:false,start:'',maxDurationMins:0,requireNearby:false},
     revenuePacing:{enabled:false,period:'month',targetCents:0,outsideJobCents:0},
-    cleaningMinutes:0,assessmentMinutes:0,bundleMinutes:0,bufferMinutes:0,maxJobsPerDay:0,leadHours:0,horizonDays:0,
+    cleaningMinutes:0,assessmentMinutes:0,bundleMinutes:0,bufferMinutes:0,minVisitMinutes:0,maxJobsPerDay:0,leadHours:0,horizonDays:0,
     weekdayStarts:[],weekdayClose:'',saturdayStarts:[],saturdayClose:'',blockedDates:[],serviceZips:[],travelZips:[],coverageVersion:0,activeTechnicianIds:[],assessmentCredited:false,
   };
 }
@@ -167,7 +167,7 @@ const configReadGroups = {
   'settings.templates.view':['messageTemplates.confirmationSms','messageTemplates.confirmationEmailSubject','messageTemplates.confirmationEmailBody','messageEmailFormat'],
   'settings.services.view':['pricesAcknowledged','services','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','bundlePriceCents','cleaningMinutes','assessmentMinutes','bundleMinutes','assessmentCredited'],
   'settings.coverage.view':['baseAddress','baseLocation.lat','baseLocation.lng','customServiceAreas','serviceAreaMode','serviceAreaMiles','travelAreaMiles','serviceZips','travelZips','coverageVersion','travelZoneFeeCents','travelFeeTiers'],
-  'settings.schedule.view':['maxDriveFromBaseMin','maxDriveBetweenJobsMin','nearbyFirst','routeScoring','sameDay.enabled','sameDay.cutoffHour','sameDay.minNoticeHours','sameDay.requireNearby','overflow.enabled','overflow.start','overflow.maxDurationMins','overflow.minTicketCents','overflow.requireNearby','dailyRevenueTargetCents','revenuePacing.enabled','revenuePacing.period','revenuePacing.targetCents','revenuePacing.outsideJobCents','bufferMinutes','maxJobsPerDay','leadHours','horizonDays','weekdayStarts','weekdayClose','saturdayStarts','saturdayClose','blockedDates','activeTechnicianIds'],
+  'settings.schedule.view':['maxDriveFromBaseMin','maxDriveBetweenJobsMin','nearbyFirst','routeScoring','sameDay.enabled','sameDay.cutoffHour','sameDay.minNoticeHours','sameDay.requireNearby','overflow.enabled','overflow.start','overflow.maxDurationMins','overflow.minTicketCents','overflow.requireNearby','dailyRevenueTargetCents','revenuePacing.enabled','revenuePacing.period','revenuePacing.targetCents','revenuePacing.outsideJobCents','bufferMinutes','minVisitMinutes','maxJobsPerDay','leadHours','horizonDays','weekdayStarts','weekdayClose','saturdayStarts','saturdayClose','blockedDates','activeTechnicianIds'],
   'appointments.view':['scheduleSource'],
   'appointments.manage':['services','serviceZips','scheduleSource','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','cleaningMinutes','assessmentMinutes','bundleMinutes'],
   'inbox.view':['approver.name'],

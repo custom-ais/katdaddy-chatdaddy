@@ -221,7 +221,7 @@ function Technicians({ techs, onChange }: { techs: Technician[]; onChange: (next
     onChange(techs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   };
   return (
-    <Section icon={<Users size={18} />} title="Technicians" description="Link each tech to their Jobber user so BOB reads their own calendar and assigns visits to them."
+    <Section icon={<Users size={18} />} title="Technicians" description="Link each tech to their Jobber user so BOB reads their own calendar and assigns visits to them. Visits for a Jobber user no tech is linked to (or no one) block every tech."
       action={<button className={secondaryButton} onClick={() => onChange([...techs, { id: `tech-${crypto.randomUUID().slice(0, 8)}`, name: '', phone: '', zone: 'West Valley', status: 'off_duty', color: '#3b82f6', jobberUserId: '', vehicle: '', bio: '' } as Technician])}><Plus size={15} />Add technician</button>}>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {techs.map((t, i) => (
@@ -706,6 +706,7 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
           <Num label="Booking notice" suffix="hours" value={c.leadHours} onChange={(n) => update('leadHours', n)} />
           <Num label="Book up to" suffix="days ahead" value={c.horizonDays} onChange={(n) => update('horizonDays', n)} />
         </div>
+        <div className="max-w-sm"><Num label="Count every calendar visit as at least" suffix="min" value={c.minVisitMinutes ?? 90} onChange={(n) => update('minVisitMinutes', n)} hint="Jobber visits and assessments BOB didn't book (BidBee, the office) block at least this long, even when Jobber shows less. 0 uses Jobber's times exactly." /></div>
         <div>
           <p className="text-xs font-bold text-slate-700">Technicians taking online bookings</p>
           <div className="flex flex-wrap gap-x-6">

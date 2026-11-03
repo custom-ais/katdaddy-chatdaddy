@@ -1,5 +1,5 @@
 // Airflow estimate from the customer's answers, shared by the chat (gauge, recommendation)
-// and pricing (visit length). It's an estimate: the technician measures real airflow.
+// and pricing (visit length). It's an estimate from the customer's answers, not a measurement.
 //
 // Cycles set the base: 1 normal cycle ≈ clear, about 2 cycles ≈ half efficiency, 3 or more ≈ severe.
 // An airflow error code, slow drying on a dryer bought or serviced in the last 90 days (so the

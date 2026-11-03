@@ -235,3 +235,48 @@ test('malformed visit IDs cannot confirm job-number recovery', async () => {
     assert.equal(h.cache.size, 0);
   }
 });
+
+// Request assessments (BidBee's request bookings, the office's assessments) are on the calendar too.
+const request = (id, assessment) => ({ id, assessment: assessment && { id: `A-${id}`, title: `Assessment ${id}`, allDay: false, assignedUsers: { nodes: [{ id: 'USER-SC' }], pageInfo: { hasNextPage: false } }, property: { address: { street1: '1 Main St', city: 'Surprise', province: 'AZ', postalCode: '85388' } }, ...assessment } });
+const requestsPage = (nodes, next = null) => new Response(JSON.stringify({ data: { requests: { nodes, pageInfo: { hasNextPage: Boolean(next), endCursor: next } } } }));
+
+test('assessments are read from every request page and shaped like visits', async () => {
+  const later = start + 30 * 86_400_000;
+  const h = harness({ BobAssessments: body => body.variables.cursor
+    ? requestsPage([request('R3', { startAt: new Date(later).toISOString(), endAt: new Date(later + 3600_000).toISOString() })])
+    : requestsPage([request('R1', { startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString() }), request('R2', null), request('R4', { startAt: null, endAt: null })], 'page-2') });
+  const rows = await h.api.readAssessments(start - 60_000, end + 60_000);
+  assert.deepEqual(rows, [{ id: 'A-R1', title: 'Assessment R1', start, end, allDay: false, jobberUserIds: ['USER-SC'], address: '1 Main St, Surprise, AZ 85388' }]);
+  assert.deepEqual(h.calls.map(c => c.operation), ['BobAssessments', 'BobAssessments']);
+  assert.match(h.calls[0].query, /requests\(first: 50, after: \$cursor\)/);
+  // One read serves every window for 60 seconds; fresh reads go back to Jobber.
+  assert.equal((await h.api.readAssessments(later - 60_000, later + 60_000)).length, 1);
+  assert.equal(h.calls.length, 2);
+  await h.api.readAssessments(start - 60_000, end + 60_000, { fresh: true });
+  assert.equal(h.calls.length, 4);
+});
+
+test('an assessment with no end time takes an hour; an all-day one takes the day', async () => {
+  const h = harness({ BobAssessments: () => requestsPage([request('R1', { startAt: new Date(start).toISOString(), endAt: null }), request('R2', { startAt: new Date(start).toISOString(), endAt: null, allDay: true })]) });
+  const [timed, allDay] = await h.api.readAssessments(start - 1, end);
+  assert.equal(timed.end - timed.start, 3600_000);
+  assert.equal(allDay.end - allDay.start, 86_400_000);
+  assert.equal(allDay.allDay, true);
+});
+
+test('unverifiable assessments fail closed instead of offering the time', async () => {
+  for (const [assessment, message] of [
+    [{ startAt: new Date(start).toISOString(), endAt: new Date(start - 1).toISOString() }, /invalid assessment time range/],
+    [{ startAt: 'not a date', endAt: new Date(end).toISOString() }, /invalid assessment time range/],
+    [{ startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString(), assignedUsers: { nodes: [{ id: 'USER-SC' }], pageInfo: { hasNextPage: true } } }, /assignment list is incomplete/],
+    [{ id: '', startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString() }, /invalid assessment ID/],
+  ]) {
+    const h = harness({ BobAssessments: () => requestsPage([request('R1', assessment)]) });
+    await assert.rejects(h.api.readAssessments(start - 1, end + 1), message);
+  }
+  const malformed = harness({ BobAssessments: () => new Response(JSON.stringify({ data: { requests: null } })) });
+  await assert.rejects(malformed.api.readAssessments(start - 1, end + 1), /could not be fully verified/);
+  const endless = harness({ BobAssessments: (body, calls) => requestsPage([], 'page-' + calls.length) });
+  await assert.rejects(endless.api.readAssessments(start - 1, end + 1), /exceed the verification limit/);
+  assert.equal(endless.calls.length, 40);
+});

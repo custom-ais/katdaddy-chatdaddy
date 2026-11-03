@@ -81,6 +81,9 @@ export const DEFAULT_CONFIG = {
   bundleAssessmentCents: BUNDLE_ASSESSMENT_CENTS,
   cleaningMinutes: 90, assessmentMinutes: 60, bundleMinutes: 150,
   bufferMinutes: 30, maxJobsPerDay: 4, leadHours: 12, horizonDays: 45,
+  // Calendar items BOB didn't book (BidBee, the office) block at least this long, even when Jobber
+  // shows a shorter or default length. 0 = use Jobber's times exactly.
+  minVisitMinutes: 90,
   weekdayStarts: ['09:00','11:00','13:00','15:00'], weekdayClose: '17:00',
   saturdayStarts: ['10:00','12:00'], saturdayClose: '14:00',
   blockedDates: [],
@@ -93,7 +96,7 @@ export const DEFAULT_CONFIG = {
   travelZoneFeeCents: 0,
   activeTechnicianIds: ['tech-ryan'],
   preparation: 'Please make the laundry area accessible and secure pets before the visit. Do not move or disconnect the dryer yourself. Let the team know about access restrictions.',
-  cleaningProcess: 'Every See-It-Clean visit is a full vent cleaning with a live camera inspection during service, and we verify airflow before and after so you can see the difference.',
+  cleaningProcess: 'Every See-It-Clean visit is a full vent cleaning with a live camera inspection during service.',
   assessmentProcess: "We'll start by asking what you've noticed, then inspect the vent from the connection behind your dryer to the outlet on your wall or roof.\n\nYour technician will use a camera to look inside the duct and measure airflow at both ends. That helps us pinpoint problems like a blockage, a crushed section, or a loose connection. We'll show you photos of what we find, explain what needs attention, and give you an itemized estimate so you can review your options before approving any work.\n\nAssessments start at $119. If you choose us for the repair, we'll apply the full assessment fee toward it.",
   // Bumped when the office supplies new default wording; older saved settings switch to it once.
   assessmentProcessVersion: ASSESSMENT_PROCESS_VERSION,
@@ -217,7 +220,7 @@ export function validateConfig(c) {
  if(!['gemini','openai'].includes(c.aiProvider))errors.push('Choose Gemini or OpenAI as the AI provider.');
  if(!c.integrations||typeof c.integrations!=='object'||Array.isArray(c.integrations)||Object.keys(c.integrations).some(k=>!['jobber','maps','verification','sms','email'].includes(k)))errors.push('Invalid integration switches.');
  for(const k of ['jobber','maps','verification','sms','email'])if(typeof c.integrations?.[k]!=='boolean')errors.push(`Invalid integration switch: ${k}.`);
- for(const [key,min,max] of [['cleaningPriceCents',0,1000000],['assessmentPriceCents',0,1000000],['bundleAssessmentCents',0,1000000],['cleaningMinutes',30,480],['assessmentMinutes',30,480],['bundleMinutes',30,600],['bufferMinutes',0,180],['maxJobsPerDay',1,30],['leadHours',0,168],['horizonDays',1,180]]) {
+ for(const [key,min,max] of [['cleaningPriceCents',0,1000000],['assessmentPriceCents',0,1000000],['bundleAssessmentCents',0,1000000],['cleaningMinutes',30,480],['assessmentMinutes',30,480],['bundleMinutes',30,600],['bufferMinutes',0,180],['minVisitMinutes',0,480],['maxJobsPerDay',1,30],['leadHours',0,168],['horizonDays',1,180]]) {
   if(!Number.isInteger(c[key])||c[key]<min||c[key]>max)errors.push(`Invalid ${key}.`);
  }
  for(const key of ['weekdayStarts','saturdayStarts'])if(!Array.isArray(c[key])||c[key].length>12||c[key].some(t=>!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)))errors.push(`Invalid ${key}.`);
