@@ -119,3 +119,28 @@ test('real SMS transport observes consent revoked during the final integration r
  assert.deepEqual(await twilio.sendSms(config.bookingOwnerSmsPhone,'Synthetic owner alert',{beforeSend}),{messageId:sid('SM'),status:'queued'});
  assert.equal(fetches,1);assert.equal(integrationReads,2);assert.equal(checks,4);
 });
+
+test("Virtual Phone test mode sends every text to Twilio's Virtual Phone, marked with who it was for", async () => {
+  const sent = { sid: sid("SM"), status: "queued" };
+  const off = harness(sent, { TWILIO_SMS_SENDER_APPROVED: "" });
+  assert.equal(off.twilio.messagingConfigured, false, "no approved sender and no test mode: no texts");
+  const { twilio, calls } = harness(sent, { TWILIO_SMS_SENDER_APPROVED: "", SMS_VIRTUAL_PHONE: "true" });
+  assert.equal(twilio.messagingConfigured, true);
+  assert.equal(twilio.virtualPhone, true);
+  await twilio.sendSms("+16235550100", "Custom-AIs ChatDaddy alert: booking confirmed.");
+  assert.deepEqual(Object.fromEntries(calls[0].form), { To: "+18777804236", MessagingServiceSid: sid("MG"), Body: "[Test for •••-0100] Custom-AIs ChatDaddy alert: booking confirmed." });
+});
+
+test("in Virtual Phone test mode the after-hours text goes out (to the Virtual Phone) without the campaign flag", async (t) => {
+  const { harness: bob, contact } = await import("./helpers.mjs");
+  const h = await bob(t, { env: { SMS_OWNER_ALERTS_ONLY: "true", SMS_VIRTUAL_PHONE: "true" }, config: { pricesAcknowledged: true, bookingOwnerSmsPhone: "6235550100", bookingOwnerSmsEnabled: true } });
+  const consent = createOwnerConsent({ store: h.store, clock: h.store.clock });
+  await consent.record({ action: "grant", revision: 0, phone: "6235550100", consent: true, disclosureVersion: OWNER_SMS_CONSENT_VERSION, idempotencyKey: crypto.randomUUID() }, "synthetic-owner-session");
+  const token = await h.fresh();
+  for (const m of ["Emergency Clog / Overheating", "No, it's turned off now", "Possible nest or blockage", "85326", "1-Story Home", "Electric Dryer", "Check after-hours availability", "Standard Floor Setup"]) await h.chat(token, m);
+  await h.contactAndVerify(token, contact);
+  const sent = await h.call("/api/approvals/after-hours", { method: "POST", token, body: { approved: true } });
+  assert.equal(sent.status, 201, JSON.stringify(sent.data));
+  assert.equal((await h.store.approval(sent.data.approval.id)).notified.sms, "sent");
+  assert.equal(h.twilio.calls.filter((c) => c[0] === "sms").length, 1);
+});

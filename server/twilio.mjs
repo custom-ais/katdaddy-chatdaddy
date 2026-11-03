@@ -5,6 +5,13 @@ const isSid = (value, prefix) => typeof value === "string" && new RegExp(`^${pre
 const phone = (value) => typeof value === "string" && /^\+[1-9]\d{7,14}$/.test(value);
 const email = (value) => typeof value === "string" && value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const error = (code, message) => Object.assign(new Error(message), { code });
+/**
+ * Twilio's Virtual Phone: a simulated phone in the Twilio Console (Messaging > Virtual Phone). Texts
+ * to it never reach a carrier, so they need no A2P 10DLC registration. SMS_VIRTUAL_PHONE=true sends
+ * every ChatDaddy text there, marked with who it was meant for, so the real flows can be tested
+ * before the campaign is approved. No real phone receives anything while it's on.
+ */
+export const VIRTUAL_PHONE = "+18777804236";
 
 export function createTwilio({ env = process.env, fetchImpl = fetch } = {}) {
   const account = String(env.TWILIO_ACCOUNT_SID || "").trim();
@@ -15,7 +22,8 @@ export function createTwilio({ env = process.env, fetchImpl = fetch } = {}) {
   const credentials = isSid(account, "AC") && isSid(key, "SK") && Boolean(secret);
   const verifyConfigured = credentials && isSid(service, "VA");
   // This is an operator attestation, not a claim that an API key proves sender approval.
-  const messagingConfigured = credentials && isSid(messaging, "MG") && env.TWILIO_SMS_SENDER_APPROVED === "true";
+  const virtualPhone = env.SMS_VIRTUAL_PHONE === "true";
+  const messagingConfigured = credentials && isSid(messaging, "MG") && (env.TWILIO_SMS_SENDER_APPROVED === "true" || virtualPhone);
 
   async function post(url, values, beforeSend) {
     let response;
@@ -59,10 +67,11 @@ export function createTwilio({ env = process.env, fetchImpl = fetch } = {}) {
   async function sendSms(to, message, { beforeSend } = {}) {
     if (!messagingConfigured) throw error("TWILIO_NOT_CONFIGURED", "An approved SMS sender is not configured.");
     if (!phone(to) || typeof message !== "string" || !message.trim() || message.length > 1600) throw error("INVALID_SMS", "A valid recipient and message are required.");
-    const result = await post(`https://api.twilio.com/2010-04-01/Accounts/${account}/Messages.json`, { To: to, MessagingServiceSid: messaging, Body: message }, beforeSend);
+    const body = virtualPhone ? `[Test for •••-${to.slice(-4)}] ${message}`.slice(0, 1600) : message;
+    const result = await post(`https://api.twilio.com/2010-04-01/Accounts/${account}/Messages.json`, { To: virtualPhone ? VIRTUAL_PHONE : to, MessagingServiceSid: messaging, Body: body }, beforeSend);
     if (!isSid(result.sid, "SM") || !["accepted", "queued", "sending", "sent", "delivered"].includes(result.status)) throw error("TWILIO_BAD_RESPONSE", "The SMS request was not accepted.");
     return { messageId: result.sid, status: result.status };
   }
 
-  return { verifyConfigured, messagingConfigured, sendVerification, checkVerification, sendSms };
+  return { verifyConfigured, messagingConfigured, virtualPhone, sendVerification, checkVerification, sendSms };
 }

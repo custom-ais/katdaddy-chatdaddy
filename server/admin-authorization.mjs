@@ -267,7 +267,7 @@ function projectIntegrations(value,principal) {
     return hasAll(principal,['appointments.view','appointments.send']) ? {sms:pick(value?.sms,['enabled','configured']),email:pick(value?.email,['enabled','configured'])} : {};
   }
   const result = {};
-  for (const name of ['jobber','verification','sms','email','maps','assistant']) result[name] = pick(value?.[name],['enabled','provider','configured','appConfigured','connected','deliveryVerified','model']);
+  for (const name of ['jobber','verification','sms','email','maps','assistant']) result[name] = pick(value?.[name],['enabled','provider','configured','appConfigured','connected','deliveryVerified','model','virtualPhone']);
   result.verification.channels = safeStrings(value?.verification?.channels);
   result.database = typeof value?.database === 'string' ? value.database : '';
   result.accounts = {};

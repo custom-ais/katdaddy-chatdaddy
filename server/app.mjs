@@ -133,10 +133,13 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
   const verifyService = createVerification({ store, twilio, clock, fail });
   const verificationOn = (c) => useTwilioVerify || c.requirePhoneVerification !== false;
   const useTwilioSms = env.BOOKING_SMS_PROVIDER === 'twilio';
-  const ownerAlertsOnly = env.SMS_OWNER_ALERTS_ONLY === 'true';
+  // Test mode (SMS_VIRTUAL_PHONE): every text goes to Twilio's Virtual Phone, not a carrier, so the
+  // campaign-scope limits below don't apply. Consent and every other check still do.
+  const virtualPhone = env.SMS_VIRTUAL_PHONE === 'true';
+  const ownerAlertsOnly = env.SMS_OWNER_ALERTS_ONLY === 'true' && !virtualPhone;
   // After-hours emergency texts to the account admin stay off until the Twilio campaign and the SMS
   // terms page cover them; the admin's consent must also be on the current (v3) terms.
-  const emergencyTextsOn = env.SMS_EMERGENCY_REQUESTS === 'true';
+  const emergencyTextsOn = env.SMS_EMERGENCY_REQUESTS === 'true' || virtualPhone;
   const useSendGrid = env.BOOKING_EMAIL_PROVIDER === 'sendgrid';
   const enabled = (c, name) => c.integrations?.[name] !== false;
   const emailReady = (c) => enabled(c, 'email') && useSendGrid && Boolean(sendgrid?.configured);
@@ -319,7 +322,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       clientHub: await clientHub.snapshot(),
       jobber: { enabled: enabled(c, 'jobber'), appConfigured: jobber.appConfigured, connected: enabled(c, 'jobber') && await jobber.connected() },
       verification: { enabled: enabled(c, 'verification'), provider: useTwilioVerify ? 'twilio' : 'none', configured: useTwilioVerify && Boolean(twilio?.verifyConfigured), channels: useTwilioVerify ? ['sms', 'email'] : [] },
-      sms: { enabled: enabled(c, 'sms'), provider: useTwilioSms ? 'twilio' : 'none', configured: useTwilioSms && Boolean(twilio?.messagingConfigured) },
+      sms: { enabled: enabled(c, 'sms'), provider: useTwilioSms ? 'twilio' : 'none', configured: useTwilioSms && Boolean(twilio?.messagingConfigured), virtualPhone: useTwilioSms && virtualPhone },
       email: { enabled: enabled(c, 'email'), provider: useSendGrid ? 'sendgrid' : 'none', configured: useSendGrid && Boolean(sendgrid?.configured), deliveryVerified: false },
       maps: { enabled: enabled(c, 'maps'), provider: geo.provider, health: await geo.health?.() || null, issue: historicalIssue(await geo.lastIssue?.()) },
       lastError: historicalIssue(await store.kvGet('diag:last-error').catch(() => null)),
