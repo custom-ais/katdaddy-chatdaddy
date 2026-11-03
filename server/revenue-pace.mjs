@@ -41,9 +41,10 @@ export function paceTargets(pacing = {}) {
 /**
  * Booked revenue for this week and the next ones.
  * appointments: BOB's records ({ scheduledAt, price, status, jobber? }).
- * visits: Jobber visits in the window ({ id, start }); those not booked by BOB count at the job value.
+ * visits: Jobber visits in the window ({ id, start }); those not booked by BOB count at their job's
+ * total from the last Jobber sync (values: visitId → cents), or at the job value.
  */
-export function revenuePace({ appointments = [], visits = [], pacing, now, weeks = PACE_WEEKS }) {
+export function revenuePace({ appointments = [], visits = [], values = {}, pacing, now, weeks = PACE_WEEKS }) {
   const { weeklyCents, dailyCents } = paceTargets(pacing);
   const first = weekStartOf(now);
   const end = first + weeks * 7 * DAY;
@@ -67,7 +68,7 @@ export function revenuePace({ appointments = [], visits = [], pacing, now, weeks
   }
   for (const v of visits) {
     if (v?.allDay || bobVisits.has(v?.id)) continue;
-    add(v.start, jobCents);
+    add(v.start, Number.isInteger(values?.[v.id]) && values[v.id] > 0 ? values[v.id] : jobCents); // the job's real value when Jobber shares it
   }
   return {
     weeklyTargetCents: weeklyCents, dailyTargetCents: dailyCents, jobCents, jobCentsFrom: pacing.outsideJobCents > 0 ? "setting" : recent.length ? "average" : "default",

@@ -21,7 +21,8 @@ import { sanitizeDiagnostic } from "./integration-status.mjs";
 
 import { deliverEmailOnce } from "./email-notification.mjs";
 import { notifyBookingOwner } from "./owner-notification.mjs";
-import { BOOKING_REPORT_TO, COMMISSION_CENTS, bookingTotals, bookingReportEmail } from "./booking-report.mjs";
+import { BOOKING_REPORT_TO, COMMISSION_CENTS, bookingTotals, bookingReportEmail, cancellationNoticeEmail } from "./booking-report.mjs";
+import { syncJobber, billingSummary, SYNC_KEY } from "./jobber-sync.mjs";
 import { createVerification } from "./verification.mjs";
 import { waitForRequestLock } from "./request-lock.mjs";
 import { approvalPolicy } from "./approval-policy.mjs";
@@ -201,6 +202,37 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         sendEmail: async ({ to: recipient, ...content }) => sendgrid.sendEmail(recipient, content),
       });
     } catch { return { status: "failed_or_uncertain", reason: "report_unavailable" }; }
+  };
+  // A ChatDaddy booking cancelled in Jobber: tell the operator it isn't billable (at most once each).
+  const sendCancellationNotice = async (appointment, config) => {
+    try {
+      const to = bookingReportTo();
+      if (!to || appointment.source !== "ai_bot") return { status: "skipped" };
+      const billing = billingSummary(await store.appointments(), { now: Date.parse(appointment.scheduledAt) || clock(), commissionCents });
+      return await deliverEmailOnce({ store, kind: "booking_cancelled", id: appointment.id, to, clock,
+        enabled: true, configured: useSendGrid && Boolean(sendgrid?.configured),
+        message: cancellationNoticeEmail(appointment, billing, config),
+        sendEmail: async ({ to: recipient, ...content }) => sendgrid.sendEmail(recipient, content),
+      });
+    } catch { return { status: "failed_or_uncertain" }; }
+  };
+  /** Bring BOB's bookings in line with Jobber. At most every 10 minutes unless forced; one at a time. */
+  const runJobberSync = async ({ force = false } = {}) => {
+    const c = await store.config();
+    if (!jobberMode(c) || !enabled(c, "jobber")) return { skipped: "jobber_off" };
+    const last = await store.kvGet(SYNC_KEY);
+    if (!force && last?.at && clock() - last.at < 10 * 60_000) return last;
+    if (!(await store.lock("jobber-sync", 120))) return last || { skipped: "running" };
+    try {
+      if (!(await jobber.connected())) return { skipped: "not_connected" };
+      return await syncJobber({ store, jobber, now: clock(), horizonDays: c.horizonDays, onCancelled: (appt) => sendCancellationNotice(appt, c) });
+    } catch (error) {
+      const failed = { at: clock(), ok: false, error: sanitizeDiagnostic(error.message || String(error)).slice(0, 200) };
+      await store.kvSet(SYNC_KEY, failed).catch(() => {});
+      return failed;
+    } finally {
+      await store.unlock("jobber-sync");
+    }
   };
   const notifyOwnerProblem = async (kind, appointment) => {
     try {
@@ -912,6 +944,16 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       await rate(req, "api", 240);
       if (!["GET", "POST", "PATCH", "DELETE"].includes(method)) fail(405, "Method not supported.");
       if (method !== "GET") csrf(req);
+      // Daily Jobber sync from Vercel Cron. Vercel sends "Authorization: Bearer $CRON_SECRET"; without
+      // that secret configured, the route stays closed.
+      if (method === "GET" && pathname === "/api/cron/jobber-sync") {
+        const secret = env.CRON_SECRET || "";
+        const given = String(req.headers.authorization || "");
+        const want = `Bearer ${secret}`;
+        if (!secret || given.length !== want.length || !timingSafeEqual(Buffer.from(given), Buffer.from(want))) return send(401, { error: "Not authorized." });
+        const result = await runJobberSync({ force: true });
+        return send(200, { ok: result?.ok !== false, cancelled: result?.cancelled?.length || 0, error: result?.error || null });
+      }
       // Serialize session mutations (including chat/contact/verification/booking),
       // so a slow provider response cannot restore stale ownership or contact data.
       if (method !== 'GET' && !pathname.startsWith('/api/admin/') && !['/api/session', '/api/activity'].includes(pathname) && req.headers['x-bob-session']) {
@@ -1598,7 +1640,20 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           res.setHeader("Set-Cookie", ["bob_admin=; HttpOnly; SameSite=Lax; Path=/api/admin; Max-Age=0", "bob_user=; HttpOnly; SameSite=Lax; Path=/api/admin; Max-Age=0"]);
           return send(200, { signedOut: true });
         }
-        if (method === "GET" && pathname === "/api/admin/data") return send(200, await snapshot());
+        if (method === "GET" && pathname === "/api/admin/data") {
+          await runJobberSync().catch(() => {}); // throttled; keeps cancellations and invoices current
+          return send(200, await snapshot());
+        }
+        // ChatDaddy billing (Master Admin): this month and last, cancelled bookings excluded.
+        if (method === "GET" && pathname === "/api/admin/billing") {
+          const sync = await runJobberSync();
+          const all = await store.appointments();
+          return send(200, { billing: [0, 1].map((back) => billingSummary(all, { now: clock(), commissionCents, back })), sync });
+        }
+        if (method === "POST" && pathname === "/api/admin/jobber/sync") {
+          await rate(req, "jobber-sync", 10, 600_000);
+          return send(200, { sync: await runJobberSync({ force: true }) });
+        }
         if (method === "GET" && pathname === "/api/admin/activity") return send(200, await store.activity({ sessionId: (url.searchParams.get("session") || "").slice(0, 32), level: url.searchParams.get("level") || "", cursor: url.searchParams.get("cursor") || "", limit: 100 }));
         // The browser Maps key is separate from the server key: it's restricted to the dashboard's web
         // address in Google Cloud, so it's safe to send to the browser. Without it the map uses OpenStreetMap.

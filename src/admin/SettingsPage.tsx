@@ -389,6 +389,56 @@ function RevenuePacing({ value, onChange }: { value: any; onChange: (patch: any)
   );
 }
 
+const shortWhen = (ms: number | string) => new Intl.DateTimeFormat('en-US', { timeZone: 'America/Phoenix', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(ms));
+/**
+ * ChatDaddy billing (Master Admin): bookings BOB made this month and last, with the ones cancelled in
+ * Jobber (or by the office) taken out, the billable count at the commission, and the Jobber sync status.
+ */
+function ChatDaddyBilling() {
+  const [info, setInfo] = useState<any>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const load = async () => { try { setInfo(await api('/api/admin/billing')); setError(''); } catch (e) { setError((e as Error).message); } };
+  useEffect(() => { void load(); }, []);
+  const syncNow = async () => {
+    setBusy(true); setError('');
+    try { await api('/api/admin/jobber/sync', { method: 'POST', body: {} }); await load(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+  const s = info?.sync;
+  return (
+    <Section icon={<Tag size={18} />} title="ChatDaddy billing" description="Appointments BOB booked, by visit month. Bookings cancelled in Jobber are taken out, so only real appointments are billed."
+      action={<button className={secondaryButton} disabled={busy} onClick={() => void syncNow()}>{busy ? <><Loader2 size={15} className="animate-spin" />Syncing…</> : <><RotateCcw size={15} />Sync with Jobber now</>}</button>}>
+      {error && <ErrorNote>{error}</ErrorNote>}
+      {!info && !error && <p className="text-sm text-slate-500 flex items-center gap-2"><Loader2 size={15} className="animate-spin" />Loading…</p>}
+      {info && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {info.billing.map((b: any, i: number) => (
+            <div key={b.month} className="rounded-2xl border border-slate-200 p-4">
+              <p className="text-xs font-extrabold uppercase tracking-wide text-slate-500">{i === 0 ? 'This month' : 'Last month'} · {b.month}</p>
+              <p className="mt-1 text-2xl font-black text-slate-900">{money(b.billableCents)}</p>
+              <p className="text-sm text-slate-700"><b>{b.billable}</b> billable × {money(b.commissionCents)}</p>
+              <p className="text-xs text-slate-500 mt-1">{b.booked} booked · {b.cancelled} cancelled{b.pending ? ` · ${b.pending} waiting on the office` : ''} · {b.completed} completed{b.invoicedCents ? ` · ${money(b.invoicedCents)} invoiced in Jobber` : ''}</p>
+              {b.cancelledList.length > 0 && (
+                <ul className="mt-2 space-y-1 text-xs text-slate-600">
+                  {b.cancelledList.map((c: any) => <li key={c.id}>✕ {c.customer} · {shortWhen(c.scheduledAt)} · {c.by === 'jobber' ? 'cancelled in Jobber' : 'cancelled by the office'} <span className="text-slate-400">({c.id})</span></li>)}
+                </ul>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {s && (
+        <p className={`text-xs ${s.ok === false ? 'text-rose-700' : 'text-slate-500'}`}>
+          {s.skipped === 'jobber_off' ? 'Jobber tracking is off: the schedule source isn\'t Jobber.'
+            : s.skipped === 'not_connected' ? 'Jobber isn\'t connected, so cancellations can\'t be checked.'
+            : s.ok === false ? `Last Jobber sync failed (${shortWhen(s.at)}): ${s.error}`
+            : s.at ? `Last synced with Jobber ${shortWhen(s.at)}: ${s.visits} visits checked${s.cancelled?.length ? `, ${s.cancelled.length} newly cancelled` : ''}${s.rescheduled?.length ? `, ${s.rescheduled.length} moved` : ''}${s.completed?.length ? `, ${s.completed.length} completed` : ''}${s.invoices?.thisMonth ? `. Invoices this month: ${s.invoices.thisMonth.count} (${money(s.invoices.thisMonth.totalCents)})` : ''}.` : ''}
+          {s.held && <b className="block text-amber-800 mt-1">Cancellations on hold: {s.held.missing} of {s.held.of} bookings missing from Jobber. {s.held.reason}</b>}
+          {s.invoices?.error && <span className="block text-amber-800 mt-1">Invoices couldn't be read: {s.invoices.error}</span>}
+        </p>
+      )}
+    </Section>
+  );
+}
+
 function BookingReportTest() {
   const [busy, setBusy] = useState(false), [result, setResult] = useState<{ status: string; to: string } | null>(null), [error, setError] = useState('');
   const send = async () => {
@@ -639,7 +689,8 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
       </Section>
 
       {data.access?.role === 'master' && <div id="owner-sms-consent" tabIndex={-1} className="scroll-mt-40"><OwnerSmsConsent /></div>}
-      {data.access?.role === 'master' && <BookingReportTest />}</>}
+      {data.access?.role === 'master' && <BookingReportTest />}
+      {data.access?.role === 'master' && <ChatDaddyBilling />}</>}
 
             <Section icon={<ShieldCheck size={18} />} title="Approvals" description="Only emergency same-day visits use online approval and company approval texts. The time is held for up to 30 minutes. Other configured approval-only services and unsafe overflow exceptions remain office-only; these selections do not bypass those safeguards.">
         <div className="flex flex-wrap gap-x-6">

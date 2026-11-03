@@ -106,6 +106,20 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
         </div>
       )}
 
+      {a.cancelledBy === 'jobber' && (
+        <div className="bg-slate-100 border border-slate-300 rounded-2xl p-4 text-sm text-slate-800">
+          <p className="font-extrabold">Cancelled in Jobber{a.cancelledAt ? ` · noticed ${azDay(a.cancelledAt)} ${azTime(a.cancelledAt)}` : ''}</p>
+          <p className="mt-1">{a.cancelledReason || 'The visit was removed from Jobber.'} The time is free again{a.source === 'ai_bot' ? ', and it doesn\'t count as a billable ChatDaddy booking' : ''}. If the visit comes back in Jobber, this booking comes back too.</p>
+        </div>
+      )}
+      {(a.rescheduledFrom || a.invoice || a.jobberTracking) && (
+        <div className="text-xs text-slate-600 space-y-1">
+          {a.rescheduledFrom && <p>Moved in Jobber from {azDay(a.rescheduledFrom)} {azTime(a.rescheduledFrom)}.</p>}
+          {a.invoice && <p className="font-bold text-slate-800">Invoice {a.invoice.number ? `#${a.invoice.number}` : ''} · {a.invoice.status.replace(/_/g, ' ')} · {money(a.invoice.totalCents)} · issued {azDay(a.invoice.issuedAt)}</p>}
+          {a.jobberTracking?.visitStatus && <p>Jobber: visit {a.jobberTracking.visitStatus.toLowerCase()}{a.jobberTracking.jobStatus ? `, job ${a.jobberTracking.jobStatus.replace(/_/g, ' ')}` : ''}{a.jobberSyncedAt ? ` (updated ${azDay(a.jobberSyncedAt)} ${azTime(a.jobberSyncedAt)})` : ''}.</p>}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200/80">
         <Field label="Status">
           <select className={inputClass} value={status} disabled={!canManage || busy} onChange={(e) => setStatus(e.target.value as any)}>

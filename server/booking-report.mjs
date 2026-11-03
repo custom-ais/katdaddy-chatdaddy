@@ -124,3 +124,37 @@ ${home.length ? `${head("Home details")}${table(home)}` : ""}
   ].join("\n");
   return { subject, html, text };
 }
+
+/** A ChatDaddy booking cancelled in Jobber: not billable, with the month's billable count after it. */
+export function cancellationNoticeEmail(appt, billing, config = {}) {
+  const when = appt.scheduledAt ? windowLabel(appt.scheduledAt) : "";
+  const subject = `ChatDaddy booking cancelled in Jobber: ${appt.customerName} · ${appt.id} (not billable)`;
+  const rows = [
+    ["Customer", appt.customerName],
+    ["Service", appt.package],
+    ["Was scheduled", when],
+    ["Reference", appt.id],
+    ["Jobber job", appt.jobber?.jobNumber ? `#${appt.jobber.jobNumber}` : ""],
+    ["What Jobber shows", appt.cancelledReason || "Visit removed from Jobber"],
+  ].filter(([, v]) => v);
+  const table = rows.map(([k, v]) => `<tr><td style="padding:5px 0;color:#64748b;width:150px;vertical-align:top">${esc(k)}</td><td style="padding:5px 0;color:#0f172a">${esc(v)}</td></tr>`).join("");
+  const html = `<!doctype html><html><body style="margin:0;background:#eef2f7;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:24px 12px"><tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;background:#fff;border-radius:18px;overflow:hidden">
+<tr><td style="background:#0f172a;padding:22px 26px;color:#fff">
+<div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#fdba74;font-weight:700">ChatDaddy · ${esc(config.businessName || "Dryer Vent Squad West Valley")}</div>
+<div style="font-size:22px;font-weight:800;margin-top:6px">Booking cancelled: ${esc(appt.customerName)}</div>
+<div style="font-size:15px;color:#cbd5e1;margin-top:4px">Not billable. It's been taken out of the counts.</div></td></tr>
+<tr><td style="padding:20px 26px 6px"><div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:14px;font-size:14px;color:#334155">
+${esc(billing.month)}: <b>${billing.billable} billable</b> × ${money(billing.commissionCents)} = <b>${money(billing.billableCents)}</b> · ${billing.cancelled} cancelled of ${billing.booked} booked${billing.pending ? ` · ${billing.pending} waiting on the office` : ""}</div></td></tr>
+<tr><td style="padding:6px 26px 26px;font-size:14px;line-height:1.5"><table role="presentation" width="100%" cellpadding="0" cellspacing="0">${table}</table></td></tr>
+</table></td></tr></table></body></html>`;
+  const text = [
+    `ChatDaddy booking cancelled in Jobber (not billable): ${appt.customerName} · ${appt.id}`,
+    "",
+    `${billing.month}: ${billing.billable} billable × ${money(billing.commissionCents)} = ${money(billing.billableCents)} · ${billing.cancelled} cancelled of ${billing.booked} booked${billing.pending ? ` · ${billing.pending} waiting on the office` : ""}`,
+    "",
+    ...rows.map(([k, v]) => `${k}: ${v}`),
+  ].join("\n");
+  return { subject, html, text };
+}

@@ -64,6 +64,7 @@ export function fakeJobber({ connected = true } = {}) {
     visits: [],
     jobs: [],
     clients: [],
+    invoices: [],
     failNext: null, // 'job' | 'visit'
     async connected() {
       return j.isConnected;
@@ -71,6 +72,14 @@ export function fakeJobber({ connected = true } = {}) {
     async readVisits(from, to) {
       if (!j.isConnected) throw new JobberNotConnected();
       return j.visits.filter((v) => v.start >= from && v.start < to).map((v) => ({ ...v }));
+    },
+    async readVisitStatuses(from, to) {
+      if (!j.isConnected) throw new JobberNotConnected();
+      return { complete: true, visits: j.visits.filter((v) => v.start >= from && v.start < to).map((v) => ({ id: v.id, start: v.start, end: v.end, allDay: Boolean(v.allDay), status: v.status || "UPCOMING", complete: Boolean(v.complete), jobId: v.jobId || null, jobNumber: v.jobNumber ?? null, jobStatus: v.jobStatus || "upcoming", jobTotalCents: v.totalCents ?? null })) };
+    },
+    async readInvoices(from, to) {
+      if (!j.isConnected) throw new JobberNotConnected();
+      return { complete: true, invoices: j.invoices.filter((i) => i.issuedAt >= from && i.issuedAt < to).map((i) => ({ ...i })) };
     },
     async listUsers() {
       return [{ id: "J-RYAN", name: "Ryan Boucher" }, { id: "J-ANDREW", name: "Andrew Sulanke" }];
@@ -113,7 +122,7 @@ export function fakeJobber({ connected = true } = {}) {
       j.jobs.push({ ...args, job, visit });
       const prop = j.clients.at(-1)?.address;
       j.visits.push({
-        id: visit.id, title: args.title, start: args.start, end: args.end, allDay: false,
+        id: visit.id, title: args.title, start: args.start, end: args.end, allDay: false, jobId: job.id, jobNumber: job.jobNumber,
         jobberUserIds: args.jobberUserId ? [args.jobberUserId] : [],
         address: prop ? `${prop.street1}, ${prop.city}, AZ ${prop.zip}` : "",
       });

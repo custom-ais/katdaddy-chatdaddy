@@ -17,6 +17,8 @@ export interface Appointment {
   jobber?: { jobNumber?: number; webUri?: string; visitId?: string | null } | null; jobberState?: string; jobberError?: string;
   approval?: { id: string; by: string; at: number } | null; overflow?: boolean; sameDay?: boolean; phoneVerified?: boolean;
   notifications?: { sms?: string; email?: string; smsReason?: string; emailReason?: string }; territory?: { city: string; zone: number; micro: string; corridor: string } | null; smsConsent?: boolean;
+  cancelledBy?: string | null; cancelledAt?: string | null; cancelledReason?: string | null; rescheduledFrom?: string; jobberSyncedAt?: string;
+  invoice?: { number: string; status: string; issuedAt: string; totalCents: number } | null; jobberTracking?: { visitStatus?: string | null; jobStatus?: string | null } | null;
 }
 
 export interface Technician {

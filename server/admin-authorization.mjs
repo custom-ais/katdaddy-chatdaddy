@@ -22,7 +22,8 @@ const routes = [
   ['GET', /^\/api\/admin\/integration-accounts$/, ['settings.connections.view']],
   ['POST', /^\/api\/admin\/(?:integration-accounts|connections\/refresh)$/, ['integrations.manage']],
   ['GET', /^\/api\/admin\/jobber\/(?:connect|users)$/, ['integrations.manage']],
-  ['POST', /^\/api\/admin\/jobber\/(?:disconnect|client-hub|client-hub\/identity)$/, ['integrations.manage']],
+  ['POST', /^\/api\/admin\/jobber\/(?:disconnect|client-hub|client-hub\/identity|sync)$/, ['integrations.manage']],
+  ['GET', /^\/api\/admin\/billing$/, ['integrations.manage']],
   ['GET', /^\/api\/admin\/activity$/, ['activity.view','finance.view']],
   ['POST', /^\/api\/admin\/service-area\/map$/, ['settings.coverage.view','settings.coverage.manage']],
   ['POST', /^\/api\/admin\/geo\/check$/, ['settings.coverage.view','settings.coverage.manage']],
@@ -204,7 +205,7 @@ export function projectConfig(config,principal) {
   }
   return result;
 }
-const recordFields = ['id','status','scheduledAt','durationMins','technicianId','technicianName','createdAt','revision','urgency','source','route','packageId','overflow','sameDay','jobberState','smsConsent','phoneVerified'];
+const recordFields = ['id','status','scheduledAt','durationMins','technicianId','technicianName','createdAt','revision','urgency','source','route','packageId','overflow','sameDay','jobberState','smsConsent','phoneVerified','cancelledBy','cancelledAt','cancelledReason','rescheduledFrom','jobberSyncedAt'];
 const contactFields = ['customerName','name','phone','email','address','city','zip'];
 const safeNotifications = value => pick(value,['sms','email','smsDelivery','emailDelivery','smsAlreadyAttempted','emailAlreadyAttempted','smsReason','emailReason']);
 const safeJobber = value => object(value) ? pick(value,['jobNumber','jobId','visitId','webUri']) : null;
@@ -218,12 +219,14 @@ export function projectAppointment(row,principal,{analytics=false}={}) {
     result.jobber = safeJobber(row?.jobber);
     result.notifications = safeNotifications(row?.notifications);
     result.approval = object(row?.approval) ? pick(row.approval,['id','by','at']) : null;
+    result.jobberTracking = object(row?.jobberTracking) ? pick(row.jobberTracking,['visitStatus','jobStatus']) : null;
   }
   if (finance(principal)) {
     Object.assign(result,pick(row,['price','servicePriceCents','travelFeeCents']));
     if (!analytics) {
       Object.assign(result,pick(row,['notes','jobberError','smsConsent','phoneVerified']));
       result.lineItems = list(row?.lineItems).map(item => pick(item,['id','name','cents','mins']));
+      result.invoice = object(row?.invoice) ? pick(row.invoice,['number','status','issuedAt','totalCents']) : null;
       result.concerns = safeStrings(row?.concerns);
       result.property = pick(row?.property,['stories','laundryFloor','hasDryer','power','mount','dryerWorking','triage']);
       for (const key of ['symptoms','animals']) if (Array.isArray(row?.property?.[key])) result.property[key] = safeStrings(row.property[key]);
@@ -326,7 +329,9 @@ export function projectAdminResponse(principal,method,path,body) {
   if (hasPermission(principal,'ownerSms.manage') && path === '/api/admin/owner-sms-consent') return clone(body);
   if (isMaster(principal) && path === '/api/admin/booking-report/test') return pick(body,['status','to']);
   if (path === '/api/admin/maps-key') return pick(body,['key']);
-  if (path === '/api/admin/revenue-pace') return pick(body,['pace']);
+  // pick() keeps only plain values; these answers are nested objects, already limited by the route's permissions.
+  if (path === '/api/admin/revenue-pace') return { pace: object(body?.pace) ? clone(body.pace) : null };
+  if (path === '/api/admin/billing') return isMaster(principal) ? { billing: Array.isArray(body?.billing) ? clone(body.billing) : [], sync: object(body?.sync) ? clone(body.sync) : null } : {};
   if (hasPermission(principal,'integrations.manage') && /^\/api\/admin\/(?:integration-accounts|jobber\/)/.test(path)) return clone(body);
   if (path === '/api/admin/status') return pick(body,['authenticated','setupRequired','passwordFromEnv','namedUsersEnabled']);
   if (path === '/api/admin/logout') return pick(body,['signedOut']);

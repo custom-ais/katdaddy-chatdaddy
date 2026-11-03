@@ -4,6 +4,7 @@ import { phoenixDate } from "../shared/domain.mjs";
 import { openSlots, orderSlots } from "./schedule-rules.mjs";
 import { zipOf } from "./route-score.mjs";
 import { pacingOn, revenuePace, weekStartOf, PACE_WEEKS } from "./revenue-pace.mjs";
+import { VALUES_KEY } from "./jobber-sync.mjs";
 
 async function pool(items, limit, fn) {
   let next = 0;
@@ -78,7 +79,7 @@ export function createScheduler({ store, jobber, geo }) {
     try {
       const from = weekStartOf(now), to = from + PACE_WEEKS * 7 * 86_400_000;
       const visits = config.scheduleSource === "Jobber" ? await jobber.readVisits(from, to, { fresh }) : [];
-      return revenuePace({ appointments: await store.appointments(), visits, pacing: config.revenuePacing, now });
+      return revenuePace({ appointments: await store.appointments(), visits, values: (await store.kvGet(VALUES_KEY)) || {}, pacing: config.revenuePacing, now });
     } catch (error) {
       console.warn("[schedule] revenue pacing unavailable:", error.message);
       return null;
