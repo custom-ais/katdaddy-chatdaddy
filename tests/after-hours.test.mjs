@@ -152,7 +152,7 @@ test("the account admin gets a text only with after-hours texts on and consent o
   const texts = h.twilio.calls.filter((c) => c[0] === "sms");
   assert.equal(texts.length, 1);
   assert.equal(texts[0][1], "+16235550100");
-  assert.match(texts[0][2], /^Custom-AIs ChatDaddy alert: after-hours emergency request from Booking in Buckeye 85326: Ultimate Protection \+ after-hours \(\$498 total\)\. They're waiting in the chat\. Accept with an arrival time or decline: \S+\/admin\?approval=APR-\S+ Reply STOP to opt out\.$/);
+  assert.match(texts[0][2], /^Custom-AIs ChatDaddy alert: after-hours emergency request from Booking in Buckeye 85326: Ultimate Protection \+ after-hours \(\$498 total\)\. They're waiting in the chat\. Accept with an arrival time or decline: \S+\/respond\?a=APR-\S+&s=\S+ Reply STOP to opt out\.$/);
   assert.doesNotMatch(texts[0][2], /555|Main St/, "no customer phone or street in the text");
   assert.equal((await h.store.approval(a2.id)).notified.sms, "sent");
 });

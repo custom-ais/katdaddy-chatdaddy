@@ -137,28 +137,65 @@ export function afterHoursRequestSms(a, link) {
   return `Custom-AIs ChatDaddy alert: after-hours emergency request from ${first} in ${clean(a.customer?.city, 40)} ${clean(a.customer?.zip, 10)}: ${clean(a.service, 80)}${total}. They're waiting in the chat. Accept with an arrival time or decline: ${link} Reply STOP to opt out.`;
 }
 
-/** The same request by email, with the details the on-call technician needs to call back. */
-export function afterHoursRequestEmail(a, link) {
+/**
+ * The same request by email, branded like the customer confirmation, with one-tap answers:
+ * "Yes, I can go" and "No, can't make it" open a short page (no login) to finish the answer.
+ */
+export function afterHoursRequestEmail(a, { link, yes = "", no = "", minutes = 30 } = {}) {
   const c = a.customer || {};
-  const lines = [
+  const first = String(c.name || "").split(/\s+/)[0] || "A customer";
+  const lines = (a.lineItems || []).map((l) => [l.name, l.cents]);
+  const rows = lines.map(([n, cents]) => `<tr><td style="padding:6px 0;color:#475569">${esc(n)}</td><td style="padding:6px 0;text-align:right;color:#0f172a">${money(cents)}</td></tr>`).join("");
+  const said = (a.concerns || []).filter(Boolean);
+  const button = (href, label, bg, color = "#fff") => `<a href="${esc(href)}" style="display:block;padding:15px 18px;background:${bg};color:${color};border-radius:12px;text-decoration:none;font-weight:800;font-size:16px;text-align:center">${label}</a>`;
+  const html = `<!doctype html><html><body style="margin:0;background:#eef2f7;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:24px 12px"><tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#fff;border-radius:18px;overflow:hidden">
+<tr><td style="background:#083653;padding:26px 28px;color:#fff">
+<div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#9fd0ff">Dryer Vent Squad · West Valley</div>
+<div style="font-size:24px;font-weight:700;margin-top:6px">After-hours emergency request</div>
+<div style="margin-top:8px;font-size:15px;color:#d6e9fb">${esc(first)} is waiting in the chat for your answer.</div></td></tr>
+<tr><td style="padding:24px 28px;color:#0f172a;font-size:15px;line-height:1.55">
+${yes || no ? `<div style="margin:0 0 6px;font-weight:800;font-size:16px">Can you get there tonight?</div>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+${yes ? `<td style="padding:6px 6px 6px 0;width:50%">${button(yes, "Yes, I can go", "#16a34a")}</td>` : ""}
+${no ? `<td style="padding:6px 0 6px 6px;width:50%">${button(no, "No, can't make it", "#e2e8f0", "#0f172a")}</td>` : ""}
+</tr></table>
+<p style="margin:6px 0 18px;color:#64748b;font-size:13px">Yes lets you pick the arrival time. No offers them our regular times. The request closes in ${minutes} minutes.</p>` : ""}
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;margin-bottom:14px">
+<tr><td style="padding:8px 0;color:#64748b;width:96px">Customer</td><td style="padding:8px 0;font-weight:600">${esc(c.name)}</td></tr>
+<tr><td style="padding:8px 0;color:#64748b">Phone</td><td style="padding:8px 0"><a href="${esc(telHref(c.phone))}" style="color:#0b63c7;font-weight:600">${esc(prettyPhone(c.phone))}</a></td></tr>
+${c.email ? `<tr><td style="padding:8px 0;color:#64748b">Email</td><td style="padding:8px 0">${esc(c.email)}</td></tr>` : ""}
+<tr><td style="padding:8px 0;color:#64748b">Address</td><td style="padding:8px 0">${esc(c.address)}, ${esc(c.city)}, AZ ${esc(c.zip)}</td></tr>
+<tr><td style="padding:8px 0;color:#64748b">Reference</td><td style="padding:8px 0">${esc(a.id)}</td></tr></table>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0">${rows}
+${Number.isFinite(a.totalCents) ? `<tr><td style="padding:10px 0;border-top:1px solid #e2e8f0;font-weight:700">Total</td><td style="padding:10px 0;border-top:1px solid #e2e8f0;text-align:right;font-weight:700">${money(a.totalCents)}</td></tr>` : ""}</table>
+${said.length ? `<p style="margin:14px 0 0"><strong>Customer said:</strong> ${esc(said.join(" · "))}</p>` : ""}
+${a.notes ? `<p style="margin:8px 0 0"><strong>Notes:</strong> ${esc(a.notes)}</p>` : ""}
+<p style="margin:18px 0 0;font-size:14px"><a href="${esc(link)}" style="color:#0b63c7;font-weight:700">Open it in the dashboard</a></p>
+</td></tr>
+<tr><td style="padding:16px 28px;background:#f8fafc;color:#64748b;font-size:12px">Sent by ChatDaddy for Dryer Vent Squad West Valley · Nothing is booked until someone answers</td></tr>
+</table></td></tr></table></body></html>`;
+  const text = [
     `After-hours emergency request ${a.id}`,
-    "",
     `${c.name} is waiting in the chat for an answer.`,
+    "",
+    yes ? `YES, I can go (pick the arrival time): ${yes}` : "",
+    no ? `NO, can't make it (they're offered regular times): ${no}` : "",
+    yes || no ? `The request closes in ${minutes} minutes.` : "",
+    "",
     `Service: ${a.service}`,
-    ...(a.lineItems || []).map((l) => `  ${l.name}: ${money(l.cents)}`),
+    ...lines.map(([n, cents]) => `  ${n}: ${money(cents)}`),
     Number.isFinite(a.totalCents) ? `Total: ${money(a.totalCents)}` : "",
     "",
-    `Phone: ${c.phone}`,
+    `Phone: ${prettyPhone(c.phone)}`,
     c.email ? `Email: ${c.email}` : "",
     `Address: ${c.address}, ${c.city} ${c.zip}`,
-    a.concerns?.length ? `Customer said: ${a.concerns.join(" | ")}` : "",
+    said.length ? `Customer said: ${said.join(" | ")}` : "",
     a.notes ? `Notes: ${a.notes}` : "",
     "",
-    `Accept with an arrival time, or decline so they're offered regular times: ${link}`,
-  ].filter((x, i, all) => x !== "" || (all[i - 1] !== "" && i > 0));
-  const text = lines.join("\n");
-  const esc = (v) => String(v).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
-  const html = `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5;color:#172536">${lines.map((l) => l === "" ? "<br>" : `<div>${esc(l)}</div>`).join("")}<p style="margin-top:16px"><a href="${esc(link)}" style="display:inline-block;background:#e8641e;color:#fff;font-weight:700;text-decoration:none;padding:11px 18px;border-radius:10px">Open the request</a></p></div>`;
+    `Dashboard: ${link}`,
+  ].filter((x, i, all) => x !== "" || (i > 0 && all[i - 1] !== "")).join("\n").trim();
   return { subject: `After-hours emergency request: ${c.name} · ${a.service}`, text, html };
 }
 

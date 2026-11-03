@@ -650,9 +650,26 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
    * (only with consent on the current terms and SMS_EMERGENCY_REQUESTS on) and an email to the
    * approver, or the office if no approver email is set.
    */
+  // One-tap answers from the after-hours email: a link signed for that one request, valid while it's pending.
+  const linkSecret = async () => {
+    let v = await store.kvGet("approval-link-secret");
+    if (typeof v?.key !== "string") {
+      await store.kvSet("approval-link-secret", { key: randomBytes(32).toString("hex") });
+      v = await store.kvGet("approval-link-secret");
+    }
+    return v.key;
+  };
+  const approvalSig = async (a) => createHmac("sha256", await linkSecret()).update(`${a.id}.${a.expiresAt}`).digest("base64url").slice(0, 32);
+  const approvalSigOk = async (a, sig) => {
+    const want = Buffer.from(await approvalSig(a)), got = Buffer.from(String(sig || ""));
+    return got.length === want.length && timingSafeEqual(got, want);
+  };
+  const respondLink = async (a, origin, choice = "") => `${origin || ""}/respond?a=${encodeURIComponent(a.id)}&s=${await approvalSig(a)}${choice ? `&c=${choice}` : ""}`;
+
   async function notifyAfterHours(a, c, origin = publicOrigin) {
     const out = { sms: "skipped", email: "skipped" };
     const link = `${origin || ""}/admin?approval=${encodeURIComponent(a.id)}`;
+    const answer = await respondLink(a, origin);
     const phone = c.bookingOwnerSmsPhone;
     if (!emergencyTextsOn) out.smsReason = "emergency_texts_off";
     else if (c.bookingOwnerSmsEnabled !== true || !phone) out.smsReason = "owner_alerts_off";
@@ -663,7 +680,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         const latest = await store.config();
         if (latest.bookingOwnerSmsEnabled !== true || !smsReady(latest) || normalizePhone(latest.bookingOwnerSmsPhone) !== normalizePhone(phone) || !(await ownerConsent.allows(phone, "after_hours_emergency_requests"))) throw new Error("Owner SMS consent is revoked or does not match this recipient.");
       };
-      out.sms = await sendSms(null, normalizePhone(phone), afterHoursRequestSms(a, link), beforeSend, "owner").then(async (response) => {
+      out.sms = await sendSms(null, normalizePhone(phone), afterHoursRequestSms(a, answer), beforeSend, "owner").then(async (response) => {
         out.smsMessageId = response?.messageId || response?.id || null;
         await store.log("notification.accepted", { approvalId: a.id, channel: "sms", provider: "Twilio", recipient: "account admin", messageId: out.smsMessageId, delivery: "not_confirmed" }, { sessionId: a.session?.slice(0, 16) || "" }).catch(() => {});
         return "sent";
@@ -676,11 +693,52 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     if (out.smsReason) await store.log("notification.skipped", { approvalId: a.id, channel: "sms", reason: out.smsReason }, { sessionId: a.session?.slice(0, 16) || "" }).catch(() => {});
     const to = c.approver?.email || c.email || "";
     if (to && emailReady(c)) {
-      try { applyEmailResult(out, await deliverEmail("after_hours_request", a.id, to, afterHoursRequestEmail(a, link))); }
+      const message = afterHoursRequestEmail(a, { link, yes: await respondLink(a, origin, "yes"), no: await respondLink(a, origin, "no"), minutes: Math.round((a.expiresAt - a.requestedAt) / 60_000) });
+      try { applyEmailResult(out, await deliverEmail("after_hours_request", a.id, to, message)); }
       catch { out.email = "failed_or_uncertain"; out.emailDelivery = "not_confirmed"; }
     } else out.emailReason = to ? "email_not_configured" : "no_recipient";
     if (out.sms !== "sent" && !["accepted", "sent"].includes(out.email)) out.reason = "not_configured";
     return out;
+  }
+
+  /**
+   * Accept (with an arrival time and technician) or decline an after-hours request whose decision is
+   * already recorded on it. Used by the Inbox and by the email's Yes/No page.
+   */
+  async function decideAfterHours(a, b, c) {
+    if (a.decision?.decision === "decline") {
+      a.status = "declined"; // the customer's chat sees it and offers regular openings
+      await store.updateApproval(a);
+      await store.audit("approval.declined", a.id);
+      return;
+    }
+    const arrival = typeof b.arrivalAt === "number" ? b.arrivalAt : Date.parse(String(b.arrivalAt || ""));
+    if (!Number.isFinite(arrival) || arrival < clock() - 10 * 60_000 || arrival > clock() + 18 * 3600_000) fail(400, "Choose an arrival time in the next 18 hours.");
+    const techs = (await store.technicians()).filter((t) => t.active !== false);
+    // Office users without schedule access can't see the list; with one technician on file, that's who goes.
+    const tech = b.technicianId ? techs.find((t) => t.id === b.technicianId) : techs.length === 1 ? techs[0] : null;
+    if (!tech) fail(400, "Choose the technician who is going.");
+    if (jobberMode(c) && !tech.jobberUserId) fail(400, `${tech.name} isn't linked to a Jobber user yet. Link them under Technicians or choose someone else.`);
+    const data = await store.loadSession(a.session);
+    if (!data || data.approvalId !== a.id) {
+      a.status = "failed";
+      a.failure = "The customer's conversation expired.";
+    } else {
+      const slot = { start: arrival, technicianId: tech.id, technicianName: tech.name, jobberUserId: tech.jobberUserId || null, overflow: false, sameDay: true, routeScore: null };
+      try {
+        const { appt, pending } = await commitBooking({ token: a.session, data, hold: { start: arrival, quote: a.quote, tech: tech.id }, c, idem: `approval-${a.id}`, approval: a, afterHours: { slot } });
+        a.status = pending ? "action_needed" : "booked";
+        a.appointmentId = appt.id;
+        a.scheduledAt = appt.scheduledAt;
+        a.technicianName = tech.name;
+      } catch (error) {
+        if (!(error instanceof HttpError)) throw error;
+        a.status = "failed";
+        a.failure = error.message;
+      }
+    }
+    await store.updateApproval(a);
+    await store.audit(`approval.${a.status}`, a.id);
   }
 
   const publicApproval = (a, c) => ({
@@ -1108,6 +1166,38 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           await store.unlock(`slot:${day}`);
         }
       }
+      // Add-ons chosen on the review screen, after the time is picked: re-price the held visit and make
+      // sure the longer visit still fits that time (DryerFlex and Ultimate take extra minutes).
+      if (method === "POST" && pathname === "/api/holds/extras") {
+        await rate(req, "holds", 40);
+        const { token, data } = await session(req), body = await readBody(req);
+        const c = await store.config();
+        requireReadyToBook(data, c);
+        if (!["cleaning", "bundle"].includes(data.route) || !data.upsell) fail(409, "Add-ons aren't available for this visit.");
+        const hold = await store.getHold(String(body.holdId || ""), token);
+        if (!hold) fail(409, "Your hold expired. Choose a time again.");
+        const base = data.upgradedFrom || data.package;
+        const ultimate = body.ultimate === true && base === "premium" && Boolean(data.upsell.ultimate) && data.property?.hasDryer !== "No";
+        const next = {
+          ...data, package: ultimate ? "ultimate" : base, upgradedFrom: ultimate ? base : null,
+          addOns: { ...(data.addOns || {}), fogging: body.fogging === true && Boolean(data.upsell.fogging), dryerflex: body.dryerflex === true && !ultimate && Boolean(data.upsell.dryerflex) },
+        };
+        const quote = quoteFor(next, c);
+        const day = phoenixDate(new Date(hold.start));
+        if (!(await store.lock(`slot:${day}`, 30))) fail(409, "Someone is booking that day right now. Please try again in a moment.");
+        try {
+          const slot = await scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(next, c, quote), location: data.location, now: clock(), iso: new Date(hold.start).toISOString(), preferTech: hold.tech, excludeSession: token, fresh: true });
+          if (!slot) fail(409, "That add-on makes the visit too long for this time. Keep the visit as it is, or pick another time to add it.", { code: "EXTRAS_DONT_FIT" });
+          requireAllowedSlot(quote, slot, c);
+          await store.updateHold(hold.id, { quote, tech: slot.technicianId, end: slot.end });
+          Object.assign(data, { package: next.package, upgradedFrom: next.upgradedFrom, addOns: next.addOns });
+          await store.saveSession(token, data);
+          await record(req, "upsell.changed", { package: next.package, dryerflex: next.addOns.dryerflex, fogging: next.addOns.fogging });
+          return send(200, { hold: { id: hold.id, expiresAt: hold.expires, scheduledAt: new Date(hold.start).toISOString(), quote, approvalRequired: needsApproval(quote, slot, c), overflow: Boolean(slot.overflow) }, extras: { dryerflex: next.addOns.dryerflex, fogging: next.addOns.fogging, ultimate } });
+        } finally {
+          await store.unlock(`slot:${day}`);
+        }
+      }
       if (method === "DELETE" && pathname === "/api/holds") {
         const { token, data } = await session(req);
         if (data.stage === "approval") fail(409, "This time is held while the team reviews your request.");
@@ -1268,6 +1358,36 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         }
         await store.saveSession(token, result.session);
         return send(200, { ...result, via: "rules" });
+      }
+      // The after-hours email's Yes/No buttons open /respond: the request, then one tap to answer.
+      // The signed link is the permission, for that one request while it's pending. GET only reads.
+      if (pathname === "/api/approvals/respond" && (method === "GET" || method === "POST")) {
+        await rate(req, "respond", 30, 600_000);
+        const b = method === "POST" ? await readBody(req) : {};
+        const id = String(method === "POST" ? b.a || "" : url.searchParams.get("a") || "").slice(0, 40);
+        const sig = method === "POST" ? b.s : url.searchParams.get("s");
+        let a = id ? await store.approval(id) : null;
+        if (!a || a.kind !== "after_hours" || !(await approvalSigOk(a, sig))) fail(404, "This link isn't valid. Open the request from the dashboard instead.");
+        const c = await store.config();
+        if (method === "POST") {
+          conversationLock = await waitForRequestLock(store, `conversation:${a.session}`);
+          a = await store.approval(id);
+          await sweepApprovals([a]);
+          if (a.status !== "pending") fail(409, a.status === "expired" ? "This request already closed: the customer was offered our regular times." : a.status === "cancelled" ? "The customer cancelled this request." : `Someone already answered this request (${a.status}).`);
+          if (!["approve", "decline"].includes(b.decision)) fail(400, "Choose yes or no.");
+          const by = String(b.name || c.approver?.name || "On-call technician").trim().slice(0, 100);
+          a.decision = { decision: b.decision, by, at: clock(), note: "", via: "email_link", namedApprover: c.approver?.name ? by.toLowerCase() === c.approver.name.trim().toLowerCase() : null };
+          await decideAfterHours(a, b, c);
+        } else await sweepApprovals([a]);
+        const techs = (await store.technicians()).filter((t) => t.active !== false).map((t) => ({ id: t.id, name: t.name }));
+        return send(200, {
+          request: {
+            id: a.id, status: a.status, service: a.service, totalCents: a.totalCents, lineItems: (a.lineItems || []).map((l) => ({ name: l.name, cents: l.cents })),
+            customer: a.customer, concerns: a.concerns || [], notes: a.notes || "", expiresAt: a.expiresAt, scheduledAt: a.scheduledAt, technicianName: a.technicianName || "",
+            failure: a.failure || null, decision: a.decision ? { decision: a.decision.decision, by: a.decision.by, at: a.decision.at } : null,
+          },
+          technicians: techs, approverName: c.approver?.name || "", businessName: c.businessName || "Dryer Vent Squad West Valley",
+        });
       }
       if (method === "GET" && pathname === "/api/approvals/current") {
         const { data } = await session(req);
@@ -1685,14 +1805,13 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
             ...(req.adminPrincipal.role === 'legacy' ? {} : { actorUserId: req.adminPrincipal.id }),
             namedApprover: c.approver?.name ? by.toLowerCase() === c.approver.name.trim().toLowerCase() : null,
           };
+          if (a.kind === "after_hours") {
+            await decideAfterHours(a, b, c);
+            return send(200, { ...(await snapshot()), result: { status: a.status, failure: a.failure || null, appointmentId: a.appointmentId || null } });
+          }
           if (b.decision === "decline") {
             a.status = "declined";
             await store.updateApproval(a);
-            if (a.kind === "after_hours") {
-              // The customer's chat sees the answer and offers regular openings.
-              await store.audit("approval.declined", a.id);
-              return send(200, await snapshot());
-            }
             await store.releaseHold(a.holdId);
             const s = await store.loadSession(a.session);
             if (s) await store.saveSession(a.session, { ...s, stage: "review" });
@@ -1700,36 +1819,6 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
             return send(200, await snapshot());
           }
           const data = await store.loadSession(a.session);
-          if (a.kind === "after_hours") {
-            // The on-call technician's arrival time and who is going; the office chose both.
-            const arrival = typeof b.arrivalAt === "number" ? b.arrivalAt : Date.parse(String(b.arrivalAt || ""));
-            if (!Number.isFinite(arrival) || arrival < clock() - 10 * 60_000 || arrival > clock() + 18 * 3600_000) fail(400, "Choose an arrival time in the next 18 hours.");
-            const techs = (await store.technicians()).filter((t) => t.active !== false);
-            // Office users without schedule access can't see the list; with one technician on file, that's who goes.
-            const tech = b.technicianId ? techs.find((t) => t.id === b.technicianId) : techs.length === 1 ? techs[0] : null;
-            if (!tech) fail(400, "Choose the technician who is going.");
-            if (jobberMode(c) && !tech.jobberUserId) fail(400, `${tech.name} isn't linked to a Jobber user yet. Link them under Technicians or choose someone else.`);
-            if (!data || data.approvalId !== a.id) {
-              a.status = "failed";
-              a.failure = "The customer's conversation expired.";
-            } else {
-              const slot = { start: arrival, technicianId: tech.id, technicianName: tech.name, jobberUserId: tech.jobberUserId || null, overflow: false, sameDay: true, routeScore: null };
-              try {
-                const { appt, pending } = await commitBooking({ token: a.session, data, hold: { start: arrival, quote: a.quote, tech: tech.id }, c, idem: `approval-${a.id}`, approval: a, afterHours: { slot } });
-                a.status = pending ? "action_needed" : "booked";
-                a.appointmentId = appt.id;
-                a.scheduledAt = appt.scheduledAt;
-                a.technicianName = tech.name;
-              } catch (error) {
-                if (!(error instanceof HttpError)) throw error;
-                a.status = "failed";
-                a.failure = error.message;
-              }
-            }
-            await store.updateApproval(a);
-            await store.audit(`approval.${a.status}`, a.id);
-            return send(200, { ...(await snapshot()), result: { status: a.status, failure: a.failure || null, appointmentId: a.appointmentId || null } });
-          }
           const hold = await store.holdById(a.holdId);
           if (!data || !hold || hold.expires < clock()) {
             a.status = "failed";

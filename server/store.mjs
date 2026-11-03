@@ -106,6 +106,10 @@ export function createStore(db, { clock = Date.now } = {}) {
       );
       return rows.map(mapHold);
     },
+    /** New add-ons on a held time: its quote, and the technician and end time that fit them. */
+    async updateHold(id, { quote, tech, end }) {
+      await q("update bob.holds set quote=$1::jsonb, tech=$2, end_ms=$3 where id=$4", [json(quote), tech, end, id]);
+    },
     async extendHold(id, expires) {
       await q("update bob.holds set expires=$1 where id=$2", [expires, id]);
     },
