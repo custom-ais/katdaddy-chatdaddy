@@ -64,7 +64,7 @@ export const CONFIG_FIELD_PERMISSIONS = Object.freeze({
   'overflow.enabled':'settings.schedule.manage','overflow.start':'settings.schedule.manage','overflow.maxDurationMins':'settings.schedule.manage','overflow.minTicketCents':'settings.schedule.manage','overflow.requireNearby':'settings.schedule.manage',
   dailyRevenueTargetCents:'settings.schedule.manage', 'revenuePacing.enabled':'settings.schedule.manage', 'revenuePacing.period':'settings.schedule.manage', 'revenuePacing.targetCents':'settings.schedule.manage', 'revenuePacing.outsideJobCents':'settings.schedule.manage', services:'settings.services.manage', cleaningPriceCents:'settings.services.manage', assessmentPriceCents:'settings.services.manage', bundleAssessmentCents:'settings.services.manage', bundlePriceCents:'settings.services.manage',
   cleaningMinutes:'settings.services.manage', assessmentMinutes:'settings.services.manage', bundleMinutes:'settings.services.manage', assessmentCredited:'settings.services.manage',
-  bufferMinutes:'settings.schedule.manage', maxJobsPerDay:'settings.schedule.manage', leadHours:'settings.schedule.manage', horizonDays:'settings.schedule.manage',
+  bufferMinutes:'settings.schedule.manage', minVisitMinutes:'settings.schedule.manage', maxJobsPerDay:'settings.schedule.manage', leadHours:'settings.schedule.manage', horizonDays:'settings.schedule.manage',
   weekdayStarts:'settings.schedule.manage', weekdayClose:'settings.schedule.manage', saturdayStarts:'settings.schedule.manage', saturdayClose:'settings.schedule.manage',
   blockedDates:'settings.schedule.manage', activeTechnicianIds:'settings.schedule.manage',
 });

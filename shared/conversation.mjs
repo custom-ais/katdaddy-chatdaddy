@@ -618,7 +618,7 @@ export function airflowAnalysis(p = {}, recommended = recommendTier(p)) {
       ? "That's why I recommend **Ultimate Protection**: it adds exterior termination cleanout and a DryerFlex transition upgrade to restore full airflow, with a 3-year parts and labor warranty."
       : "That's why I recommend **Premium 1-2-3 See-It-Clean**: a full-path cleaning from the appliance to the termination, with live camera proof before and after.",
   );
-  parts.push("Symptoms aren't a diagnosis; your technician measures airflow before and after.");
+  parts.push("Symptoms aren't a diagnosis, and this airflow reading is an estimate based on your answers.");
   const [energy, ...why] = parts;
   return [...paragraphs, energy, why.join(" ")].filter(Boolean).join("\n\n");
 }

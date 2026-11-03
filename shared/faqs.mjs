@@ -66,7 +66,7 @@ export const INITIAL_FAQS = [
     "The U.S. Fire Administration estimates about 2,900 home clothes-dryer fires a year, and failure to clean is the leading cause. A restricted vent also makes the dryer run longer and work harder.",
     ["risks", "fire hazard", "danger", "not cleaning", "dryer fires"]),
   f("faq-18", "Performance", "Dry Time", "Why is my dryer taking multiple cycles to dry clothes?",
-    "Loads that take two or more cycles are a common sign of restricted airflow, but they can have other causes too. Every See-It-Clean visit checks airflow before and after cleaning so you can see what changed.",
+    "Loads that take two or more cycles are a common sign of restricted airflow, but they can have other causes too.",
     ["taking so long to dry", "multiple cycles", "clothes still damp", "2 cycles", "3 cycles", "dry time"]),
   f("faq-19", "Performance", "Overheating", "Why is the outside of my dryer getting hot to the touch?",
     "A dryer that gets hot to the touch can mean hot air isn't leaving through the vent. Stop using the dryer if you can do so safely, and have it checked before running it again.",
@@ -119,6 +119,11 @@ export const INITIAL_FAQS = [
 // Answers revised on Oct 30 2026 (website packages and prices). A saved answer that still has the
 // earlier default wording gets the new wording; an answer the office edited is left alone.
 const REVISED = {
+ // Nov 3 2026: airflow isn't always measured before and after, so the answer no longer promises it.
+ "faq-18": {
+  "question": "Why is my dryer taking multiple cycles to dry clothes?",
+  "answer": "Loads that take two or more cycles are a common sign of restricted airflow, but they can have other causes too. Every See-It-Clean visit checks airflow before and after cleaning so you can see what changed."
+ },
  "faq-1": [{
   "question": "How much does it cost to get my dryer vent cleaned?",
   "answer": "Our See-It-Clean packages start at $189 for Essential, $249 for Performance (adds before-and-after photos and a DryerFlex transition hose upgrade), and $349 for Total System. Vent-only Express cleaning, for when no dryer is installed, starts at $149. Your exact price depends on whether your home is 1-story or 2-story and which floor the laundry is on. Gas dryers add the $49 Gas Appliance Safety Procedure."

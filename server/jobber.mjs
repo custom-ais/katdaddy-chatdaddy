@@ -294,6 +294,60 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     return visits;
   }
 
+  // Assessments scheduled on Jobber requests (BidBee's request bookings, the office's own
+  // assessments) share the calendar with visits but are not in the visits connection.
+  // This is the request/assessment shape BidBee already reads from the same account.
+  // Requests have no date filter here, so the whole list is read and shared for 60s.
+  const ASSESSMENTS = `
+    query BobAssessments($cursor: String) {
+      requests(first: 50, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id
+          assessment {
+            id title startAt endAt allDay
+            assignedUsers(first: 5) { nodes { id } pageInfo { hasNextPage } }
+            property { address { street1 street2 city province postalCode } }
+          }
+        }
+      }
+    }`;
+
+  /** Scheduled request assessments starting in [from, to), shaped like readVisits rows. */
+  async function readAssessments(from, to, { fresh = false } = {}) {
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) throw new Error("A valid Jobber assessment lookup interval is required.");
+    const binding = await accountIdentityRevision();
+    if (!appConfigured || !binding) throw new JobberNotConnected();
+    const key = `jobber:assessments:v1:${binding}:${cfg.version}`;
+    let all = fresh ? null : await store.kvGet(key);
+    if (!all) {
+      all = [];
+      let cursor = null, complete = false;
+      for (let page = 0; page < 40; page++) {
+        const data = await gql(ASSESSMENTS, { cursor });
+        if (!Array.isArray(data?.requests?.nodes) || typeof data.requests.pageInfo?.hasNextPage !== "boolean") throw new Error("Jobber assessments could not be fully verified.");
+        for (const r of data.requests.nodes) {
+          const a = r?.assessment;
+          if (!a || a.startAt == null) continue; // no assessment, or not scheduled yet
+          if (typeof a.id !== "string" || !a.id.trim()) throw new Error("Jobber returned an invalid assessment ID. Office review is required.");
+          const start = Date.parse(a.startAt);
+          const end = a.endAt ? Date.parse(a.endAt) : a.allDay ? start + 86_400_000 : start + 3_600_000;
+          if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("Jobber returned an invalid assessment time range. Office review is required.");
+          if (!Array.isArray(a.assignedUsers?.nodes) || typeof a.assignedUsers.pageInfo?.hasNextPage !== "boolean" || a.assignedUsers.pageInfo.hasNextPage) throw new Error("Jobber assessment assignment list is incomplete. Office review is required.");
+          if (a.assignedUsers.nodes.some(u => typeof u?.id !== "string" || !u.id)) throw new Error("Jobber assessment assignment could not be verified.");
+          all.push({ id: a.id, title: a.title || "", start, end, allDay: Boolean(a.allDay), jobberUserIds: a.assignedUsers.nodes.map((u) => u.id), address: addressLine(a.property?.address) });
+        }
+        if (!data.requests.pageInfo.hasNextPage) { complete = true; break; }
+        const next = data.requests.pageInfo.endCursor;
+        if (!next || next === cursor) throw new Error("Jobber assessment pagination could not be completed.");
+        cursor = next;
+      }
+      if (!complete) throw new Error("Jobber assessments exceed the verification limit. Office review is required.");
+      if (await accountIdentityRevision() === binding) await store.kvSet(key, all, 60);
+    }
+    return all.filter((a) => a.start >= from && a.start < to);
+  }
+
   async function listUsers() {
     const users = [];
     let cursor = null;
@@ -498,6 +552,7 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     disconnect,
     gql,
     readVisits,
+    readAssessments,
     listUsers,
     verifyAssignment,
     verifyScheduledVisit,

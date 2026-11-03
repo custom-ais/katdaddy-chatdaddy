@@ -123,7 +123,7 @@ function AirflowGauge({ a }: { a: { score: number; level: string; headline: stri
           {a.factors.map((f) => <li key={f} className="text-[11px] font-bold bg-white/10 text-sky-50 rounded-full px-2.5 py-1">{f}</li>)}
         </ul>
       ) : null}
-      <p className="text-xs text-sky-100/80 mt-3 leading-relaxed">Estimated from your answers. Your technician measures real airflow before and after.</p>
+      <p className="text-xs text-sky-100/80 mt-3 leading-relaxed">Estimated from your answers.</p>
     </div>
   );
 }
@@ -148,16 +148,22 @@ function SavingsTile({ s }: { s: { hoursPerWeek: number; dollarsPerYear: number 
   );
 }
 
-/** One selectable upsell option. */
-function Tile({ on, onClick, disabled, children, accent, label }: { on: boolean; onClick: () => void; disabled?: boolean; children: React.ReactNode; accent?: boolean; label: string }) {
+/**
+ * One optional add-on. It has its own Add / Remove button and never looks like a checkbox, so it
+ * can't be mistaken for the booking confirmation below it.
+ */
+function Tile({ on, onClick, disabled, children, label, note }: { on: boolean; onClick: () => void; disabled?: boolean; children: React.ReactNode; label: string; note?: string }) {
   return (
-    <button type="button" role="checkbox" aria-checked={on} aria-label={label} disabled={disabled} onClick={onClick}
-      className={`w-full text-left rounded-2xl border-2 p-4 transition-colors disabled:opacity-60 ${on ? 'border-orange-500 bg-orange-50/60' : accent ? 'border-orange-200 bg-white hover:border-orange-300' : 'border-slate-200 bg-white hover:border-slate-300'}`}>
-      <div className="flex items-start gap-3">
-        <span className={`mt-0.5 size-5 shrink-0 rounded-md border-2 flex items-center justify-center ${on ? 'bg-orange-500 border-orange-500 text-white' : 'border-slate-300 bg-white'}`} aria-hidden="true">{on && <Check size={14} strokeWidth={3} />}</span>
-        <div className="min-w-0 flex-1">{children}</div>
+    <div className={`rounded-xl border p-3.5 transition-colors ${on ? 'border-emerald-300 bg-emerald-50/70' : 'border-slate-200 bg-white'} ${disabled ? 'opacity-70' : ''}`}>
+      {children}
+      <div className="mt-3 flex items-center justify-end gap-3">
+        {note && <span className="text-xs font-bold text-emerald-700 mr-auto">{note}</span>}
+        <button type="button" aria-pressed={on} aria-label={on ? `Remove ${label}` : `Add ${label}`} disabled={disabled} onClick={onClick}
+          className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-extrabold border transition-colors disabled:cursor-not-allowed ${on ? 'bg-emerald-600 border-emerald-600 text-white hover:bg-emerald-700' : 'bg-white border-slate-400 text-slate-800 hover:border-slate-600 hover:bg-slate-50'}`}>
+          {on ? <><Check size={15} strokeWidth={3} />Added · Remove</> : <><Plus size={15} strokeWidth={3} />Add</>}
+        </button>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -177,18 +183,16 @@ function UpsellOffer({ upsell, onDone, live }: { upsell: any; onDone?: (sel: Ext
   const extra = (sel.ultimate && up ? up.extraCents : 0) + (dfOn ? df.cents : 0) + (sel.fogging && fog ? fog.cents : 0) - deal;
   const any = sel.ultimate || dfOn || sel.fogging;
   return (
-    <div className={live ? 'mt-4' : ''}>
-    <Card className={live ? '!p-0 !shadow-none !border-0 !bg-transparent' : '!p-4 sm:!p-5'}>
-      <p className="text-xs font-extrabold uppercase tracking-wide text-orange-600">Optional add-ons</p>
-      <h3 className="font-extrabold text-slate-900 text-lg mt-0.5">{live ? 'Add to your visit before you book' : 'Upgrade your visit'}</h3>
-      {live && <p className="text-sm text-slate-500 mt-0.5">Tap to add or remove. Your total above updates right away.</p>}
+    <div className={live ? 'mt-6' : ''}>
+    <Card className={live ? '!p-4 !shadow-none !border-2 !border-dashed !border-slate-300 !bg-slate-50/70 !rounded-2xl' : '!p-4 sm:!p-5'}>
+      <section aria-labelledby="bob-addons-title">
+      {!live && <p className="text-xs font-extrabold uppercase tracking-wide text-slate-500">Optional add-ons</p>}
+      <h3 id="bob-addons-title" className="font-extrabold text-slate-900 text-lg">{live ? 'Optional add-ons' : 'Upgrade your visit'}</h3>
+      {live && <p className="text-sm text-slate-600 mt-0.5">Not included unless you tap Add. Your visit is booked the same without them, and your total updates right away.</p>}
       <div className={`mt-3 space-y-2.5 ${live?.busy ? 'opacity-70 pointer-events-none' : ''}`} aria-busy={live?.busy || undefined}>
         {df && (
-          <Tile on={dfOn} onClick={() => flip('dryerflex')} disabled={sel.ultimate} accent label={`DryerFlex hose upgrade, ${money(df.cents)}${df.wasCents ? `, was ${money(df.wasCents)}` : ''}${sel.ultimate ? ', included with Ultimate' : ''}`}>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[11px] font-extrabold uppercase tracking-wide bg-orange-500 text-white rounded-full px-2.5 py-0.5">Online booking special</span>
-              {sel.ultimate && <span className="text-[11px] font-bold text-emerald-700">Included with Ultimate</span>}
-            </div>
+          <Tile on={dfOn} onClick={() => flip('dryerflex')} disabled={sel.ultimate} note={sel.ultimate ? 'Included with Ultimate' : undefined} label={`DryerFlex hose upgrade, ${money(df.cents)}${df.wasCents ? `, was ${money(df.wasCents)}` : ''}`}>
+            <span className="inline-block text-[11px] font-extrabold uppercase tracking-wide bg-amber-100 text-amber-900 rounded-full px-2.5 py-0.5">Online booking special</span>
             <div className="mt-1.5 flex items-start justify-between gap-3">
               <p className="font-extrabold text-slate-900 flex items-center gap-1.5"><Wind size={17} className="text-orange-500 shrink-0" />DryerFlex hose upgrade</p>
               <p className="shrink-0 text-right leading-none">{df.wasCents ? <span className="block text-xs font-bold text-slate-400 line-through">{money(df.wasCents)}</span> : null}<span className="font-display text-2xl font-extrabold text-slate-900">{money(df.cents)}</span></p>
@@ -227,13 +231,16 @@ function UpsellOffer({ upsell, onDone, live }: { upsell: any; onDone?: (sel: Ext
         )}
       </div>
       {live ? (
-        any ? <p className="mt-3 text-sm font-bold text-emerald-700 flex items-center gap-1.5"><CheckCircle size={16} />Added: +{money(extra)} to your visit</p> : null
+        <p role="status" className={`mt-3 text-sm font-bold flex items-center gap-1.5 ${any ? 'text-emerald-700' : 'text-slate-500'}`}>
+          {any ? <><CheckCircle size={16} />Add-ons in your total: +{money(extra)}</> : 'No add-ons added.'}
+        </p>
       ) : (
         <div className="mt-4 flex flex-col sm:flex-row gap-2">
           <button type="button" disabled={!any} onClick={() => onDone?.(sel)} className="flex-1 py-3 rounded-xl font-extrabold text-sm bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-40">{any ? `Add to my visit · +${money(extra)}` : 'Choose an upgrade'}</button>
           <button type="button" onClick={() => onDone?.({ dryerflex: false, fogging: false, ultimate: false })} className="sm:w-40 py-3 rounded-xl font-extrabold text-sm bg-slate-100 hover:bg-slate-200 text-slate-700">No thanks</button>
         </div>
       )}
+      </section>
     </Card>
     </div>
   );
@@ -677,7 +684,18 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
           </p>
         )}
         {session?.upsell && seconds > 0 && <UpsellOffer upsell={session.upsell} live={{ value: extras, onChange: (v) => void changeExtras(v), busy: extrasBusy }} />}
-        <ConfirmCheck checked={approved} disabled={seconds <= 0 || busy || extrasBusy} onChange={setApproved}>The service, price, address, and arrival window are correct.</ConfirmCheck>
+        {/* With add-ons in between, the summary has scrolled away: repeat exactly what is being booked next to the confirm box. */}
+        {session?.upsell && seconds > 0 && <section aria-labelledby="bob-confirm-title" className="mt-6 pt-5 border-t-2 border-slate-200">
+          <h4 id="bob-confirm-title" className="text-xs font-extrabold uppercase tracking-wide text-slate-500">You're booking</h4>
+          <div className="mt-2 rounded-2xl bg-white border-2 border-slate-800 p-4">
+            <div className="font-black text-slate-900">{w.day} · {w.time}</div>
+            <ul className="mt-1.5 text-sm text-slate-700 space-y-0.5">
+              {hold.quote.lineItems.map((l: any) => <li key={l.id || l.name} className="flex justify-between gap-4"><span>{l.name}</span><span className="font-bold">{money(l.cents)}</span></li>)}
+            </ul>
+            <div className="mt-2 pt-2 border-t border-slate-200 flex justify-between gap-4 font-black text-slate-900"><span>Total</span><span>{money(hold.quote.totalCents)}</span></div>
+          </div>
+        </section>}
+        <ConfirmCheck checked={approved} disabled={seconds <= 0 || busy || extrasBusy} onChange={setApproved}>The service, price, address, and arrival window above are correct.</ConfirmCheck>
         {error && <div role="alert" className="mt-3 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">{error}</div>}
         <button
           className={`relative overflow-hidden w-full mt-5 font-extrabold py-4 rounded-2xl flex justify-center items-center gap-2 text-base transition-colors ${
