@@ -35,8 +35,9 @@ import {
 } from "../shared/domain.mjs";
 import { initialSession, WELCOME, detectSafety, turn } from "../shared/conversation.mjs";
 import { territoryFor, WEST_VALLEY_ZIPS } from "../shared/territory.mjs";
+import { PACKAGES } from "../shared/catalog.mjs";
 import { chatTurn } from "./chat.mjs";
-import { confirmationEmail, confirmationSms, approvalRequestText } from "./messages.mjs";
+import { confirmationEmail, confirmationSms, approvalRequestText, afterHoursRequestSms, afterHoursRequestEmail } from "./messages.mjs";
 
 const digest = (v) => createHash("sha256").update(String(v || "")).digest("hex");
 const secret = () => randomBytes(32).toString("base64url");
@@ -133,6 +134,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
   const verificationOn = (c) => useTwilioVerify || c.requirePhoneVerification !== false;
   const useTwilioSms = env.BOOKING_SMS_PROVIDER === 'twilio';
   const ownerAlertsOnly = env.SMS_OWNER_ALERTS_ONLY === 'true';
+  // After-hours emergency texts to the account admin stay off until the Twilio campaign and the SMS
+  // terms page cover them; the admin's consent must also be on the current (v3) terms.
+  const emergencyTextsOn = env.SMS_EMERGENCY_REQUESTS === 'true';
   const useSendGrid = env.BOOKING_EMAIL_PROVIDER === 'sendgrid';
   const enabled = (c, name) => c.integrations?.[name] !== false;
   const emailReady = (c) => enabled(c, 'email') && useSendGrid && Boolean(sendgrid?.configured);
@@ -503,6 +507,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       slot.nearestJobMin != null ? `Nearest job that day ~${slot.nearestJobMin} min away.` : "",
       appt.approval ? `Approved by ${appt.approval.by} (${appt.approval.id}).` : "",
       appt.overflow ? "5 PM overflow visit." : "",
+      appt.afterHours ? "AFTER-HOURS EMERGENCY VISIT (on-call technician). The after-hours premium is on the invoice." : "",
       appt.travelZone ? `Just outside the service area (ZIP ${appt.zip}); the customer accepted a travel charge${appt.travelFeeCents ? ` of $${(appt.travelFeeCents / 100).toFixed(2)}` : " (amount not set in BOB; confirm with the customer)"}.` : "",
       `Phone ${appt.phoneVerified ? "verified by text code" : "not verified"}. Service texts: ${appt.smsConsent ? "consented" : "no consent"}.`,
     ].filter(Boolean).join("\n");
@@ -557,6 +562,13 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
   /** The quote for a conversation: route + package + home details + add-ons + travel fee. */
   const quoteFor = (data, c) =>
     bookingQuote(data.route, c, { package: data.package, property: data.property, addOns: data.addOns, travelFeeCents: data.travelFeeCents });
+  /** The same quote with the on-call premium; null when after-hours service is off in the price list. */
+  const afterHoursQuote = (data, c) => {
+    const fee = (c.services || []).find((x) => x.family === "addon" && x.variant === "afterhours" && x.active !== false);
+    if (!fee || !["cleaning", "bundle"].includes(data.route) || !data.package) return null;
+    const q = bookingQuote(data.route, c, { package: data.package, property: data.property, addOns: { ...(data.addOns || {}), afterHours: true }, travelFeeCents: data.travelFeeCents });
+    return q.lineItems.some((l) => l.id === fee.id) ? q : null;
+  };
   const slotOptions = (data, c, q) => ({
     durationMins: q.durationMins,
     leadHours: q.package === "emergency" ? c.emergencyLeadHours : c.leadHours,
@@ -630,8 +642,47 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     return out;
   }
 
+  /**
+   * An after-hours request goes to the client's account admin: a text to the owner alert number
+   * (only with consent on the current terms and SMS_EMERGENCY_REQUESTS on) and an email to the
+   * approver, or the office if no approver email is set.
+   */
+  async function notifyAfterHours(a, c, origin = publicOrigin) {
+    const out = { sms: "skipped", email: "skipped" };
+    const link = `${origin || ""}/admin?approval=${encodeURIComponent(a.id)}`;
+    const phone = c.bookingOwnerSmsPhone;
+    if (!emergencyTextsOn) out.smsReason = "emergency_texts_off";
+    else if (c.bookingOwnerSmsEnabled !== true || !phone) out.smsReason = "owner_alerts_off";
+    else if (!smsReady(c)) out.smsReason = "sms_not_configured";
+    else if (!(await ownerConsent.allows(phone, "after_hours_emergency_requests"))) out.smsReason = "owner_consent_required";
+    else {
+      const beforeSend = async () => {
+        const latest = await store.config();
+        if (latest.bookingOwnerSmsEnabled !== true || !smsReady(latest) || normalizePhone(latest.bookingOwnerSmsPhone) !== normalizePhone(phone) || !(await ownerConsent.allows(phone, "after_hours_emergency_requests"))) throw new Error("Owner SMS consent is revoked or does not match this recipient.");
+      };
+      out.sms = await sendSms(null, normalizePhone(phone), afterHoursRequestSms(a, link), beforeSend, "owner").then(async (response) => {
+        out.smsMessageId = response?.messageId || response?.id || null;
+        await store.log("notification.accepted", { approvalId: a.id, channel: "sms", provider: "Twilio", recipient: "account admin", messageId: out.smsMessageId, delivery: "not_confirmed" }, { sessionId: a.session?.slice(0, 16) || "" }).catch(() => {});
+        return "sent";
+      }, async (error) => {
+        out.error = sanitizeDiagnostic(error.message).slice(0, 200);
+        await store.log("notification.failed", { approvalId: a.id, channel: "sms", provider: "Twilio", error: out.error }, { sessionId: a.session?.slice(0, 16) || "", level: "error" }).catch(() => {});
+        return "failed";
+      });
+    }
+    if (out.smsReason) await store.log("notification.skipped", { approvalId: a.id, channel: "sms", reason: out.smsReason }, { sessionId: a.session?.slice(0, 16) || "" }).catch(() => {});
+    const to = c.approver?.email || c.email || "";
+    if (to && emailReady(c)) {
+      try { applyEmailResult(out, await deliverEmail("after_hours_request", a.id, to, afterHoursRequestEmail(a, link))); }
+      catch { out.email = "failed_or_uncertain"; out.emailDelivery = "not_confirmed"; }
+    } else out.emailReason = to ? "email_not_configured" : "no_recipient";
+    if (out.sms !== "sent" && !["accepted", "sent"].includes(out.email)) out.reason = "not_configured";
+    return out;
+  }
+
   const publicApproval = (a, c) => ({
     id: a.id,
+    kind: a.kind || "service",
     status: a.status,
     expiresAt: a.expiresAt,
     service: a.service,
@@ -654,9 +705,12 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
    * Create the appointment: fresh schedule check, Jobber client/job/visit, then confirmed.
    * Returns { appt, pending } — pending means Jobber's result needs the office (never "confirmed").
    */
-  async function commitBooking({ token, data, hold, c, idem, approval = null }) {
+  async function commitBooking({ token, data, hold, c, idem, approval = null, afterHours = null }) {
     c = await store.config();
-    const q = quoteFor(data, c);
+    // afterHours: { slot } for an on-call visit the office accepted at a time it chose. It skips the
+    // regular schedule check (it's outside regular hours by design) and carries the premium.
+    const q = afterHours ? afterHoursQuote(data, c) : quoteFor(data, c);
+    if (!q) fail(409, "After-hours service is no longer offered. Please choose a regular time.");
     if (!phoneOk(data, c)) fail(409, 'Verification expired or contact details changed. Verify again before booking.');
     if (!sameQuote(q, hold.quote)) fail(409, "Service details changed. Please review a new quote and time.");
     const errors = validateContact(data.contact);
@@ -671,11 +725,13 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         if (!currentArea.ok) fail(409, "We could not reverify the current travel and service-area rules. Please ask the office to review this appointment.");
         if (currentArea.travelFeeCents !== q.travelFeeCents) fail(409, "Travel details changed. Please review a fresh quote.");
       }
-      const slot = await scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, q), location: data.location, now: clock(), iso: new Date(hold.start).toISOString(), preferTech: hold.tech, excludeSession: token, fresh: true });
+      const slot = afterHours ? afterHours.slot : await scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, q), location: data.location, now: clock(), iso: new Date(hold.start).toISOString(), preferTech: hold.tech, excludeSession: token, fresh: true });
       if (!slot) fail(409, "That opening changed. Please select another time.", { code: "SLOT_GONE" });
-      requireAllowedSlot(q, slot, c);
-      if (approval && !needsApproval(q, slot, c)) fail(409, 'This request needs office scheduling; its approval is no longer applicable.');
-      if (needsApproval(q, slot, c) && !approval) fail(409, 'Emergency same-day service needs approval first.');
+      if (!afterHours) {
+        requireAllowedSlot(q, slot, c);
+        if (approval && !needsApproval(q, slot, c)) fail(409, 'This request needs office scheduling; its approval is no longer applicable.');
+        if (needsApproval(q, slot, c) && !approval) fail(409, 'Emergency same-day service needs approval first.');
+      }
       const contact = data.contact;
       appt = {
         id: newId("DVS"), customerName: contact.name, email: contact.email, phone: contact.phone,
@@ -686,7 +742,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         route: data.route, status: "confirmed", scheduledAt: new Date(slot.start).toISOString(), durationMins: q.durationMins,
         technicianId: slot.technicianId, technicianName: slot.technicianName, notes: contact.notes,
         concerns: [...(data.concerns || []), ...(data.notes || [])], property: data.property, smsConsent: contact.smsConsent,
-        assessmentAccepted: data.bundleAccepted, urgency: q.package === "emergency" ? "high" : "normal", source: "ai_bot",
+        assessmentAccepted: data.bundleAccepted, urgency: q.package === "emergency" || afterHours ? "high" : "normal", source: "ai_bot", afterHours: Boolean(afterHours),
         createdAt: new Date(clock()).toISOString(), revision: 1, scheduleSource: c.scheduleSource, jobber: null,
         phoneVerified: Boolean(verifyService.verified(data) && data.verifiedContact?.channel === 'sms'), overflow: Boolean(slot.overflow), sameDay: Boolean(slot.sameDay), travelZone: Boolean(data.travelZone),
         routeScore: slot.routeScore ?? null,
@@ -1122,6 +1178,51 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         await store.audit("approval.requested", a.id);
         return send(201, { approval: publicApproval(a, c) });
       }
+      // An after-hours (on-call) request: no regular time to hold. The office picks the arrival time
+      // when it accepts; until then the customer waits in the chat.
+      // The summary the customer approves before the request goes out: the service, the premium and the address.
+      if (method === "GET" && pathname === "/api/approvals/after-hours") {
+        const { data } = await session(req);
+        if (!data.afterHours || data.stage !== "slots" || !data.contact) fail(409, "Choose after-hours service and enter your details first.");
+        const c = await store.config();
+        const q = afterHoursQuote(data, c);
+        if (!q) fail(409, "After-hours service isn't available online right now. Please choose a regular time or send the team a request.");
+        return send(200, { quote: { name: q.name, lineItems: q.lineItems.map((l) => ({ name: l.name, cents: l.cents })), totalCents: q.totalCents, durationMins: q.durationMins }, address: `${data.contact.address}, ${data.contact.city}, AZ ${data.contact.zip}`, minutes: APPROVAL_WINDOW / 60_000 });
+      }
+      if (method === "POST" && pathname === "/api/approvals/after-hours") {
+        await rate(req, "approvals", 10, 600_000);
+        const { token, data } = await session(req), body = await readBody(req);
+        if (body.approved !== true) fail(400, "Approve the service, the after-hours premium and your address first.");
+        if (data.approvalId) {
+          const current = await store.approval(data.approvalId);
+          if (current?.status === "pending" && clock() <= current.expiresAt) return send(200, { approval: publicApproval(current, await store.config()) });
+        }
+        if (!data.afterHours) fail(409, "Choose after-hours service first.");
+        const c = await store.config();
+        requireReadyToBook(data, c);
+        if (!(await bookingOpen(c))) fail(409, "Online confirmation is paused. Please send the team a request.");
+        const q = afterHoursQuote(data, c);
+        if (!q) fail(409, "After-hours service isn't available online right now. Please choose a regular time or send the team a request.");
+        const a = {
+          id: newId("APR"), session: token, status: "pending", holdId: null, kind: "after_hours",
+          reason: "After-hours emergency visit: the on-call technician sets the arrival time",
+          service: `${q.name} + after-hours`, packageId: q.package, totalCents: q.totalCents, lineItems: q.lineItems, quote: q,
+          scheduledAt: null, durationMins: q.durationMins, technicianName: "",
+          customer: { name: data.contact.name, phone: data.contact.phone, email: data.contact.email, address: data.contact.address, city: data.contact.city, zip: data.contact.zip },
+          concerns: [...(data.concerns || []), ...(data.notes || [])], property: data.property || {}, notes: data.contact.notes || "",
+          requestedAt: clock(), expiresAt: clock() + APPROVAL_WINDOW, decision: null, notified: null,
+        };
+        await store.insertApproval(a);
+        data.approvalId = a.id;
+        data.stage = "approval";
+        await store.saveSession(token, data);
+        a.notified = await notifyAfterHours(a, c, publicOrigin || (req.headers.host ? `${String(req.headers["x-forwarded-proto"] || "https").split(",")[0]}://${req.headers.host}` : ""));
+        await store.updateApproval(a);
+        await store.audit("approval.requested", a.id);
+        await record(req, "approval.after_hours_requested", { approvalId: a.id, service: a.service, sms: a.notified.sms, email: a.notified.email });
+        return send(201, { approval: publicApproval(a, c) });
+      }
+
       // The customer changed their mind while a same-day request waits: cancel it, free the held time,
       // and go back to the choices so they can book a regular package instead.
       if (method === "POST" && pathname === "/api/approvals/current/cancel") {
@@ -1132,6 +1233,24 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         if (["booked", "action_needed"].includes(a.status)) fail(409, "This visit was already approved and booked.");
         const c = await store.config();
         let result;
+        if (a.kind === "after_hours") {
+          // Cancelled, declined or timed out: back to regular openings for the same service.
+          if (a.status === "pending") {
+            a.status = "cancelled";
+            a.cancelledAt = clock();
+            await store.updateApproval(a);
+            await store.audit("approval.cancelled", a.id);
+            await record(req, "approval.cancelled_by_customer", { approvalId: a.id, service: a.service });
+          }
+          const pkg = PACKAGES[data.package]?.label || "your service";
+          const reply = a.status === "cancelled"
+            ? `Okay, I cancelled the after-hours request. Here are our soonest regular openings for **${pkg}**.`
+            : `${a.status === "declined" ? "I'm sorry, our on-call technician can't make it tonight." : "I'm sorry, our on-call technician didn't answer in time."} Here are our soonest regular openings for **${pkg}**. Please keep the dryer off until your visit.`;
+          const next = { ...data, approvalId: null, afterHours: false, stage: "slots" };
+          next.history = [...(next.history || []), { role: "assistant", text: reply }].slice(-40);
+          await store.saveSession(token, next);
+          return send(200, { reply, options: [], session: next, action: "slots", via: "rules" });
+        }
         if (a.status === "pending") {
           a.status = "cancelled";
           a.cancelledAt = clock();
@@ -1566,6 +1685,11 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           if (b.decision === "decline") {
             a.status = "declined";
             await store.updateApproval(a);
+            if (a.kind === "after_hours") {
+              // The customer's chat sees the answer and offers regular openings.
+              await store.audit("approval.declined", a.id);
+              return send(200, await snapshot());
+            }
             await store.releaseHold(a.holdId);
             const s = await store.loadSession(a.session);
             if (s) await store.saveSession(a.session, { ...s, stage: "review" });
@@ -1573,6 +1697,36 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
             return send(200, await snapshot());
           }
           const data = await store.loadSession(a.session);
+          if (a.kind === "after_hours") {
+            // The on-call technician's arrival time and who is going; the office chose both.
+            const arrival = typeof b.arrivalAt === "number" ? b.arrivalAt : Date.parse(String(b.arrivalAt || ""));
+            if (!Number.isFinite(arrival) || arrival < clock() - 10 * 60_000 || arrival > clock() + 18 * 3600_000) fail(400, "Choose an arrival time in the next 18 hours.");
+            const techs = (await store.technicians()).filter((t) => t.active !== false);
+            // Office users without schedule access can't see the list; with one technician on file, that's who goes.
+            const tech = b.technicianId ? techs.find((t) => t.id === b.technicianId) : techs.length === 1 ? techs[0] : null;
+            if (!tech) fail(400, "Choose the technician who is going.");
+            if (jobberMode(c) && !tech.jobberUserId) fail(400, `${tech.name} isn't linked to a Jobber user yet. Link them under Technicians or choose someone else.`);
+            if (!data || data.approvalId !== a.id) {
+              a.status = "failed";
+              a.failure = "The customer's conversation expired.";
+            } else {
+              const slot = { start: arrival, technicianId: tech.id, technicianName: tech.name, jobberUserId: tech.jobberUserId || null, overflow: false, sameDay: true, routeScore: null };
+              try {
+                const { appt, pending } = await commitBooking({ token: a.session, data, hold: { start: arrival, quote: a.quote, tech: tech.id }, c, idem: `approval-${a.id}`, approval: a, afterHours: { slot } });
+                a.status = pending ? "action_needed" : "booked";
+                a.appointmentId = appt.id;
+                a.scheduledAt = appt.scheduledAt;
+                a.technicianName = tech.name;
+              } catch (error) {
+                if (!(error instanceof HttpError)) throw error;
+                a.status = "failed";
+                a.failure = error.message;
+              }
+            }
+            await store.updateApproval(a);
+            await store.audit(`approval.${a.status}`, a.id);
+            return send(200, { ...(await snapshot()), result: { status: a.status, failure: a.failure || null, appointmentId: a.appointmentId || null } });
+          }
           const hold = await store.holdById(a.holdId);
           if (!data || !hold || hold.expires < clock()) {
             a.status = "failed";

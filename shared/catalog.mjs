@@ -146,5 +146,7 @@ export function addOnLines(services, { family, route, property = {}, addOns = {}
     }
   }
   if (addOns.toolRetrieval) add("tool");
+  // The on-call premium: set only by the server, for an after-hours visit the office accepted.
+  if (addOns.afterHours) add("afterhours");
   return lines;
 }

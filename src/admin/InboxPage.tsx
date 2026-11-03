@@ -20,6 +20,25 @@ function minutesLeft(expiresAt: number) {
   return m <= 0 ? 'expiring now' : `${m} min left`;
 }
 
+const TZ = 'America/Phoenix';
+/** A time of day ("19:30") as the next such moment in Arizona time (Arizona has no daylight saving). */
+function nextArizonaTime(hhmm: string, now = Date.now()) {
+  const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  const at = Date.parse(`${ymd}T${hhmm}:00-07:00`);
+  return Number.isFinite(at) && at < now - 10 * 60_000 ? at + 24 * 3600_000 : at;
+}
+/** About an hour from now, on the quarter hour, as "HH:MM" in Arizona time. */
+function defaultArrival(now = Date.now()) {
+  const t = Math.ceil((now + 60 * 60_000) / (15 * 60_000)) * 15 * 60_000;
+  return new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(t);
+}
+const SMS_REASON: Record<string, string> = {
+  emergency_texts_off: 'after-hours texts are not turned on yet',
+  owner_alerts_off: 'turn on Owner booking alerts in Settings',
+  sms_not_configured: 'texting is not configured',
+  owner_consent_required: 'the owner alert number needs to agree to the current text terms in Settings',
+};
+
 function ApprovalModal({ approval: a, onClose }: { approval: any; onClose: () => void }) {
   const { data, mutate, can } = useDashboard();
   const canManage = can('inbox.view') && can('inbox.manage'), canViewFinance = can('finance.view');
@@ -28,11 +47,17 @@ function ApprovalModal({ approval: a, onClose }: { approval: any; onClose: () =>
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const pending = a.status === 'pending';
+  const afterHours = a.kind === 'after_hours';
+  const technicians = data.technicians || [];
+  const [arrival, setArrival] = useState(() => defaultArrival());
+  const [techId, setTechId] = useState(() => technicians[0]?.id || '');
+  const arrivalAt = afterHours ? nextArizonaTime(arrival) : null;
   const decide = async (decision: 'approve' | 'decline') => {
     if (!can('inbox.view') || !can('inbox.manage')) return;
     setBusy(true); setError('');
     try {
-      const r = await mutate(`/api/admin/approvals/${encodeURIComponent(a.id)}`, { decision, approverName: name, note }, 'POST', '');
+      const extra = afterHours && decision === 'approve' ? { arrivalAt, technicianId: techId } : {};
+      const r = await mutate(`/api/admin/approvals/${encodeURIComponent(a.id)}`, { decision, approverName: name, note, ...extra }, 'POST', '');
       const status = r?.result?.status;
       if (decision === 'decline') onClose();
       else if (status === 'booked' || status === 'action_needed') onClose();
@@ -44,12 +69,12 @@ function ApprovalModal({ approval: a, onClose }: { approval: any; onClose: () =>
       badge={<div className="bg-amber-500 text-white p-2 rounded-xl"><ShieldCheck size={20} /></div>}
       footer={pending && canManage ? (
         <>
-          <span className="text-xs font-bold text-amber-800 flex items-center gap-1.5"><Clock size={14} />{minutesLeft(a.expiresAt)} — the time is held until then</span>
+          <span className="text-xs font-bold text-amber-800 flex items-center gap-1.5"><Clock size={14} />{minutesLeft(a.expiresAt)} — {afterHours ? 'the customer is waiting in the chat' : 'the time is held until then'}</span>
           <div className="space-y-2">
             <p className="text-xs text-slate-600 max-w-md">Completing this booking may send configured automatic customer and owner notifications. Existing consent and sending holds still apply.</p>
             <div className="flex gap-2.5">
-              <button className={secondaryButton} disabled={busy} onClick={() => decide('decline')}>Decline</button>
-              <button className={primaryButton} disabled={busy || name.trim().length < 2} onClick={() => decide('approve')}>{busy ? 'Booking…' : 'Approve and book'}</button>
+              <button className={secondaryButton} disabled={busy} onClick={() => decide('decline')}>{afterHours ? "Can't make it" : 'Decline'}</button>
+              <button className={primaryButton} disabled={busy || name.trim().length < 2 || (afterHours && (!arrival || !Number.isFinite(arrivalAt) || (!techId && technicians.length > 0)))} onClick={() => decide('approve')}>{busy ? 'Booking…' : afterHours ? 'Accept and book' : 'Approve and book'}</button>
             </div>
           </div>
         </>
@@ -58,8 +83,13 @@ function ApprovalModal({ approval: a, onClose }: { approval: any; onClose: () =>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
         <div className="space-y-1">
           <p className="text-xs font-extrabold text-slate-400">Arrival</p>
-          <p className="font-bold text-slate-900">{azDay(a.scheduledAt)}, {azTime(a.scheduledAt)}</p>
-          <p className="text-slate-600">{a.durationMins} minutes · {a.technicianName}</p>
+          {a.scheduledAt ? <>
+            <p className="font-bold text-slate-900">{azDay(a.scheduledAt)}, {azTime(a.scheduledAt)}</p>
+            <p className="text-slate-600">{a.durationMins} minutes · {a.technicianName}</p>
+          </> : <>
+            <p className="font-bold text-slate-900">After hours · you set the time</p>
+            <p className="text-slate-600">{a.durationMins} minutes · on-call technician</p>
+          </>}
         </div>
         <div className="space-y-1">
           <p className="text-xs font-extrabold text-slate-400">Customer</p>
@@ -74,15 +104,29 @@ function ApprovalModal({ approval: a, onClose }: { approval: any; onClose: () =>
       </div>
       {a.concerns?.length > 0 && <p className="text-xs text-slate-600"><b>Customer said:</b> {a.concerns.join(' · ')}</p>}
       {a.notes && <p className="text-xs text-slate-600"><b>Notes:</b> {a.notes}</p>}
-      {a.notified && <p className="text-[11px] text-slate-400">Approver text {a.notified.sms} · email {a.notified.email}{a.notified.reason === 'not_configured' ? ' (add the approver phone and configure Twilio in Settings)' : ''}</p>}
+      {a.notified && (afterHours
+        ? <p className="text-[11px] text-slate-400">Account admin text {a.notified.sms}{a.notified.smsReason && SMS_REASON[a.notified.smsReason] ? ` (${SMS_REASON[a.notified.smsReason]})` : ''} · email {a.notified.email}</p>
+        : <p className="text-[11px] text-slate-400">Approver text {a.notified.sms} · email {a.notified.email}{a.notified.reason === 'not_configured' ? ' (add the approver phone and configure Twilio in Settings)' : ''}</p>)}
       {!canManage && <p className="text-sm text-slate-600">You have view-only access to the inbox.</p>}
       {pending && canManage ? (
         <div className="space-y-3 pt-2 border-t border-slate-100">
           <Field label="Your name" hint={data.config.approver?.name ? `The named approver is ${data.config.approver.name}. Your name is saved with the decision.` : 'Saved with the decision.'}>
             <input className={inputClass} value={name} disabled={namedUser || busy} onChange={(e) => setName(e.target.value)} autoComplete="name" />
           </Field>
+          {afterHours && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Field label="Arrival time (Arizona)" hint={Number.isFinite(arrivalAt) ? `${azDay(arrivalAt as number)}, ${azTime(arrivalAt as number)}` : 'Choose a time.'}>
+                <input type="time" step={900} className={inputClass} value={arrival} disabled={busy} onChange={(e) => setArrival(e.target.value)} />
+              </Field>
+              <Field label="Technician" hint={technicians.length ? 'Who is going.' : 'The on-call technician on file is used.'}>
+                <select className={inputClass} value={techId} disabled={busy || !technicians.length} onChange={(e) => setTechId(e.target.value)}>
+                  {technicians.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </Field>
+            </div>
+          )}
           <Field label="Note (optional)"><textarea rows={2} className={inputClass} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
-          <p className="text-[11px] text-slate-500">Approving books the held time right away — into Jobber when it's connected.</p>
+          <p className="text-[11px] text-slate-500">{afterHours ? "Accepting books the visit at that time with the after-hours premium — into Jobber when it's connected — and the customer sees the confirmation in the chat. If you can't make it, they're offered our regular openings." : "Approving books the held time right away — into Jobber when it's connected."}</p>
         </div>
       ) : a.decision && (
         <p className="text-sm text-slate-700 pt-2 border-t border-slate-100">{a.decision.decision === 'approve' ? 'Approved' : 'Declined'} by <b>{a.decision.by}</b> on {azDay(a.decision.at)} {azTime(a.decision.at)}{a.decision.note ? ` — ${a.decision.note}` : ''}.{a.failure ? ` ${a.failure}` : ''}{a.appointmentId ? ` Appointment ${a.appointmentId}.` : ''}</p>
@@ -156,7 +200,7 @@ export function InboxPage({ focusApproval }: { focusApproval?: string | null }) 
   return (
     <div className="space-y-6 animate-in">
       <Banner eyebrow={<><Inbox size={14} />Needs a person</>} title="Approvals and customer requests">
-        Visits that need a yes before booking (emergency service and 5 PM overflow), and customers who asked the team to follow up.
+        Visits that need a yes before booking (after-hours and same-day emergency service, and 5 PM overflow), and customers who asked the team to follow up.
       </Banner>
 
       <section className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-5 sm:p-6 space-y-4">
@@ -174,7 +218,7 @@ export function InboxPage({ focusApproval }: { focusApproval?: string | null }) 
               <button key={a.id} onClick={() => setApprovalId(a.id)} className="w-full text-left py-3.5 px-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-slate-50 rounded-xl">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2 flex-wrap"><span className="font-extrabold text-sm text-slate-900">{a.customer?.name}</span><span className="text-xs font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md">{a.service}</span><span className="text-xs font-extrabold text-orange-600">{canViewFinance ? Number.isFinite(a.totalCents) ? money(a.totalCents) : '—' : 'Restricted'}</span></div>
-                  <p className="text-xs text-slate-500 mt-0.5">{azDay(a.scheduledAt)} {azTime(a.scheduledAt)} · {a.customer?.city} · {a.reason}</p>
+                  <p className="text-xs text-slate-500 mt-0.5">{a.scheduledAt ? `${azDay(a.scheduledAt)} ${azTime(a.scheduledAt)}` : 'After hours · time not set'} · {a.customer?.city} · {a.reason}</p>
                 </div>
                 <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-black rounded-full border shrink-0 self-start sm:self-auto ${cls}`}>
                   {a.status === 'pending' ? <Clock size={12} /> : a.status === 'booked' ? <CheckCircle size={12} /> : <XCircle size={12} />}{label}{a.status === 'pending' ? ` · ${minutesLeft(a.expiresAt)}` : ''}

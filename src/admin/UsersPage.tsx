@@ -4,6 +4,7 @@ import { PERMISSIONS } from '../../shared/admin-permissions.mjs';
 import { api } from '../lib/api';
 import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Modal, Section, inputClass, primaryButton, secondaryButton } from './ui';
+import { askConfirm } from '../components/ConfirmDialog';
 
 type User = { id: string; email: string; name: string; role: string; status: string; permissions: string[]; version: number };
 type Invitation = { id: string; userId: string; email: string; name: string; kind: string; status: string; expires: number };
@@ -85,7 +86,7 @@ export function UsersPage() {
           <button type="button" className={secondaryButton} disabled={busy} onClick={() => { setEditing(user); setSelected(user.permissions); }}>Edit access</button>
           {user.status !== 'pending' && <button type="button" className={secondaryButton} disabled={busy} onClick={() => void update(user, { status: user.status === 'disabled' ? 'active' : 'disabled' })}>{user.status === 'disabled' ? 'Enable user' : 'Disable user'}</button>}
           <button type="button" className={secondaryButton} disabled={busy} onClick={() => void run(async () => showInvitation(await api(`/api/admin/users/${encodeURIComponent(user.id)}/reset-invite`, { method: 'POST', body: {} })))}>{user.status === 'pending' ? 'Replace invitation' : 'Create password reset link'}</button>
-          <button type="button" className={`${secondaryButton} text-rose-700`} disabled={busy} onClick={() => { if (confirm(`Remove access for ${user.email}? Their sessions and invitations will be revoked.`)) void update(user, { status: 'removed' }); }}>Remove access</button>
+          <button type="button" className={`${secondaryButton} text-rose-700`} disabled={busy} onClick={async () => { if (await askConfirm({ danger: true, title: `Remove access for ${user.email}?`, message: 'Their sessions and invitations will be revoked.', confirmLabel: 'Remove access' })) void update(user, { status: 'removed' }); }}>Remove access</button>
         </div>}
       </article>)}</div>
       {invitations.some(invite => invite.status === 'pending') && <div className="space-y-2"><h4 className="text-sm font-bold">Pending links</h4>{invitations.filter(invite => invite.status === 'pending').map(invite => <div key={invite.id} className="flex flex-wrap items-center justify-between gap-3 text-sm rounded-xl bg-slate-50 p-3"><p>{invite.email} · {invite.kind === 'reset' ? 'Password reset' : 'Invitation'} · expires {new Date(invite.expires).toLocaleString()}</p><button type="button" className={secondaryButton} disabled={busy} onClick={() => void run(async () => { await api(`/api/admin/invitations/${encodeURIComponent(invite.id)}/revoke`, { method: 'POST', body: {} }); setNotice('Invitation revoked.'); })}>Revoke link</button></div>)}</div>}

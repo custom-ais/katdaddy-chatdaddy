@@ -243,10 +243,10 @@ function projectRequest(row,principal) {
   return result;
 }
 function projectApproval(row,principal) {
-  const result = pick(row,['id','status','requestedAt','expiresAt','scheduledAt','durationMins','technicianName','technicianId','appointmentId']);
+  const result = pick(row,['id','kind','status','requestedAt','expiresAt','scheduledAt','durationMins','technicianName','technicianId','appointmentId']);
   result.customer = pick(row?.customer,['name','phone','email','address','city','zip']);
   result.service = finance(principal) && typeof row?.service === 'string' ? row.service : 'Service';
-  result.notified = safeNotifications(row?.notified);
+  result.notified = { ...safeNotifications(row?.notified), ...pick(row?.notified,['smsReason','reason']) };
   result.decision = pick(row?.decision,['decision','by','at']);
   if (finance(principal)) {
     Object.assign(result,pick(row,['reason','notes','failure','totalCents']));

@@ -1,9 +1,10 @@
 import { PhoneInput } from '../components/PhoneInput';
+import { askConfirm } from '../components/ConfirmDialog';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bird, Bot, Building, Calendar, Check, CheckCircle, ChevronDown, ChevronRight, Clock,
-  Download, Droplet, Flame, HelpCircle, Home, Layers, List, Loader2, MapPin, MessageCircle, Minus, MoreHorizontal, Plus, Pencil, Phone, RotateCcw,
+  Download, Droplet, Flame, HelpCircle, Home, Layers, List, Loader2, MapPin, MessageCircle, Minus, Moon, MoreHorizontal, Plus, Pencil, Phone, RotateCcw,
   Search, Send, Shield, ShieldCheck, Sparkles, Star, Thermometer, Timer, User, Wind, Wrench, X, Zap,
 } from 'lucide-react';
 import { api, ApiError, saveBlob, saveText } from '../lib/api';
@@ -761,6 +762,59 @@ const SAME_DAY_STEPS = [
   'Keep this page open. The answer will show up here.',
 ];
 
+const AFTER_HOURS_STEPS = [
+  'Sending your request to our on-call technician…',
+  'Letting the on-call technician know you’re waiting…',
+  'They’re checking whether they can get to you tonight…',
+  'Waiting for their answer…',
+  'Still working on it. Thanks for waiting.',
+  'Keep this page open. The answer will show up here.',
+];
+
+/**
+ * The after-hours request, ready to send: the service, the on-call premium, the total and the
+ * address. One tap sends it to the on-call technician (text and email to the account admin).
+ */
+function AfterHoursSend({ token, onSent, onRegular }: { token: string; onSent: (a: any) => void; onRegular: () => void }) {
+  const [info, setInfo] = useState<any>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false), [ok, setOk] = useState(false);
+  useEffect(() => {
+    let live = true;
+    api('/api/approvals/after-hours', { token }).then((r) => { if (live) setInfo(r); }, (err) => { if (live) setError((err as Error).message); });
+    return () => { live = false; };
+  }, [token]);
+  const sendIt = async () => {
+    setBusy(true); setError('');
+    try { onSent((await api('/api/approvals/after-hours', { method: 'POST', token, body: { approved: true } })).approval); }
+    catch (err) { setError((err as Error).message); setBusy(false); }
+  };
+  return (
+    <Card>
+      <h3 className="font-extrabold text-slate-800 flex items-center gap-2.5 text-lg"><Moon size={22} className="text-orange-500" />After-hours request</h3>
+      <p className="text-sm text-slate-500 mt-1">Our on-call technician sets the arrival time if they can come tonight.</p>
+      {info ? (
+        <>
+          <div className="mt-4 rounded-2xl border border-slate-200 divide-y divide-slate-100 text-sm">
+            {info.quote.lineItems.map((l: any, i: number) => <div key={i} className="flex justify-between gap-3 px-4 py-2.5"><span className="text-slate-600">{l.name}</span><span className="font-bold text-slate-800">{money(l.cents)}</span></div>)}
+            <div className="flex justify-between gap-3 px-4 py-2.5 font-black text-slate-900"><span>Total</span><span className="text-orange-600">{money(info.quote.totalCents)}</span></div>
+          </div>
+          <p className="mt-3 text-sm text-slate-600 flex gap-2"><MapPin size={16} className="text-slate-400 shrink-0 mt-0.5" />{info.address}</p>
+          <label className="mt-4 flex gap-3 items-start text-sm font-semibold text-slate-700 cursor-pointer">
+            <input type="checkbox" className="mt-0.5 size-5 accent-orange-500 shrink-0" checked={ok} onChange={(e) => setOk(e.target.checked)} />
+            <span>The service, the after-hours premium and the address are correct.</span>
+          </label>
+        </>
+      ) : !error && <div className="mt-4 flex items-center gap-2 text-sm text-slate-500"><Loader2 size={16} className="animate-spin" />Getting your total…</div>}
+      {error && <div role="alert" className="mt-3 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">{error}</div>}
+      <button className="w-full mt-5 font-extrabold py-4 rounded-2xl flex justify-center items-center gap-2 text-base bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white shadow-lg shadow-orange-500/30 disabled:opacity-60"
+        disabled={!info || !ok || busy} onClick={() => void sendIt()}>
+        {busy ? <><Loader2 className="animate-spin" size={20} />Sending…</> : <><Send size={18} />Send to our on-call technician</>}
+      </button>
+      <p className="mt-3 text-xs text-slate-400">Nothing is booked until they confirm. If they can't come{info ? ` or don't answer within ${info.minutes} minutes` : ''}, I'll show you our soonest regular openings.</p>
+      <button className="mt-2 w-full text-sm font-bold text-slate-500 hover:text-slate-800" onClick={onRegular} disabled={busy}>See regular times instead</button>
+    </Card>
+  );
+}
+
 function ApprovalWait({ token, initial, onBooked, onEnded, onCancelled }: { token: string; initial: any; onBooked: (r: any, pending: boolean) => void; onEnded: (status: string) => void; onCancelled: (r: any) => void }) {
   const [approval, setApproval] = useState<any>(initial), [error, setError] = useState(''), [confirming, setConfirming] = useState(false), [cancelling, setCancelling] = useState(false);
   const stopped = useRef(false);
@@ -790,19 +844,20 @@ function ApprovalWait({ token, initial, onBooked, onEnded, onCancelled }: { toke
       setError((err as Error).message); setConfirming(false);
     } finally { setCancelling(false); }
   };
-  const w = windowParts(approval.scheduledAt);
+  const afterHours = approval.kind === 'after_hours';
+  const w = approval.scheduledAt ? windowParts(approval.scheduledAt) : null;
   const closes = new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' }).format(approval.expiresAt);
   return (
-    <WorkingScreen title="Checking same-day availability" steps={SAME_DAY_STEPS}>
+    <WorkingScreen title={afterHours ? 'Checking with our on-call technician' : 'Checking same-day availability'} steps={afterHours ? AFTER_HOURS_STEPS : SAME_DAY_STEPS}>
       <div className="mt-4 w-full rounded-2xl bg-slate-50 border border-slate-200 p-3.5 text-left">
         <p className="text-sm text-slate-700"><b className="text-slate-900">{approval.service}</b></p>
-        <p className="text-sm text-slate-600">{w.day}, {w.time}</p>
-        <p className="text-xs text-slate-500 mt-1">Not booked yet. Reference {approval.id}. If there's no answer by {closes}, the request closes and you can book a regular visit.</p>
+        <p className="text-sm text-slate-600">{w ? `${w.day}, ${w.time}` : 'Tonight · the technician sets the arrival time'}</p>
+        <p className="text-xs text-slate-500 mt-1">Not booked yet. Reference {approval.id}. {afterHours ? `If there's no answer by ${closes}, I'll show you our soonest regular openings.` : `If there's no answer by ${closes}, the request closes and you can book a regular visit.`} Please keep the dryer off.</p>
       </div>
       {error && <p className="text-xs text-rose-600 mt-2">{error}</p>}
       {confirming ? (
         <div className="mt-3 w-full flex flex-col sm:flex-row gap-2">
-          <button className="flex-1 px-4 py-2.5 rounded-xl text-sm font-extrabold bg-slate-900 text-white disabled:opacity-60" onClick={() => void cancel()} disabled={cancelling}>{cancelling ? 'Cancelling…' : 'Yes, cancel same-day'}</button>
+          <button className="flex-1 px-4 py-2.5 rounded-xl text-sm font-extrabold bg-slate-900 text-white disabled:opacity-60" onClick={() => void cancel()} disabled={cancelling}>{cancelling ? 'Cancelling…' : afterHours ? 'Yes, see regular times' : 'Yes, cancel same-day'}</button>
           <button className="flex-1 px-4 py-2.5 rounded-xl text-sm font-extrabold bg-slate-100 text-slate-700" onClick={() => setConfirming(false)} disabled={cancelling}>Keep waiting</button>
         </div>
       ) : (
@@ -922,6 +977,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const [picked, setPicked] = useState<string[]>([]), [text, setText] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [ready, setReady] = useState(false);
   const [action, setAction] = useState(''), [receipt, setReceipt] = useState<any>(null), [pending, setPending] = useState(false), [requestId, setRequestId] = useState(''), [faqOpen, setFaqOpen] = useState(false);
   const [contactStep, setContactStep] = useState<ContactStep | null>(null), [draft, setDraft] = useState<any>({}), [verification, setVerification] = useState<any>(null), [approval, setApproval] = useState<any>(null);
+  const approvalRef = useRef<any>(null); approvalRef.current = approval;
   const scroll = useRef<HTMLDivElement>(null), busyRef = useRef(false), mounted = useRef(true);
   // Address suggestions (Google, through BOB's server) while the customer types the street address.
   const [addrItems, setAddrItems] = useState<{ id: string; main: string; secondary: string }[]>([]), [addrActive, setAddrActive] = useState(-1), [addrLoading, setAddrLoading] = useState(false);
@@ -950,7 +1006,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       setOptions(s.options || []); setMulti(false); setSuggested('');
       if (r.receipt) { setReceipt(r.receipt); setPending(r.receipt.status === 'action_needed'); }
       else if (s.stage === 'approval' && s.approvalId) {
-        try { const a = await api('/api/approvals/current', { token: r.token }); if (a.receipt) { setReceipt(a.receipt); setPending(Boolean(a.pending)); } else if (a.approval.status === 'pending') { setApproval(a.approval); setAction('approval'); } else setAction('request'); } catch {}
+        try { const a = await api('/api/approvals/current', { token: r.token }); if (a.receipt) { setReceipt(a.receipt); setPending(Boolean(a.pending)); } else if (a.approval.status === 'pending') { setApproval(a.approval); setAction('approval'); } else if (a.approval.kind === 'after_hours') { const back = await api('/api/approvals/current/cancel', { method: 'POST', token: r.token, body: {} }); setSession(back.session); setMessages((m) => [...m, { role: 'model', text: back.reply }]); setAction('slots'); } else setAction('request'); } catch {}
       } else if (s.stage === 'slots') setAction('slots');
       else if (s.stage === 'verify') {
         setAction('verify');
@@ -1009,14 +1065,15 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   /** Back to the package choices after a same-day request is cancelled or can't happen. */
   const showChoices = useCallback((r: any, lead = '') => {
     setApproval(null);
-    setAction('');
+    setAction(r.action === 'slots' ? 'slots' : ''); // an after-hours request that ended goes back to regular times
     setSession(r.session);
     setMessages((m) => [...m, ...(lead ? [{ role: 'model' as const, local: true, text: lead }] : []), { role: 'model', text: r.reply, info: r.info, ...(r.card ? { card: r.card } : {}) }]);
     setOptions(r.options || []); setMulti(false); setSuggested(r.suggested || '');
   }, []);
   const onApprovalCancelled = useCallback((r: any) => showChoices(r), [showChoices]);
   const onApprovalEnded = useCallback(async (status: string) => {
-    const lead = status === 'expired' ? "The team didn't answer in time, so the same-day request closed." : status === 'failed' ? "That time couldn't be booked after all." : '';
+    const afterHours = approvalRef.current?.kind === 'after_hours'; // its own reply explains what happened
+    const lead = afterHours ? '' : status === 'expired' ? "The team didn't answer in time, so the same-day request closed." : status === 'failed' ? "That time couldn't be booked after all." : '';
     try {
       showChoices(await api('/api/approvals/current/cancel', { method: 'POST', token, body: {} }), lead);
     } catch {
@@ -1245,8 +1302,8 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   };
   const editDetails = () => { setAction('contact'); setVerification(null); startContact(session); };
 
-  const restart = () => {
-    if ((messages.length || receipt) && !confirm('Start over? A visit you already booked stays booked.')) return;
+  const restart = async () => {
+    if ((messages.length || receipt) && !(await askConfirm({ brand: 'chat', danger: true, title: 'Start over?', message: 'This clears our conversation. A visit you already booked stays booked.', confirmLabel: 'Start over', cancelLabel: 'Keep chatting' }))) return;
     void api('/api/holds', { method: 'DELETE', token }).catch(() => {});
     setMessages([]); forget(); void initialize(true);
   };
@@ -1391,8 +1448,9 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
 
             <div className="pl-9 sm:pl-10 space-y-4">
               {!receipt && !requestId && contactStep === 'addons' && session?.upsell && !busy && <UpsellOffer upsell={session.upsell} onDone={chooseUpsell} />}
-              {!receipt && !requestId && action === 'verify' && verification && <VerifyPhone token={token} verification={verification} onVerified={(s) => { setSession(s); setVerification(null); setAction('slots'); say('model', `Thanks — your ${s.verifiedContact?.channel === 'email' ? 'email' : 'phone'} is confirmed. Here are the soonest openings for the full visit.`); }} onEdit={editDetails} onRequest={() => setAction('request')} />}
-              {!receipt && !requestId && action === 'slots' && <SlotPicker token={token} session={session} config={config} onSooner={() => void send('Do you have anything sooner?')} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); setAutoClose(!p && !preview); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
+              {!receipt && !requestId && action === 'verify' && verification && <VerifyPhone token={token} verification={verification} onVerified={(s) => { setSession(s); setVerification(null); setAction('slots'); say('model', `Thanks — your ${s.verifiedContact?.channel === 'email' ? 'email' : 'phone'} is confirmed. ${s.afterHours ? "Here's your after-hours request. Send it and I'll check with our on-call technician right away." : 'Here are the soonest openings for the full visit.'}`); }} onEdit={editDetails} onRequest={() => setAction('request')} />}
+              {!receipt && !requestId && action === 'slots' && session?.afterHours && <AfterHoursSend token={token} onSent={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRegular={() => void send('Keep regular times')} />}
+              {!receipt && !requestId && action === 'slots' && !session?.afterHours && <SlotPicker token={token} session={session} config={config} onSooner={() => void send('Do you have anything sooner?')} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); setAutoClose(!p && !preview); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
               {!receipt && !requestId && action === 'approval' && approval && <ApprovalWait token={token} initial={approval} onBooked={onApprovalBooked} onEnded={onApprovalEnded} onCancelled={onApprovalCancelled} />}
               {!receipt && !requestId && action === 'request' && <RequestForm token={token} session={session} onDone={(id) => { setRequestId(id); setAction(''); setOptions([]); }} />}
               {requestId && (

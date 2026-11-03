@@ -42,7 +42,7 @@ export async function notifyOwnerError({ store, kind, details = {}, ownerConsent
     const phone = normalizePhone(config.bookingOwnerSmsPhone);
     if (!phone) return { reason: 'not_configured' };
     if (expectedPhone && phone !== expectedPhone) return { reason: 'recipient_changed' };
-    const allowed = await ownerConsent.allows(phone);
+    const allowed = await ownerConsent.allows(phone, 'actionable_operational_failures');
     if (readOnly()) return { reason: 'read_only_preview' };
     if (allowed !== true) return { reason: 'owner_consent_required' };
     const ready = await smsReady(config);

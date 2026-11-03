@@ -126,6 +126,42 @@ export function approvalRequestText(a, link) {
   );
 }
 
+/**
+ * The account admin's text for an after-hours request: who, where, what, the total, and the link to
+ * accept with an arrival time or decline. No customer phone or street address in the text itself.
+ */
+export function afterHoursRequestSms(a, link) {
+  const clean = (value, n = 60) => String(value || "").replace(/[\r\n\t]+/g, " ").slice(0, n);
+  const first = clean(String(a.customer?.name || "").split(/\s+/)[0], 40) || "A customer";
+  const total = Number.isFinite(a.totalCents) ? ` (${money(a.totalCents)} total)` : "";
+  return `Custom-AIs ChatDaddy alert: after-hours emergency request from ${first} in ${clean(a.customer?.city, 40)} ${clean(a.customer?.zip, 10)}: ${clean(a.service, 80)}${total}. They're waiting in the chat. Accept with an arrival time or decline: ${link} Reply STOP to opt out.`;
+}
+
+/** The same request by email, with the details the on-call technician needs to call back. */
+export function afterHoursRequestEmail(a, link) {
+  const c = a.customer || {};
+  const lines = [
+    `After-hours emergency request ${a.id}`,
+    "",
+    `${c.name} is waiting in the chat for an answer.`,
+    `Service: ${a.service}`,
+    ...(a.lineItems || []).map((l) => `  ${l.name}: ${money(l.cents)}`),
+    Number.isFinite(a.totalCents) ? `Total: ${money(a.totalCents)}` : "",
+    "",
+    `Phone: ${c.phone}`,
+    c.email ? `Email: ${c.email}` : "",
+    `Address: ${c.address}, ${c.city} ${c.zip}`,
+    a.concerns?.length ? `Customer said: ${a.concerns.join(" | ")}` : "",
+    a.notes ? `Notes: ${a.notes}` : "",
+    "",
+    `Accept with an arrival time, or decline so they're offered regular times: ${link}`,
+  ].filter((x, i, all) => x !== "" || (all[i - 1] !== "" && i > 0));
+  const text = lines.join("\n");
+  const esc = (v) => String(v).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
+  const html = `<div style="font-family:system-ui,sans-serif;font-size:15px;line-height:1.5;color:#172536">${lines.map((l) => l === "" ? "<br>" : `<div>${esc(l)}</div>`).join("")}<p style="margin-top:16px"><a href="${esc(link)}" style="display:inline-block;background:#e8641e;color:#fff;font-weight:700;text-decoration:none;padding:11px 18px;border-radius:10px">Open the request</a></p></div>`;
+  return { subject: `After-hours emergency request: ${c.name} · ${a.service}`, text, html };
+}
+
 /** Editable owner copy remains separate from emergency approval and customer consent. */
 export function ownerBookingSms(appt, config) {
   const custom = config.messageTemplates?.ownerBookingSms;

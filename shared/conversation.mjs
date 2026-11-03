@@ -1132,6 +1132,14 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     try {
       const q = s.route === "assessment" ? serviceQuote("assessment", config) : quoteFor(s.package);
       const name = s.route === "assessment" ? "the Comprehensive Repair Assessment" : q.name;
+      const fee = afterHoursFee();
+      if (s.afterHours) {
+        return respond(
+          `Your after-hours request is ready: **${q.name}**${priced ? ` at **${money(q.priceCents)}**` : ""}${priced && fee ? `, plus the **${money(fee)}** after-hours premium` : ""}. Next I'll collect your details one at a time, then send it straight to our on-call technician. Nothing is booked until they confirm.`,
+          [],
+          { action: "contact" },
+        );
+      }
       locked = `I have locked in **${name}**${priced ? ` at **${money(q.priceCents)}**` : ""}. `;
     } catch {}
     return respond(
@@ -1547,20 +1555,32 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
 
   // -- after-hours (on-call) service ---------------------------------------------------------
   if (AFTER_HOURS_YES.test(t)) {
-    s.afterHours = true;
-    s.stage = "review";
-    s.pending = null;
     const fee = afterHoursFee();
     const family = s.package || s.suggested || (s.intent === "emergency" ? "ultimate" : null);
+    s.pending = null;
+    // BOB handles it in the chat: the service, the premium, the customer's details, then the request
+    // goes to the on-call technician and the answer shows up here. No price list entry, no online request.
+    if (fee == null || !family || !["cleaning", "bundle"].includes(s.route)) {
+      s.stage = "review";
+      return respond("I'll pass this to our on-call technician. Share your details below and they'll call you to confirm whether they can come after hours. Nothing is booked until they confirm.", [], { action: "request" });
+    }
+    s.afterHours = true;
     let base = "";
-    try { if (family && priced) { const q = quoteFor(family); base = ` on top of ${PACKAGES[family]?.short || q.name} (${money(q.priceCents)})`; } } catch {}
-    return respond(
-      `I'll send this to our on-call technician.${priced && fee ? ` The after-hours premium is ${money(fee)}${base}.` : ""} Share your details below and they'll call you to confirm whether they can come after hours. Nothing is booked until they confirm.`,
-      [],
-      { action: "request" },
-    );
+    try { if (priced) { const q = quoteFor(family); base = ` on top of ${PACKAGES[family]?.short || q.name} (${money(q.priceCents)})`; } } catch {}
+    const price = priced ? ` The after-hours premium is ${money(fee)}${base}.` : "";
+    if (["contact", "verify", "slots"].includes(s.stage)) {
+      const where = s.stage === "slots" ? "Review the request below and send it when you're ready." : "Finish your details below and I'll send it.";
+      return respond(`Okay, I'll check with our on-call technician.${price} ${where}`, [], { action: "resume" });
+    }
+    s.package = family;
+    s.serviceAccepted = true;
+    ack = `Okay, I'll check with our on-call technician.${price}`;
+    return next();
   }
-  if (/^keep (?:the )?regular (?:times|schedule)$/.test(t)) return resume("No problem, we'll stick with the regular schedule.");
+  if (/^keep (?:the )?regular (?:times|schedule)$/.test(t)) {
+    s.afterHours = false;
+    return resume("No problem, we'll stick with the regular schedule.");
+  }
   if (asksForSooner(text, s)) return respond(`The times shown are our soonest regular openings. ${afterHoursOffer()}`, [AFTER_HOURS_BUTTON, "Keep regular times"]);
 
   // -- routing from free text ----------------------------------------------------------------

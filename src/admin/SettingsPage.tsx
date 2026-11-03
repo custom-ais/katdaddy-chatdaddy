@@ -9,6 +9,7 @@ import { createPortal } from 'react-dom';
 import type { Technician } from './DashboardContext';
 import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, Mail, MapPin, MessageSquare, Plus, RotateCcw, Route, Save, ShieldCheck, Tag, Trash2, Users } from 'lucide-react';
 import { api, saveText } from '../lib/api';
+import { askConfirm } from '../components/ConfirmDialog';
 import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Modal, Section, Toggle, inputClass, primaryButton, secondaryButton, subtleButton } from './ui';
 import { money } from '../../shared/domain.mjs';
@@ -124,7 +125,7 @@ function Connections({ config, onChange }: { config: any; onChange: (key: string
   };
   const [busy, setBusy] = useState(false);
   const disconnect = async () => {
-    if (!confirm('Disconnect Jobber? Online booking pauses until you reconnect.')) return;
+    if (!(await askConfirm({ danger: true, title: 'Disconnect Jobber?', message: 'Online booking pauses until you reconnect.', confirmLabel: 'Disconnect' }))) return;
     setBusy(true);
     try { await mutate('/api/admin/jobber/disconnect', {}, 'POST', 'Jobber disconnected'); } catch (e) { showToast({ type: 'error', title: "Couldn't disconnect", description: (e as Error).message }); } finally { setBusy(false); }
   };
@@ -134,8 +135,8 @@ function Connections({ config, onChange }: { config: any; onChange: (key: string
     maps: 'Turning Maps off stops address and routing calls and pauses all online booking, including ZIP-based coverage. Turn it off in your draft?',
     verification: 'Turning Verify off blocks bookings that require verification; it never bypasses the code check. Turn it off in your draft?',
   };
-  const switchFor = (key: string, label: string) => <Toggle checked={enabled(key)} onChange={(value) => {
-    if (!value && offWarning[key] && !confirm(offWarning[key])) return;
+  const switchFor = (key: string, label: string) => <Toggle checked={enabled(key)} onChange={async (value) => {
+    if (!value && offWarning[key] && !(await askConfirm({ danger: true, title: `Turn off ${label}?`, message: offWarning[key].replace(/ Turn it off in your draft\?$/, ''), confirmLabel: 'Turn off in draft' }))) return;
     onChange('integrations', { ...config.integrations, [key]: value });
   }} label={`Enable ${label}`} detail="Changes apply after Save. Unconfigured providers stay unavailable." />;
   const aiProvider = config.aiProvider === 'openai' ? 'openai' : 'gemini';
@@ -274,9 +275,9 @@ function Answers({ active = true }: { active?: boolean }) {
     if (await write(next, 'Answer saved')) setEditing(null);
   };
   const setStatus = (f: any, status: string) => write(faqs.map((x) => (x.id === f.id ? { ...x, status } : x)), status === 'approved' ? 'Answer approved' : 'Moved to drafts');
-  const remove = (f: any) => { if (confirm('Remove this answer?')) void write(faqs.filter((x) => x.id !== f.id), 'Answer removed'); };
+  const remove = async (f: any) => { if (await askConfirm({ danger: true, title: 'Remove this answer?', message: f.question, confirmLabel: 'Remove' })) void write(faqs.filter((x) => x.id !== f.id), 'Answer removed'); };
   const reset = async () => {
-    if (!confirm('Replace every answer with the starting set? Your edits are lost.')) return;
+    if (!(await askConfirm({ danger: true, title: 'Reset all answers?', message: 'Every answer is replaced with the starting set. Your edits are lost.', confirmLabel: 'Reset answers' }))) return;
     try { await mutate('/api/admin/faqs/reset', {}, 'POST', 'Answers reset'); } catch (e) { showToast({ type: 'error', title: "Couldn't reset", description: (e as Error).message }); }
   };
   return (

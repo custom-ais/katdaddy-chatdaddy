@@ -13,15 +13,15 @@ const config = { ...DEFAULT_CONFIG, serviceZips: ["85326"], pricesAcknowledged: 
 const run = (steps, s = initialSession(), cfg = config) => { let r; for (const m of steps) { r = turn(m, s, cfg, INITIAL_FAQS); s = r.session; } return r; };
 const emergency = ["Emergency Clog / Overheating", "No, it's turned off now", "Possible nest or blockage", "85326", "1-Story Home", "Electric Dryer"];
 
-test("the emergency offer leads with Ultimate and offers the on-call tech; yes goes to the team", () => {
+test("the emergency offer leads with Ultimate and offers the on-call tech; yes is handled in the chat", () => {
   const offer = run(emergency);
   assert.deepEqual(offer.card.picks.map((p) => p.family), ["ultimate", "premium"]);
   assert.match(offer.reply, /most comprehensive package.*clears the exterior termination.*DryerFlex.*3-year parts and labor warranty.*\$50 off that removal/s);
   assert.ok(offer.options.includes("Check after-hours availability"));
   const yes = run(["Check after-hours availability"], offer.session);
-  assert.equal(yes.action, "request");
+  assert.notEqual(yes.action, "request", "no request form");
   assert.equal(yes.session.afterHours, true);
-  assert.match(yes.reply, /on-call technician\. The after-hours premium is \$199 on top of Ultimate Protection \(\$299\)\..*Nothing is booked until they confirm\./s);
+  assert.match(yes.reply, /^Okay, I'll check with our on-call technician\. The after-hours premium is \$199 on top of Ultimate Protection \(\$299\)\./);
 });
 
 test("asking for something sooner once a service is chosen offers after-hours; otherwise it doesn't", () => {
