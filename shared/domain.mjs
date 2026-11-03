@@ -70,6 +70,11 @@ export const DEFAULT_CONFIG = {
   overflow: { enabled: false, start: '17:00', maxDurationMins: 90, minTicketCents: 22000, requireNearby: true },
   // Daily revenue target per technician, shown on the dashboard only.
   dailyRevenueTargetCents: 75000,
+  // Revenue pacing: a company-wide minimum per month (÷ 4 = per week, ÷ 5 = per weekday) or per week.
+  // While a week is under it, BOB offers that week's openings first (still within the drive limits);
+  // once it's met, the week's remaining openings go to jobs that fit the route and farther customers
+  // see the next week first. outsideJobCents values jobs booked outside BOB (0 = BOB's average ticket).
+  revenuePacing: { enabled: false, period: 'month', targetCents: 0, outsideJobCents: 0 },
   cleaningPriceCents: 17900,
   assessmentPriceCents: 11900,
   bundlePriceCents: BUNDLE_PRICE_CENTS,
@@ -153,6 +158,8 @@ export const withConfigDefaults = saved => {
  const c={...DEFAULT_CONFIG,...(saved||{})};
  const templates=saved?.messageTemplates;
  c.messageTemplates=templates===undefined?{...DEFAULT_MESSAGE_TEMPLATES}:templates&&typeof templates==='object'&&!Array.isArray(templates)?{...DEFAULT_MESSAGE_TEMPLATES,...templates}:templates;
+ const pacing=saved?.revenuePacing;
+ if(pacing&&typeof pacing==='object'&&!Array.isArray(pacing))c.revenuePacing={...DEFAULT_CONFIG.revenuePacing,...pacing};
  const gates=saved?.integrations;
  c.integrations=gates===undefined?{...DEFAULT_CONFIG.integrations}:gates&&typeof gates==='object'&&!Array.isArray(gates)?{...DEFAULT_CONFIG.integrations,...gates}:gates;
  // Settings saved before the office's coverage list switch to it once; later edits in Settings stand.
@@ -250,6 +257,9 @@ export function validateConfig(c) {
  const ov=c.overflow||{};
  if(typeof ov.enabled!=='boolean'||!/^([01]\d|2[0-3]):[0-5]\d$/.test(ov.start||'')||!Number.isInteger(ov.maxDurationMins)||ov.maxDurationMins<15||ov.maxDurationMins>240||!Number.isInteger(ov.minTicketCents)||ov.minTicketCents<0||ov.minTicketCents>1000000||typeof ov.requireNearby!=='boolean')errors.push('Check the 5 PM overflow settings.');
  if(!Number.isInteger(c.dailyRevenueTargetCents)||c.dailyRevenueTargetCents<0||c.dailyRevenueTargetCents>10000000)errors.push('Invalid daily revenue target.');
+ const rp=c.revenuePacing||{};
+ if(typeof rp.enabled!=='boolean'||!['month','week'].includes(rp.period)||!Number.isInteger(rp.targetCents)||rp.targetCents<0||rp.targetCents>100000000||!Number.isInteger(rp.outsideJobCents)||rp.outsideJobCents<0||rp.outsideJobCents>10000000)errors.push('Check the revenue target: a whole-dollar amount per month or per week.');
+ else if(rp.enabled&&rp.targetCents<=0)errors.push('Enter the revenue target amount, or turn revenue pacing off.');
  if(c.bookingEnabled&&!isBookable(c))errors.push('Review prices, acknowledge the schedule source, select a technician, and configure the service area before enabling bookings.');
  return errors;
 }

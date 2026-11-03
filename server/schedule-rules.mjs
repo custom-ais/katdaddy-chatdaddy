@@ -8,6 +8,7 @@
 import { phoenixDate, dateTime } from "../shared/domain.mjs";
 import { emergencySameDayEligible } from "./activity.mjs";
 import { routeScore } from "./route-score.mjs";
+import { paceBonus } from "./revenue-pace.mjs";
 
 const MIN = 60_000;
 
@@ -166,11 +167,15 @@ export function openSlots({ config, technicians, blocks, drive, durationMins, no
  * Route clustering. With route scoring on, the next two weeks are ranked by route fit
  * (ties go to the earlier time) and later dates follow in order. Otherwise slots next to
  * nearby jobs in the next two weeks come first.
+ * pace (revenue pacing, see revenue-pace.mjs) adds points for weeks under the office's minimum and
+ * takes them from far-out stops in weeks that already reached it.
  */
-export function orderSlots(slots, { now, nearbyFirst, routeScoring = false }) {
+export function orderSlots(slots, { now, nearbyFirst, routeScoring = false, pace = null }) {
   const soon = now + 14 * 86_400_000;
-  if (routeScoring) {
-    const near = slots.filter((s) => s.start <= soon).sort((a, b) => (b.routeScore ?? 0) - (a.routeScore ?? 0) || a.start - b.start);
+  if (routeScoring || pace) {
+    const score = (s) => (routeScoring ? s.routeScore ?? 0 : s.nearby ? 6 : 0) + paceBonus(s, pace);
+    for (const s of slots) if (pace) s.paceBonus = paceBonus(s, pace);
+    const near = slots.filter((s) => s.start <= soon).sort((a, b) => score(b) - score(a) || a.start - b.start);
     return [...near, ...slots.filter((s) => s.start > soon)];
   }
   if (!nearbyFirst) return slots;
