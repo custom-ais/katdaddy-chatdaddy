@@ -3,6 +3,7 @@
 import { phoenixDate } from "../shared/domain.mjs";
 import { openSlots, orderSlots } from "./schedule-rules.mjs";
 import { zipOf } from "./route-score.mjs";
+import { pacingOn, revenuePace, weekStartOf, PACE_WEEKS } from "./revenue-pace.mjs";
 
 async function pool(items, limit, fn) {
   let next = 0;
@@ -68,6 +69,23 @@ export function createScheduler({ store, jobber, geo }) {
   }
 
   /**
+   * Booked revenue against the office's minimum for this week and the next two. Jobber visits are read
+   * on week boundaries so the lookup is shared (cached) between customers. Null when pacing is off or
+   * the numbers can't be read: pacing only changes the order, so it never blocks availability.
+   */
+  async function pace({ config, now, fresh = false }) {
+    if (!pacingOn(config)) return null;
+    try {
+      const from = weekStartOf(now), to = from + PACE_WEEKS * 7 * 86_400_000;
+      const visits = config.scheduleSource === "Jobber" ? await jobber.readVisits(from, to, { fresh }) : [];
+      return revenuePace({ appointments: await store.appointments(), visits, pacing: config.revenuePacing, now });
+    } catch (error) {
+      console.warn("[schedule] revenue pacing unavailable:", error.message);
+      return null;
+    }
+  }
+
+  /**
    * Open slots for a located customer.
    * date: "YYYY-MM-DD" to search one day; empty = whole horizon (nearby-first when enabled).
    */
@@ -80,7 +98,8 @@ export function createScheduler({ store, jobber, geo }) {
     const drive = await driveMap(list, location, fresh);
     const place = { location, zip, neighborhood };
     const found = openSlots({ config, technicians, blocks: list, drive, durationMins, now, date, place, ticketCents });
-    return date ? found : orderSlots(found, { now, nearbyFirst: config.nearbyFirst, routeScoring: config.routeScoring !== false });
+    if (date) return found;
+    return orderSlots(found, { now, nearbyFirst: config.nearbyFirst, routeScoring: config.routeScoring !== false, pace: await pace({ config, now, fresh }) });
   }
 
   /** Re-check one start time. Prefers the given tech when several can take it. */
@@ -106,5 +125,5 @@ export function createScheduler({ store, jobber, geo }) {
     return match[0];
   }
 
-  return { blocks, slots, check };
+  return { blocks, slots, check, pace };
 }

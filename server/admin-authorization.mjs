@@ -18,6 +18,7 @@ const routes = [
   ['POST', /^\/api\/admin\/owner-sms-consent$/, ['ownerSms.manage']],
   ['POST', /^\/api\/admin\/booking-report\/test$/, ['integrations.manage']],
   ['GET', /^\/api\/admin\/maps-key$/, ['settings.coverage.view']],
+  ['GET', /^\/api\/admin\/revenue-pace$/, ['settings.schedule.view','finance.view']],
   ['GET', /^\/api\/admin\/integration-accounts$/, ['settings.connections.view']],
   ['POST', /^\/api\/admin\/(?:integration-accounts|connections\/refresh)$/, ['integrations.manage']],
   ['GET', /^\/api\/admin\/jobber\/(?:connect|users)$/, ['integrations.manage']],
@@ -54,7 +55,7 @@ export function requireAdminRoute(principal, method, path) {
 }
 
 const nestedFields = new Set(Object.keys(CONFIG_FIELD_PERMISSIONS).filter(key => key.includes('.')).map(key => key.split('.')[0]));
-const monetaryFields = new Set(['services','travelFeeTiers','travelZoneFeeCents','dailyRevenueTargetCents','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','bundlePriceCents','overflow.minTicketCents']);
+const monetaryFields = new Set(['services','travelFeeTiers','travelZoneFeeCents','dailyRevenueTargetCents','revenuePacing.targetCents','revenuePacing.outsideJobCents','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','bundlePriceCents','overflow.minTicketCents']);
 const textFields = new Set(['messageTemplates.confirmationSms','messageTemplates.confirmationEmailSubject','messageTemplates.confirmationEmailBody']);
 const arraySchemas = {
   services:['id','family','variant','name','description','category','priceCents','minutes','active'],
@@ -150,6 +151,7 @@ function blankConfig() {
     integrations:{jobber:false,maps:false,verification:false,sms:false,email:false},routeScoring:false,
     sameDay:{enabled:false,cutoffHour:0,minNoticeHours:0,requireNearby:false},
     overflow:{enabled:false,start:'',maxDurationMins:0,requireNearby:false},
+    revenuePacing:{enabled:false,period:'month',targetCents:0,outsideJobCents:0},
     cleaningMinutes:0,assessmentMinutes:0,bundleMinutes:0,bufferMinutes:0,maxJobsPerDay:0,leadHours:0,horizonDays:0,
     weekdayStarts:[],weekdayClose:'',saturdayStarts:[],saturdayClose:'',blockedDates:[],serviceZips:[],travelZips:[],coverageVersion:0,activeTechnicianIds:[],assessmentCredited:false,
   };
@@ -165,7 +167,7 @@ const configReadGroups = {
   'settings.templates.view':['messageTemplates.confirmationSms','messageTemplates.confirmationEmailSubject','messageTemplates.confirmationEmailBody','messageEmailFormat'],
   'settings.services.view':['pricesAcknowledged','services','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','bundlePriceCents','cleaningMinutes','assessmentMinutes','bundleMinutes','assessmentCredited'],
   'settings.coverage.view':['baseAddress','baseLocation.lat','baseLocation.lng','customServiceAreas','serviceAreaMode','serviceAreaMiles','travelAreaMiles','serviceZips','travelZips','coverageVersion','travelZoneFeeCents','travelFeeTiers'],
-  'settings.schedule.view':['maxDriveFromBaseMin','maxDriveBetweenJobsMin','nearbyFirst','routeScoring','sameDay.enabled','sameDay.cutoffHour','sameDay.minNoticeHours','sameDay.requireNearby','overflow.enabled','overflow.start','overflow.maxDurationMins','overflow.minTicketCents','overflow.requireNearby','dailyRevenueTargetCents','bufferMinutes','maxJobsPerDay','leadHours','horizonDays','weekdayStarts','weekdayClose','saturdayStarts','saturdayClose','blockedDates','activeTechnicianIds'],
+  'settings.schedule.view':['maxDriveFromBaseMin','maxDriveBetweenJobsMin','nearbyFirst','routeScoring','sameDay.enabled','sameDay.cutoffHour','sameDay.minNoticeHours','sameDay.requireNearby','overflow.enabled','overflow.start','overflow.maxDurationMins','overflow.minTicketCents','overflow.requireNearby','dailyRevenueTargetCents','revenuePacing.enabled','revenuePacing.period','revenuePacing.targetCents','revenuePacing.outsideJobCents','bufferMinutes','maxJobsPerDay','leadHours','horizonDays','weekdayStarts','weekdayClose','saturdayStarts','saturdayClose','blockedDates','activeTechnicianIds'],
   'appointments.view':['scheduleSource'],
   'appointments.manage':['services','serviceZips','scheduleSource','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','cleaningMinutes','assessmentMinutes','bundleMinutes'],
   'inbox.view':['approver.name'],
@@ -324,6 +326,7 @@ export function projectAdminResponse(principal,method,path,body) {
   if (hasPermission(principal,'ownerSms.manage') && path === '/api/admin/owner-sms-consent') return clone(body);
   if (isMaster(principal) && path === '/api/admin/booking-report/test') return pick(body,['status','to']);
   if (path === '/api/admin/maps-key') return pick(body,['key']);
+  if (path === '/api/admin/revenue-pace') return pick(body,['pace']);
   if (hasPermission(principal,'integrations.manage') && /^\/api\/admin\/(?:integration-accounts|jobber\/)/.test(path)) return clone(body);
   if (path === '/api/admin/status') return pick(body,['authenticated','setupRequired','passwordFromEnv','namedUsersEnabled']);
   if (path === '/api/admin/logout') return pick(body,['signedOut']);

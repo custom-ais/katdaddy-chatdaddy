@@ -7,7 +7,7 @@ import { PhoneInput } from '../components/PhoneInput';
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Technician } from './DashboardContext';
-import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, Mail, MapPin, MessageSquare, Plus, RotateCcw, Route, Save, ShieldCheck, Tag, Trash2, Users } from 'lucide-react';
+import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, Mail, MapPin, MessageSquare, Plus, RotateCcw, Route, Save, ShieldCheck, Tag, Target, Trash2, Users } from 'lucide-react';
 import { api, saveText } from '../lib/api';
 import { askConfirm } from '../components/ConfirmDialog';
 import { useDashboard } from './DashboardContext';
@@ -326,6 +326,69 @@ function Answers({ active = true }: { active?: boolean }) {
 }
 
 /** Master Admin: send a sample booking report to check the email arrives. */
+const weekLabel = (ms: number) => new Intl.DateTimeFormat('en-US', { timeZone: 'America/Phoenix', month: 'short', day: 'numeric' }).format(ms);
+/**
+ * The revenue minimum BOB paces the schedule to, with this week and the next two against it. The
+ * preview uses the values being edited, before they're saved.
+ */
+function RevenuePacing({ value, onChange }: { value: any; onChange: (patch: any) => void }) {
+  const { can } = useDashboard();
+  const rp = { enabled: false, period: 'month', targetCents: 0, outsideJobCents: 0, ...(value || {}) };
+  const weekly = Math.round(rp.period === 'week' ? rp.targetCents : rp.targetCents / 4), daily = Math.round(weekly / 5);
+  const [pace, setPace] = useState<any>(null), [error, setError] = useState('');
+  const canMoney = can('finance.view');
+  useEffect(() => {
+    if (!canMoney || !(rp.targetCents > 0)) { setPace(null); return; }
+    let live = true;
+    const t = setTimeout(() => {
+      api(`/api/admin/revenue-pace?period=${rp.period}&target=${rp.targetCents}&outside=${rp.outsideJobCents}`)
+        .then((r) => { if (live) { setPace(r.pace); setError(''); } }, (e) => { if (live) setError((e as Error).message); });
+    }, 400);
+    return () => { live = false; clearTimeout(t); };
+  }, [canMoney, rp.period, rp.targetCents, rp.outsideJobCents]);
+  const thisWeek = pace?.weeks?.[0];
+  return (
+    <Section icon={<Target size={18} />} title="Revenue target" description="Set a minimum for the month or the week. BOB fills a week that's behind first, and once a week's minimum is in, he keeps the rest of that week for stops close to the route.">
+      <Toggle checked={rp.enabled} onChange={(v) => onChange({ enabled: v })} label="Pace the schedule to a revenue minimum"
+        detail={rp.enabled ? 'On: open times are ordered by how each week is doing against the minimum, along with route fit. Your drive limits and jobs per day still apply.' : 'Off: open times are ordered by route fit only.'} />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <Dollars label="Minimum revenue" value={rp.targetCents} onChange={(n) => onChange({ targetCents: n })} />
+        <Field label="Per">
+          <select className={inputClass} value={rp.period} onChange={(e) => onChange({ period: e.target.value })}>
+            <option value="month">Month</option>
+            <option value="week">Week</option>
+          </select>
+        </Field>
+        <Dollars label="Value of jobs booked outside BOB" value={rp.outsideJobCents} onChange={(n) => onChange({ outsideJobCents: n })} hint="Jobs the office puts in Jobber. $0 uses BOB's average job." />
+      </div>
+      {canMoney && rp.targetCents > 0 && (
+        <p className="text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2">
+          {rp.period === 'month' ? `${money(rp.targetCents)} a month is ` : ''}<b>{money(weekly)} a week</b> and <b>{money(daily)} a weekday</b> (Mon–Fri).
+        </p>
+      )}
+      {error && <ErrorNote>{error}</ErrorNote>}
+      {pace && (
+        <div className="space-y-2.5">
+          {pace.weeks.map((w: any, i: number) => {
+            const pct = Math.min(100, Math.round((w.bookedCents / Math.max(1, pace.weeklyTargetCents)) * 100));
+            return (
+              <div key={w.start}>
+                <div className="flex justify-between text-sm"><span className="font-bold text-slate-800">{i === 0 ? 'This week' : i === 1 ? 'Next week' : 'Week after'} <span className="font-semibold text-slate-500">· {weekLabel(w.start)}</span></span><span className={`font-bold ${w.met ? 'text-emerald-700' : 'text-slate-700'}`}>{money(w.bookedCents)} of {money(pace.weeklyTargetCents)}{w.met ? ' · met' : ''}</span></div>
+                <div className="mt-1 h-2.5 rounded-full bg-slate-100 overflow-hidden"><div className={`h-full rounded-full ${w.met ? 'bg-emerald-500' : 'bg-orange-500'}`} style={{ width: `${pct}%` }} /></div>
+                <p className="text-xs text-slate-500 mt-0.5">{w.jobs} job{w.jobs === 1 ? '' : 's'} booked</p>
+              </div>
+            );
+          })}
+          <p className="text-xs text-slate-600">
+            {!rp.enabled ? 'Turn pacing on to use these numbers. ' : thisWeek?.met ? "This week's minimum is in, so BOB is saving the rest of this week for stops close to the route and offering farther customers next week first. " : "This week is behind, so BOB is offering this week's openings first. "}
+            Jobs the office booked outside BOB count at {money(pace.jobCents)} each{pace.jobCentsFrom === 'average' ? " (BOB's average job)" : pace.jobCentsFrom === 'default' ? ' until BOB has bookings to average' : ''}.
+          </p>
+        </div>
+      )}
+    </Section>
+  );
+}
+
 function BookingReportTest() {
   const [busy, setBusy] = useState(false), [result, setResult] = useState<{ status: string; to: string } | null>(null), [error, setError] = useState('');
   const send = async () => {
@@ -478,7 +541,7 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
     if (key in CONFIG_FIELD_PERMISSIONS && !editable(key)) { setError('You do not have permission to change this setting.'); return; }
     setC((s: any) => ({ ...s, [key]: value })); setDirty(true);
   };
-  const nested = (key: 'sameDay' | 'overflow' | 'approver', patch: any) => { if (!manage(page) || Object.keys(patch).some(field => !editable(`${key}.${field}`))) return; setC((s: any) => ({ ...s, [key]: { ...s[key], ...patch } })); setDirty(true); };
+  const nested = (key: 'sameDay' | 'overflow' | 'approver' | 'revenuePacing', patch: any) => { if (!manage(page) || Object.keys(patch).some(field => !editable(`${key}.${field}`))) return; setC((s: any) => ({ ...s, [key]: { ...s[key], ...patch } })); setDirty(true); };
   const updateService = (id: string, patch: any) => update('services', c.services.map((x: any) => (x.id === id ? { ...x, ...patch } : x)));
   const categories = useMemo(() => [...new Set(c.services.map((x: any) => x.category))] as string[], [c.services]);
   const families = useMemo(() => [...new Set(c.services.map((x: any) => x.family))].filter((f) => (PACKAGES as any)[f as string]) as string[], [c.services]);
@@ -628,6 +691,8 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
         </div>
         <div className="max-w-xs"><Dollars label="Daily revenue target per tech" value={c.dailyRevenueTargetCents} onChange={(n) => update('dailyRevenueTargetCents', n)} hint="Shown on the dashboard only. Never affects booking." /></div>
       </Section>
+
+      <RevenuePacing value={c.revenuePacing} onChange={(patch) => nested('revenuePacing', patch)} />
 
             <Section icon={<CalendarClock size={18} />} title="Hours and capacity" description="Arizona time. Jobber's calendar still decides which of these times are actually open.">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
