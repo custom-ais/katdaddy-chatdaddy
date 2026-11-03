@@ -162,19 +162,27 @@ function Tile({ on, onClick, disabled, children, accent, label }: { on: boolean;
 }
 
 /** End-of-booking upgrades: DryerFlex (promo), the sanitizing fog, a deal for both, and Ultimate for Premium. */
-function UpsellOffer({ upsell, onDone }: { upsell: any; onDone: (sel: { dryerflex: boolean; fogging: boolean; ultimate: boolean }) => void }) {
-  const [sel, setSel] = useState({ dryerflex: false, fogging: false, ultimate: false });
-  const flip = (k: 'dryerflex' | 'fogging' | 'ultimate') => setSel((x) => ({ ...x, [k]: !x[k] }));
+type Extras = { dryerflex: boolean; fogging: boolean; ultimate: boolean };
+/**
+ * live: on the review screen each tap updates the held visit right away (the total above changes),
+ * so there's no "Add" button. Without it, the old one-shot panel with Add / No thanks.
+ */
+function UpsellOffer({ upsell, onDone, live }: { upsell: any; onDone?: (sel: Extras) => void; live?: { value: Extras; onChange: (sel: Extras) => void; busy: boolean } }) {
+  const [own, setOwn] = useState<Extras>({ dryerflex: false, fogging: false, ultimate: false });
+  const sel = live ? live.value : own;
+  const flip = (k: keyof Extras) => { const next = { ...sel, [k]: !sel[k] }; if (live) live.onChange(next); else setOwn(next); };
   const df = upsell.dryerflex, fog = upsell.fogging, up = upsell.ultimate;
   const dfOn = Boolean(df && sel.dryerflex && !sel.ultimate);
   const deal = dfOn && sel.fogging && upsell.bundleSavingsCents ? upsell.bundleSavingsCents : 0;
   const extra = (sel.ultimate && up ? up.extraCents : 0) + (dfOn ? df.cents : 0) + (sel.fogging && fog ? fog.cents : 0) - deal;
   const any = sel.ultimate || dfOn || sel.fogging;
   return (
-    <Card className="!p-4 sm:!p-5">
+    <div className={live ? 'mt-4' : ''}>
+    <Card className={live ? '!p-0 !shadow-none !border-0 !bg-transparent' : '!p-4 sm:!p-5'}>
       <p className="text-xs font-extrabold uppercase tracking-wide text-orange-600">Optional add-ons</p>
-      <h3 className="font-extrabold text-slate-900 text-lg mt-0.5">Upgrade your visit</h3>
-      <div className="mt-3 space-y-2.5">
+      <h3 className="font-extrabold text-slate-900 text-lg mt-0.5">{live ? 'Add to your visit before you book' : 'Upgrade your visit'}</h3>
+      {live && <p className="text-sm text-slate-500 mt-0.5">Tap to add or remove. Your total above updates right away.</p>}
+      <div className={`mt-3 space-y-2.5 ${live?.busy ? 'opacity-70 pointer-events-none' : ''}`} aria-busy={live?.busy || undefined}>
         {df && (
           <Tile on={dfOn} onClick={() => flip('dryerflex')} disabled={sel.ultimate} accent label={`DryerFlex hose upgrade, ${money(df.cents)}${df.wasCents ? `, was ${money(df.wasCents)}` : ''}${sel.ultimate ? ', included with Ultimate' : ''}`}>
             <div className="flex flex-wrap items-center gap-2">
@@ -218,11 +226,30 @@ function UpsellOffer({ upsell, onDone }: { upsell: any; onDone: (sel: { dryerfle
           </Tile>
         )}
       </div>
-      <div className="mt-4 flex flex-col sm:flex-row gap-2">
-        <button type="button" disabled={!any} onClick={() => onDone(sel)} className="flex-1 py-3 rounded-xl font-extrabold text-sm bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-40">{any ? `Add to my visit · +${money(extra)}` : 'Choose an upgrade'}</button>
-        <button type="button" onClick={() => onDone({ dryerflex: false, fogging: false, ultimate: false })} className="sm:w-40 py-3 rounded-xl font-extrabold text-sm bg-slate-100 hover:bg-slate-200 text-slate-700">No thanks</button>
-      </div>
+      {live ? (
+        any ? <p className="mt-3 text-sm font-bold text-emerald-700 flex items-center gap-1.5"><CheckCircle size={16} />Added: +{money(extra)} to your visit</p> : null
+      ) : (
+        <div className="mt-4 flex flex-col sm:flex-row gap-2">
+          <button type="button" disabled={!any} onClick={() => onDone?.(sel)} className="flex-1 py-3 rounded-xl font-extrabold text-sm bg-orange-500 hover:bg-orange-600 text-white disabled:opacity-40">{any ? `Add to my visit · +${money(extra)}` : 'Choose an upgrade'}</button>
+          <button type="button" onClick={() => onDone?.({ dryerflex: false, fogging: false, ultimate: false })} className="sm:w-40 py-3 rounded-xl font-extrabold text-sm bg-slate-100 hover:bg-slate-200 text-slate-700">No thanks</button>
+        </div>
+      )}
     </Card>
+    </div>
+  );
+}
+
+/** The "everything is correct" box before booking: big, impossible to miss, green once checked. */
+function ConfirmCheck({ checked, onChange, disabled, children }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; children: React.ReactNode }) {
+  return (
+    <label className={`mt-5 flex items-start gap-3.5 rounded-2xl border-2 p-4 transition-colors ${disabled ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'} ${checked ? 'border-emerald-500 bg-emerald-50' : 'border-orange-400 bg-orange-50 ring-4 ring-orange-100'}`}>
+      <input type="checkbox" className="sr-only peer" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <span aria-hidden="true" className={`size-8 shrink-0 rounded-lg border-2 flex items-center justify-center transition-colors peer-focus-visible:ring-4 peer-focus-visible:ring-orange-300 ${checked ? 'bg-emerald-500 border-emerald-500 text-white' : 'bg-white border-orange-400'}`}>{checked && <Check size={20} strokeWidth={3} />}</span>
+      <span className="min-w-0">
+        <span className="block text-[15px] font-extrabold text-slate-900 leading-snug">{children}</span>
+        <span className={`block text-xs font-bold mt-1 ${checked ? 'text-emerald-700' : 'text-orange-700'}`}>{checked ? 'Thanks. You can book now.' : 'Tap this box to confirm, then book below.'}</span>
+      </span>
+    </label>
   );
 }
 
@@ -324,7 +351,8 @@ const contactPrompt = (step: ContactStep, d: any, cfg?: any): string => {
   const first = String(d?.name || '').trim().split(/\s+/)[0];
   switch (step) {
     case 'name': return 'To reserve your appointment slot, what is your first and last name?';
-    case 'email': return `${first ? `Thanks, ${first}. ` : ''}What is the best email address for booking contact and optional email verification?`;
+    // With customer texts off, email is the only way the confirmation reaches them: say so.
+    case 'email': return `${first ? `Thanks, ${first}. ` : ''}${cfg?.textMessages ? 'What is the best email address for booking contact and optional email verification?' : "What email should I send your appointment confirmation to?"}`;
     case 'phone': return cfg?.verificationChannels?.includes('email') ? `${d?.email ? 'Got it. ' : ''}What is your callback phone number (mobile or landline)? You can verify by email instead of text.` : `${d?.email ? 'Got it. ' : ''}What is your mobile phone number?${cfg?.phoneVerification === false ? '' : " We'll text a code to confirm it."}`;
     case 'sms': return `Understood. Is it okay to send automated text updates and technician arrival notifications to ${d?.phone || 'this number'}? Not marketing. Message and data rates may apply; reply STOP anytime.`;
     case 'address': return 'Thank you. What is the street address for the service location? Include a unit number if there is one.';
@@ -540,6 +568,19 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
   const [picking, setPicking] = useState<string | null>(null), [held, setHeld] = useState<string | null>(null);
   const [confirmState, setConfirmState] = useState<'idle' | 'working' | 'done'>('idle');
   const { start: startLoading, finish: finishLoading } = loading;
+  // Upsells on the review screen: each change re-prices the held visit on the server.
+  const [extras, setExtras] = useState<Extras>(() => ({ dryerflex: Boolean(session?.addOns?.dryerflex), fogging: Boolean(session?.addOns?.fogging), ultimate: session?.package === 'ultimate' && session?.upgradedFrom === 'premium' }));
+  const [extrasBusy, setExtrasBusy] = useState(false);
+  const changeExtras = async (next: Extras) => {
+    if (!hold || extrasBusy) return;
+    const before = extras;
+    setExtras(next); setExtrasBusy(true); setError('');
+    try {
+      const r = await api('/api/holds/extras', { method: 'POST', token, body: { holdId: hold.id, ...next } });
+      setHold(r.hold); setExtras(r.extras);
+    } catch (err) { setExtras(before); setError((err as Error).message); }
+    finally { setExtrasBusy(false); }
+  };
   const load = useCallback(async (nextCursor = 0, searchDate = '') => {
     const n = ++generation.current;
     setBusy(true); setError('');
@@ -635,21 +676,20 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
             {hold.overflow ? 'A 5 PM visit' : 'This service'} needs a quick approval from {config?.approverName || 'our team'} before it's booked. We'll hold this time while they review it — usually just a few minutes.
           </p>
         )}
-        <label className="mt-4 flex items-start gap-3 text-sm font-semibold text-slate-700">
-          <input type="checkbox" className="mt-1 size-4 accent-orange-500" checked={approved} disabled={seconds <= 0 || busy} onChange={(e) => setApproved(e.target.checked)} />
-          <span>The service, price, address, and arrival window are correct.</span>
-        </label>
+        {session?.upsell && seconds > 0 && <UpsellOffer upsell={session.upsell} live={{ value: extras, onChange: (v) => void changeExtras(v), busy: extrasBusy }} />}
+        <ConfirmCheck checked={approved} disabled={seconds <= 0 || busy || extrasBusy} onChange={setApproved}>The service, price, address, and arrival window are correct.</ConfirmCheck>
         {error && <div role="alert" className="mt-3 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">{error}</div>}
         <button
           className={`relative overflow-hidden w-full mt-5 font-extrabold py-4 rounded-2xl flex justify-center items-center gap-2 text-base transition-colors ${
             confirmState === 'done' ? 'bg-emerald-500 text-white border-2 border-emerald-500 shadow-lg shadow-emerald-500/30'
             : confirmState === 'working' ? 'bg-white text-emerald-800 border-2 border-emerald-500'
             : 'bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white border-2 border-transparent shadow-lg shadow-orange-500/30 disabled:opacity-60'}`}
-          disabled={!approved || busy || seconds <= 0} onClick={confirm} aria-live="polite">
+          disabled={!approved || busy || seconds <= 0 || extrasBusy} onClick={confirm} aria-live="polite">
           {confirmState === 'working' && <span className="bob-fill absolute inset-0 bg-emerald-200/70" aria-hidden="true" />}
           <span className="relative flex items-center gap-2">
             {confirmState === 'done' ? <><CheckCircle size={20} />Confirmed</>
               : confirmState === 'working' ? <><Loader2 className="animate-spin" size={20} />{hold.approvalRequired ? 'Sending for approval…' : 'Booking your visit…'}</>
+              : !approved ? 'Check the box above to book'
               : hold.approvalRequired ? 'Request approval' : 'Confirm & book'}
           </span>
         </button>
@@ -798,16 +838,13 @@ function AfterHoursSend({ token, onSent, onRegular }: { token: string; onSent: (
             <div className="flex justify-between gap-3 px-4 py-2.5 font-black text-slate-900"><span>Total</span><span className="text-orange-600">{money(info.quote.totalCents)}</span></div>
           </div>
           <p className="mt-3 text-sm text-slate-600 flex gap-2"><MapPin size={16} className="text-slate-400 shrink-0 mt-0.5" />{info.address}</p>
-          <label className="mt-4 flex gap-3 items-start text-sm font-semibold text-slate-700 cursor-pointer">
-            <input type="checkbox" className="mt-0.5 size-5 accent-orange-500 shrink-0" checked={ok} onChange={(e) => setOk(e.target.checked)} />
-            <span>The service, the after-hours premium and the address are correct.</span>
-          </label>
+          <ConfirmCheck checked={ok} disabled={busy} onChange={setOk}>The service, the after-hours premium and the address are correct.</ConfirmCheck>
         </>
       ) : !error && <div className="mt-4 flex items-center gap-2 text-sm text-slate-500"><Loader2 size={16} className="animate-spin" />Getting your total…</div>}
       {error && <div role="alert" className="mt-3 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">{error}</div>}
       <button className="w-full mt-5 font-extrabold py-4 rounded-2xl flex justify-center items-center gap-2 text-base bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white shadow-lg shadow-orange-500/30 disabled:opacity-60"
         disabled={!info || !ok || busy} onClick={() => void sendIt()}>
-        {busy ? <><Loader2 className="animate-spin" size={20} />Sending…</> : <><Send size={18} />Send to our on-call technician</>}
+        {busy ? <><Loader2 className="animate-spin" size={20} />Sending…</> : !ok && info ? 'Check the box above to send' : <><Send size={18} />Send to our on-call technician</>}
       </button>
       <p className="mt-3 text-xs text-slate-400">Nothing is booked until they confirm. If they can't come{info ? ` or don't answer within ${info.minutes} minutes` : ''}, I'll show you our soonest regular openings.</p>
       <button className="mt-2 w-full text-sm font-bold text-slate-500 hover:text-slate-800" onClick={onRegular} disabled={busy}>See regular times instead</button>
@@ -1148,7 +1185,8 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   // The address from the first question isn't asked again (the summary still shows it, and Edit details can change it).
   const stepsFor = (s: any): ContactStep[] => [
     ...CONTACT_ORDER.filter((k) => !(k === 'address' && s?.serviceAddress?.street) && !(k === 'city' && s?.serviceAddress?.street && s?.serviceAddress?.city) && !(k === 'sms' && config?.textMessages === false)),
-    ...(['cleaning', 'bundle'].includes(s?.route) && (s?.upsell || addOnLabels(s).length) ? (['addons'] as ContactStep[]) : []),
+    // With an upsell, the add-ons come after the time is picked (on the review screen) instead.
+    ...(['cleaning', 'bundle'].includes(s?.route) && !s?.upsell && addOnLabels(s).length ? (['addons'] as ContactStep[]) : []),
   ];
   const askContact = (step: ContactStep, d: any = draft) => {
     if (step === 'address') { addrSession.current = crypto.randomUUID(); addrPicked.current = ''; }

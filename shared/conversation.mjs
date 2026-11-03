@@ -1677,6 +1677,12 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     if (changed(current) !== changed(s)) return next();
     if (s.pending === "zip") { unresolved = true; return respond("Please enter the five-digit ZIP code for the service address.", []); }
     if (s.pending === "serviceAddress") { unresolved = true; return respond("Please enter the street address for the service location, including the city or ZIP code.", []); }
+    // Already answered (the AI interpreter can record the answer before this text arrives, or a
+    // button repeats it): confirm it and move on. Re-asking here looped forever.
+    if (s.pending && QUESTIONS[s.pending] && answered(s, s.pending)) {
+      ack = ack || ackFor(s.pending);
+      return next();
+    }
     if (s.pending && !isQuestion) {
       ack = "Sorry, I didn't catch that.";
       unresolved = true;

@@ -9,6 +9,25 @@ const TZ = 'America/Phoenix';
 const toLocalInput = (iso: string) => new Date(Date.parse(iso) - 7 * 3_600_000).toISOString().slice(0, 16);
 const fromLocalInput = (v: string) => new Date(`${v}:00-07:00`).toISOString();
 
+/** Plain-language reasons a confirmation wasn't sent, from the codes saved on the appointment. */
+const SMS_WHY: Record<string, string> = {
+  sms_scope_owner_alerts_only: 'customer texting is not set up yet',
+  not_configured_or_disabled: 'customer texting is not set up or is turned off',
+  no_consent: "the customer didn't agree to texts",
+  missing_phone: 'no phone number',
+  not_confirmed: 'the visit is not confirmed yet',
+  provider_rejected: 'Twilio rejected it',
+  provider_request_failed: "Twilio didn't confirm it",
+};
+const EMAIL_WHY: Record<string, string> = {
+  no_email: 'the customer skipped email',
+  email_confirmations_off: 'email confirmations are off in Settings',
+  not_confirmed: 'the visit is not confirmed yet',
+  disabled_or_not_configured: 'appointment email is off or not set up',
+  provider_rejected: 'SendGrid rejected it',
+  provider_request_failed: "SendGrid didn't confirm it",
+};
+
 export function AppointmentDetailModal({ appointment: a, onClose }: { appointment: Appointment; onClose: () => void }) {
   const { data, mutate, can } = useDashboard();
   const canManage = can('appointments.view') && can('appointments.manage'), canSend = can('appointments.view') && can('appointments.send'), canViewFinance = can('finance.view');
@@ -47,6 +66,7 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
     return run(() => mutate(`/api/admin/appointments/${encodeURIComponent(a.id)}/confirmation`, {}, 'POST', 'Confirmation request processed — check notification status'));
   };
   const sms = a.notifications?.sms, email = a.notifications?.email;
+  const smsWhy = SMS_WHY[a.notifications?.smsReason || ''] || '', emailWhy = EMAIL_WHY[a.notifications?.emailReason || ''] || '';
 
   return (
     <Modal
@@ -159,7 +179,7 @@ export function AppointmentDetailModal({ appointment: a, onClose }: { appointmen
       <Field label="Notes and property access">
         <textarea rows={3} className={inputClass} value={canViewFinance ? notes : 'Restricted'} disabled={!canManage || !canViewFinance || busy} onChange={(e) => setNotes(e.target.value)} placeholder="Gate codes, pets, dryer details…" />
       </Field>
-      <p className="text-xs text-slate-500 flex items-center gap-2"><FileText size={14} />Confirmation: text {sms || 'not sent'} · email {email || 'not sent'}</p>
+      <p className="text-xs text-slate-500 flex items-center gap-2"><FileText size={14} />Confirmation: text {sms || 'not sent'}{smsWhy ? ` (${smsWhy})` : ''} · email {email || 'not sent'}{emailWhy ? ` (${emailWhy})` : ''}</p>
       <p className="text-xs text-slate-500">Email “accepted” means the provider accepted the request, not confirmed delivery. “rejected” means it was rejected; “failed_or_uncertain” requires office review before any further contact. An email already attempted is not resent automatically, including from this button. Texts may be resent when enabled and consented.</p>
       {error && <ErrorNote>{error}</ErrorNote>}
     </Modal>

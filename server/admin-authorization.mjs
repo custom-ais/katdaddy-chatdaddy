@@ -204,7 +204,7 @@ export function projectConfig(config,principal) {
 }
 const recordFields = ['id','status','scheduledAt','durationMins','technicianId','technicianName','createdAt','revision','urgency','source','route','packageId','overflow','sameDay','jobberState','smsConsent','phoneVerified'];
 const contactFields = ['customerName','name','phone','email','address','city','zip'];
-const safeNotifications = value => pick(value,['sms','email','smsDelivery','emailDelivery','smsAlreadyAttempted','emailAlreadyAttempted']);
+const safeNotifications = value => pick(value,['sms','email','smsDelivery','emailDelivery','smsAlreadyAttempted','emailAlreadyAttempted','smsReason','emailReason']);
 const safeJobber = value => object(value) ? pick(value,['jobNumber','jobId','visitId','webUri']) : null;
 const serviceLabel = row => row?.route === 'assessment' ? 'Assessment' : row?.route === 'bundle' ? 'Cleaning and assessment' : 'Service';
 export function projectAppointment(row,principal,{analytics=false}={}) {
@@ -246,7 +246,7 @@ function projectApproval(row,principal) {
   const result = pick(row,['id','kind','status','requestedAt','expiresAt','scheduledAt','durationMins','technicianName','technicianId','appointmentId']);
   result.customer = pick(row?.customer,['name','phone','email','address','city','zip']);
   result.service = finance(principal) && typeof row?.service === 'string' ? row.service : 'Service';
-  result.notified = { ...safeNotifications(row?.notified), ...pick(row?.notified,['smsReason','reason']) };
+  result.notified = { ...safeNotifications(row?.notified), ...pick(row?.notified,['reason']) };
   result.decision = pick(row?.decision,['decision','by','at']);
   if (finance(principal)) {
     Object.assign(result,pick(row,['reason','notes','failure','totalCents']));
@@ -267,7 +267,7 @@ function projectIntegrations(value,principal) {
     return hasAll(principal,['appointments.view','appointments.send']) ? {sms:pick(value?.sms,['enabled','configured']),email:pick(value?.email,['enabled','configured'])} : {};
   }
   const result = {};
-  for (const name of ['jobber','verification','sms','email','maps','assistant']) result[name] = pick(value?.[name],['enabled','provider','configured','appConfigured','connected','deliveryVerified','model']);
+  for (const name of ['jobber','verification','sms','email','maps','assistant']) result[name] = pick(value?.[name],['enabled','provider','configured','appConfigured','connected','deliveryVerified','model','virtualPhone']);
   result.verification.channels = safeStrings(value?.verification?.channels);
   result.database = typeof value?.database === 'string' ? value.database : '';
   result.accounts = {};
