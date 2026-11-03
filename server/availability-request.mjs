@@ -19,7 +19,8 @@ export async function captureAvailabilityRequest({ store, sendStaffSms = null, c
     if (data.emergencyCutoffShown) return "";
     data.emergencyCutoffShown = true;
     await log("availability.cutoff", { date: preference.date, time: preference.time, cutoff: "14:00 America/Phoenix" });
-    return "Same-day emergency requests must be received before 2 p.m. Arizona time. We can check the next available appointment; please keep the dryer off while we finish the safety questions.";
+    // After the cutoff the regular schedule can't do today, but the on-call technician might (offered with the packages).
+    return "It's past our 2 p.m. cutoff for same-day visits, but we do have an on-call technician who may be available after hours. I'll show you the options after a few safety questions. Please keep the dryer off.";
   }
   const key = `availability_${createHash("sha256").update(`${session}:${preference.date}:${preference.time}`).digest("hex")}`;
   if (await store.requestByIdem(key)) return "";
