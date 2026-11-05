@@ -511,17 +511,42 @@ const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 const LOADING_STEPS = ['Checking the schedule for openings…', 'Calculating routes…', 'Assigning a technician…', 'Gathering optional alternatives…'];
 const BOOKING_STEPS = ['Creating your account…', 'Assigning your technician…', 'Adding your visit to the schedule…', 'Sending your confirmation…'];
 
+// How long each wait usually takes, so the steps are spread across the real wait instead of the
+// first ones checking off at once and the last one spinning. From production, week of Nov 2 2026:
+// openings took about 24 s (p50) and booking about 22 s. Each browser then remembers its own waits.
+const TYPICAL_WAIT_MS = { openings: 22_000, booking: 22_000 } as const;
+type WaitName = keyof typeof TYPICAL_WAIT_MS;
+const waitKey = (name: WaitName) => `bob:wait:${name}`;
+const clampWait = (ms: number) => Math.min(45_000, Math.max(3_000, ms));
+function expectedWait(name: WaitName) {
+  try {
+    const saved = Number(localStorage.getItem(waitKey(name)));
+    if (Number.isFinite(saved) && saved > 0) return clampWait(saved);
+  } catch {}
+  return TYPICAL_WAIT_MS[name];
+}
+function rememberWait(name: WaitName, ms: number) {
+  // Half the previous expectation, half this wait: one fast (cached) or slow lookup doesn't swing it.
+  try { localStorage.setItem(waitKey(name), String(Math.round(clampWait((expectedWait(name) + clampWait(ms)) / 2)))); } catch {}
+}
+
 /**
- * A small popup while BOB loads openings or books the visit: steps check off one by one. It's shown
- * on <body> so it covers the chat however the page is scrolled or animated.
+ * A small popup while BOB loads openings or books the visit. Each step gets an equal share of the
+ * expected wait, and the bar follows the clock; when the answer arrives everything checks off. It's
+ * shown on <body> so it covers the chat however the page is scrolled or animated.
  */
-function ProgressPopup({ title, steps, done, every = 1000 }: { title: string; steps: string[]; done: boolean; every?: number }) {
-  const [i, setI] = useState(0);
+function ProgressPopup({ title, steps, done, expected }: { title: string; steps: string[]; done: boolean; expected: number }) {
+  const [startedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(startedAt);
   useEffect(() => {
-    const t = setInterval(() => setI((n) => Math.min(n + 1, steps.length - 1)), every);
+    if (done) return;
+    const t = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(t);
-  }, [steps.length, every]);
-  const current = done ? steps.length : i;
+  }, [done]);
+  const elapsed = now - startedAt;
+  const current = done ? steps.length : Math.min(steps.length - 1, Math.floor((elapsed / expected) * steps.length));
+  // Steady to 90% by the expected time, then still creeping toward 98% if the wait runs long.
+  const filled = done ? 1 : elapsed <= expected ? 0.9 * (elapsed / expected) : 0.9 + 0.08 * (1 - Math.exp(-(elapsed - expected) / expected));
   return createPortal(
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/45 backdrop-blur-[2px] p-4 animate-in" role="dialog" aria-modal="true" aria-label={title}>
       <div className="w-full max-w-sm rounded-3xl bg-white shadow-2xl border border-slate-200 p-6">
@@ -543,7 +568,7 @@ function ProgressPopup({ title, steps, done, every = 1000 }: { title: string; st
           ))}
         </ul>
         <div className="mt-5 h-1.5 rounded-full bg-slate-100 overflow-hidden" aria-hidden="true">
-          <div className="h-full bg-gradient-to-r from-orange-400 to-emerald-500 transition-[width] duration-700 ease-out" style={{ width: `${Math.max(8, (current / steps.length) * 100)}%` }} />
+          <div className="h-full bg-gradient-to-r from-orange-400 to-emerald-500 transition-[width] duration-300 ease-linear" style={{ width: `${Math.max(4, filled * 100)}%` }} />
         </div>
         <p className="mt-4 text-xs font-bold text-slate-500 text-center">Please do not navigate away from this screen.</p>
       </div>
@@ -552,25 +577,34 @@ function ProgressPopup({ title, steps, done, every = 1000 }: { title: string; st
   );
 }
 
-/** Shows a popup for at least `min` ms (so it never just flashes), then checks every step off before closing. */
-function useProgress(min: number) {
+/**
+ * Shows a popup for at least `min` ms (so it never just flashes), then checks every step off before
+ * closing. `expected` paces the steps; `run` changes on every start so a new wait starts fresh.
+ */
+function useProgress(name: WaitName, min: number) {
   const [state, setState] = useState<'off' | 'on' | 'done'>('off');
+  const [run, setRun] = useState<{ id: number; expected: number }>({ id: 0, expected: TYPICAL_WAIT_MS[name] });
   const started = useRef(0);
-  const start = useCallback(() => { started.current = Date.now(); setState('on'); }, []);
+  const start = useCallback(() => {
+    started.current = Date.now();
+    setRun((r) => ({ id: r.id + 1, expected: expectedWait(name) }));
+    setState('on');
+  }, [name]);
   const finish = useCallback(async () => {
+    rememberWait(name, Date.now() - started.current);
     await sleep(Math.max(0, min - (Date.now() - started.current)));
     setState('done');
     await sleep(450);
     setState('off');
-  }, [min]);
+  }, [min, name]);
   const stop = useCallback(() => setState('off'), []);
-  return { state, start, finish, stop };
+  return { state, start, finish, stop, run: run.id, expected: run.expected };
 }
 
 function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, onEdit, onSooner }: { token: string; session: any; config: any; onBooked: (r: any, pending: boolean) => void; onApproval: (a: any) => void; onRequest: () => void; onEdit: () => void; onSooner?: () => void }) {
   const [slots, setSlots] = useState<any[]>([]), [cursor, setCursor] = useState<number | null>(0), [date, setDate] = useState(''), [busy, setBusy] = useState(false), [error, setError] = useState(''), [hold, setHold] = useState<any>(null), [approved, setApproved] = useState(false), [enabled, setEnabled] = useState(true), [now, setNow] = useState(Date.now()), [quote, setQuote] = useState<any>(null);
   const idem = useRef(crypto.randomUUID()), generation = useRef(0), busyRef = useRef(false);
-  const loading = useProgress(2400), booking = useProgress(2600);
+  const loading = useProgress('openings', 2400), booking = useProgress('booking', 2600);
   // The pressed time: outlined and filling while it's held, then solid green.
   const [picking, setPicking] = useState<string | null>(null), [held, setHeld] = useState<string | null>(null);
   const [confirmState, setConfirmState] = useState<'idle' | 'working' | 'done'>('idle');
@@ -643,8 +677,8 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
   };
 
   const popups = <>
-    {loading.state !== 'off' && <ProgressPopup title="Finding your openings" steps={LOADING_STEPS} done={loading.state === 'done'} every={650} />}
-    {booking.state !== 'off' && <ProgressPopup title="Booking your visit" steps={BOOKING_STEPS} done={booking.state === 'done'} every={850} />}
+    {loading.state !== 'off' && <ProgressPopup key={`openings-${loading.run}`} title="Finding your openings" steps={LOADING_STEPS} done={loading.state === 'done'} expected={loading.expected} />}
+    {booking.state !== 'off' && <ProgressPopup key={`booking-${booking.run}`} title="Booking your visit" steps={BOOKING_STEPS} done={booking.state === 'done'} expected={booking.expected} />}
   </>;
 
   if (!enabled) {
