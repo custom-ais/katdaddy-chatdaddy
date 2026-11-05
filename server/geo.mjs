@@ -26,6 +26,16 @@ export const estimateDriveMinutes = (a, b) => Math.round((haversineMiles(a, b) *
 
 const pointKey = (p) => `${p.lat},${p.lng}`;
 const LOOKUP_TIMEOUT_MS = 8000;
+// Google requests for different starting points run this many at a time instead of one by one.
+const GOOGLE_CONCURRENCY = 6;
+
+/** Run fn over items with at most `limit` running at once. */
+async function eachLimited(items, limit, fn) {
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) { const i = next++; await fn(items[i], i); }
+  }));
+}
 const ISSUE_KEY = "diag:geo";
 // Address suggestions lean toward the West Valley (Places allows a 50 km bias circle).
 const WEST_VALLEY = { latitude: 33.53, longitude: -112.38 };
@@ -53,6 +63,9 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
   const validPoint = p => p && Number.isFinite(p.lat) && Number.isFinite(p.lng) && Math.abs(p.lat) <= 90 && Math.abs(p.lng) <= 180;
   const cacheKey = (kind, from, to) => `${kind}:${routeRevision}:${pointKey(from)}>${pointKey(to)}`;
   const recent = hit => hit && Number.isFinite(hit.measuredAt) && clock() >= hit.measuredAt && clock() - hit.measuredAt < DRIVE_TTL * 1000;
+  // Each cache lookup is a database round trip, so batches go in one when the cache supports it.
+  const cacheGetMany = async (keys) => cache.kvGetMany ? cache.kvGetMany(keys) : new Map(await Promise.all(keys.map(async (k) => [k, await cache.kvGet(k)])));
+  const cacheSetMany = async (entries, ttl) => { if (entries.length) await (cache.kvSetMany ? cache.kvSetMany(entries, ttl) : Promise.all(entries.map(([k, v]) => cache.kvSet(k, v, ttl)))); };
   const status = createIntegrationStatus({ cache, provider: 'google', revision: createHash('sha256').update(`google-maps-v1:${googleKey}`).digest('hex'), configured: Boolean(googleKey), operations: ['geocode', 'places', 'routes'], clock, legacyKey: ISSUE_KEY });
   const safeMessage = message => String(message || '').split(googleKey || '\0').join('[redacted]').replace(/([?&]key=)[^&\s)]+/gi, '$1[redacted]');
   const observe = async (operation, fn) => {
@@ -142,6 +155,27 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
     const error = new Error(`Address lookup unavailable. ${message}`);
     error.code = "GEO_UNAVAILABLE";
     throw error;
+  }
+
+  /**
+   * geocode() for a list of addresses (the calendar's jobs): the cached ones in one round trip,
+   * the rest looked up a few at a time. An address that can't be located comes back null.
+   */
+  async function geocodeMany(addresses) {
+    const keys = addresses.map((a) => { const norm = normalizeAddress(a); return norm ? `geo:${norm}` : null; });
+    const hits = await cacheGetMany([...new Set(keys.filter(Boolean))]);
+    const out = Array(addresses.length).fill(null), misses = [];
+    keys.forEach((key, i) => {
+      if (!key) return;
+      const cached = hits.get(key);
+      if (cached) out[i] = cached.miss ? null : cached;
+      else misses.push(i);
+    });
+    await eachLimited(misses, GOOGLE_CONCURRENCY, async (i) => {
+      try { out[i] = await geocode(addresses[i]); }
+      catch (error) { console.warn("[geo] could not locate an address:", safeMessage(error.message)); }
+    });
+    return out;
   }
 
   // ---- address suggestions while the customer types (Google Places API (New)) ---------------
@@ -256,72 +290,88 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
   const addressFor = (placeId, sessionToken) => googleKey ? observe('places', () => addressForRaw(placeId, sessionToken)) : Promise.resolve(null);
 
   /** pairs: [{from, to}] -> minutes[] in the same order (null when unknown). */
-  async function driveMinutes(pairs, { fresh = false } = {}) {
-    const out = new Array(pairs.length).fill(null);
-    const missing = [];
-    await Promise.all(
-      pairs.map(async (p, i) => {
-        if (!validPoint(p.from) || !validPoint(p.to)) return;
-        if (pointKey(p.from) === pointKey(p.to)) return void (out[i] = 0);
-        if (!googleKey) return; // No measured route: the scheduler must reject required travel legs.
-        const hit = fresh ? null : await cache.kvGet(cacheKey("drive", p.from, p.to));
-        if (recent(hit) && Number.isFinite(hit.minutes) && hit.minutes >= 0) out[i] = hit.minutes;
-        else missing.push(i);
-      }),
-    );
+  /** Group pair indexes by starting point, in chunks of 24 destinations (one Routes request each). */
+  const chunksByOrigin = (pairs, indexes) => {
     const byOrigin = new Map();
-    for (const i of missing) {
+    for (const i of indexes) {
       const k = pointKey(pairs[i].from);
       if (!byOrigin.has(k)) byOrigin.set(k, []);
       byOrigin.get(k).push(i);
     }
-    for (const indexes of byOrigin.values()) {
-      for (let s = 0; s < indexes.length; s += 24) {
-        const chunk = indexes.slice(s, s + 24);
-        let elements = [];
-        try {
-          elements = await matrix(pairs[chunk[0]].from, chunk.map((i) => pairs[i].to));
-        } catch (error) {
-          console.warn("[geo] measured route unavailable; travel remains unknown:", safeMessage(error.message));
-        }
-        for (const [pos, i] of chunk.entries()) {
-          const el = elements.find((e) => e.d === pos);
-          out[i] = Number.isFinite(el?.minutes) && el.minutes >= 0 ? el.minutes : null;
-          if (out[i] != null) {
-            await cache.kvSet(cacheKey("drive", pairs[i].from, pairs[i].to), { minutes: out[i], measuredAt: clock() }, DRIVE_TTL);
-          }
-        }
-      }
+    const chunks = [];
+    for (const group of byOrigin.values()) for (let s = 0; s < group.length; s += 24) chunks.push(group.slice(s, s + 24));
+    return chunks;
+  };
+
+  async function driveMinutes(pairs, { fresh = false } = {}) {
+    const out = new Array(pairs.length).fill(null);
+    const candidates = [];
+    pairs.forEach((p, i) => {
+      if (!validPoint(p.from) || !validPoint(p.to)) return;
+      if (pointKey(p.from) === pointKey(p.to)) return void (out[i] = 0);
+      if (!googleKey) return; // No measured route: the scheduler must reject required travel legs.
+      candidates.push(i);
+    });
+    const key = (i) => cacheKey("drive", pairs[i].from, pairs[i].to);
+    const hits = fresh || !candidates.length ? new Map() : await cacheGetMany(candidates.map(key));
+    const missing = [];
+    for (const i of candidates) {
+      const hit = hits.get(key(i));
+      if (recent(hit) && Number.isFinite(hit.minutes) && hit.minutes >= 0) out[i] = hit.minutes;
+      else missing.push(i);
     }
+    const measured = [];
+    await eachLimited(chunksByOrigin(pairs, missing), GOOGLE_CONCURRENCY, async (chunk) => {
+      let elements = [];
+      try {
+        elements = await matrix(pairs[chunk[0]].from, chunk.map((i) => pairs[i].to));
+      } catch (error) {
+        console.warn("[geo] measured route unavailable; travel remains unknown:", safeMessage(error.message));
+      }
+      for (const [pos, i] of chunk.entries()) {
+        const el = elements.find((e) => e.d === pos);
+        out[i] = Number.isFinite(el?.minutes) && el.minutes >= 0 ? el.minutes : null;
+        if (out[i] != null) measured.push([key(i), { minutes: out[i], measuredAt: clock() }]);
+      }
+    });
+    await cacheSetMany(measured, DRIVE_TTL);
     return out;
   }
 
   // Coverage uses measured road miles only. A routing outage must never silently become a radius.
   async function roadRoutes(pairs, { fresh = false } = {}) {
     if (!googleKey) throw Object.assign(new Error("GOOGLE_MAPS_API_KEY isn't set in Vercel. Add it (from a Google Cloud project with the Routes API turned on) and redeploy."), { code: "ROUTING_UNAVAILABLE" });
-    const out = Array(pairs.length).fill(null), groups = new Map();
+    const out = Array(pairs.length).fill(null), candidates = [];
     for (let i = 0; i < pairs.length; i++) {
       const { from, to } = pairs[i];
       if (!validPoint(from) || !validPoint(to)) continue;
       if (pointKey(from) === pointKey(to)) { out[i] = { miles: 0, minutes: 0 }; continue; }
-      const cached = fresh ? null : await cache.kvGet(cacheKey("road", from, to));
-      if (recent(cached) && Number.isFinite(cached.miles) && cached.miles >= 0) { out[i] = cached; continue; }
-      const key = pointKey(from);
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(i);
+      candidates.push(i);
     }
-    for (const indexes of groups.values()) for (let start = 0; start < indexes.length; start += 24) {
-      const chunk = indexes.slice(start, start + 24);
+    const key = (i) => cacheKey("road", pairs[i].from, pairs[i].to);
+    const hits = fresh || !candidates.length ? new Map() : await cacheGetMany(candidates.map(key));
+    const missing = [];
+    for (const i of candidates) {
+      const cached = hits.get(key(i));
+      if (recent(cached) && Number.isFinite(cached.miles) && cached.miles >= 0) out[i] = cached;
+      else missing.push(i);
+    }
+    const measured = [];
+    let failure = null;
+    await eachLimited(chunksByOrigin(pairs, missing), GOOGLE_CONCURRENCY, async (chunk) => {
+      if (failure) return;
       let elements;
       try { elements = await matrix(pairs[chunk[0]].from, chunk.map((i) => pairs[i].to)); }
-      catch (cause) { throw Object.assign(new Error("Road-distance lookup is unavailable. Please try again or ask the office to review the address."), { code: "ROUTING_UNAVAILABLE", cause }); }
+      catch (cause) { failure ||= cause; return; }
       for (let pos = 0; pos < chunk.length; pos++) {
         const i = chunk[pos], el = elements.find((e) => e.d === pos);
         if (!Number.isFinite(el?.miles) || el.miles < 0) continue;
         out[i] = { miles: el.miles, minutes: Number.isFinite(el.minutes) && el.minutes >= 0 ? el.minutes : null, measuredAt: clock() };
-        await cache.kvSet(cacheKey("road", pairs[i].from, pairs[i].to), out[i], DRIVE_TTL);
+        measured.push([key(i), out[i]]);
       }
-    }
+    });
+    await cacheSetMany(measured, DRIVE_TTL);
+    if (failure) throw Object.assign(new Error("Road-distance lookup is unavailable. Please try again or ask the office to review the address."), { code: "ROUTING_UNAVAILABLE", cause: failure });
     return out;
   }
 
@@ -339,5 +389,5 @@ export function createGeo({ cache, googleKey = process.env.GOOGLE_MAPS_API_KEY |
     await cache.kvSet(key, { samples, measuredAt: clock() }, DRIVE_TTL);
     return samples;
   }
-  return { geocode, driveMinutes, roadRoutes, serviceAreaSamples, lastIssue, diagnostics: status.snapshot, health: status.snapshot, suggestAddresses, addressFor, suggestions: Boolean(googleKey), provider: googleKey ? "google" : "estimate" };
+  return { geocode, geocodeMany, driveMinutes, roadRoutes, serviceAreaSamples, lastIssue, diagnostics: status.snapshot, health: status.snapshot, suggestAddresses, addressFor, suggestions: Boolean(googleKey), provider: googleKey ? "google" : "estimate" };
 }

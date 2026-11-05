@@ -55,14 +55,25 @@ export function createScheduler({ store, jobber, geo }) {
     }
     for (const b of out) b.zip ||= zipOf(b.address);
     const unlocated = out.filter((b) => !b.location && b.address);
-    await pool(unlocated, 6, async (b) => {
+    if (unlocated.length && typeof geo.geocodeMany === "function") {
+      // Cached addresses come back in one round trip. A job that can't be located leaves its drive
+      // unknown, so the times next to it stay closed (same as before).
       try {
-        const g = await geo.geocode(b.address);
-        if (g) b.location = { lat: g.lat, lng: g.lng };
+        const found = await geo.geocodeMany(unlocated.map((b) => b.address));
+        unlocated.forEach((b, i) => { if (found[i]) b.location = { lat: found[i].lat, lng: found[i].lng }; });
       } catch (error) {
-        console.warn("[schedule] could not locate", b.id, error.message);
+        console.warn("[schedule] could not locate calendar addresses:", error.message);
       }
-    });
+    } else {
+      await pool(unlocated, 6, async (b) => {
+        try {
+          const g = await geo.geocode(b.address);
+          if (g) b.location = { lat: g.lat, lng: g.lng };
+        } catch (error) {
+          console.warn("[schedule] could not locate", b.id, error.message);
+        }
+      });
+    }
     return out;
   }
 
