@@ -28,6 +28,7 @@ import { approvalPolicy } from "./approval-policy.mjs";
 import { isIP } from "node:net";
 import { distanceMiles, validPoint } from "../shared/coverage.mjs";
 import { captureAvailabilityRequest } from "./availability-request.mjs";
+import { notifyEmergencyContact } from "./emergency-alert.mjs";
 import { randomBytes, createHash, scryptSync, timingSafeEqual, createHmac } from "node:crypto";
 import {
   DEFAULT_CONFIG, INITIAL_FAQS, bookingQuote, travelFeeFor, validateContact,
@@ -1084,6 +1085,13 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         await record(req, "coverage.checked", { area, miles: data.driveFromBaseMiles, minutes: data.driveFromBaseMin, mode: c.serviceAreaMode });
         data.travelFeeCents = travelZone ? Math.max(c.travelZoneFeeCents || 0, where.travelFeeCents || 0) : where.travelFeeCents;
         data.travelZone = travelZone;
+        // An emergency: the approver / on-call technician gets the customer's details now, whatever
+        // happens with the booking. Never blocks the customer; failures are logged and kept in the Inbox.
+        try {
+          await notifyEmergencyContact({ store, sendStaffSms: useTwilioSms && !ownerAlertsOnly ? async ({ phone, text }) => sendSms(null, phone, text) : null, config: c, data, session: token, now: clock(), origin: publicOrigin, log: (kind, details, level) => record(req, kind, details, level) });
+        } catch (error) {
+          await record(req, "notification.failed", { kind: "emergency", error: String(error.message).slice(0, 200) }, "error").catch(() => {});
+        }
         let verification = { required: false };
         if (phoneOk(data, c)) data.stage = "slots";
         else {

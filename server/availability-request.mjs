@@ -16,11 +16,13 @@ export async function captureAvailabilityRequest({ store, sendStaffSms = null, c
   // Ordinary bookings never create company approval/availability texts.
   if (!emergency || !sameDay) return "";
   if (emergency && !emergencySameDayEligible(data.emergencyRequestedAt, preference.date)) {
-    if (data.emergencyCutoffShown) return "";
-    data.emergencyCutoffShown = true;
+    if (data.emergencyAfterCutoff) return "";
+    // After the cutoff the regular schedule can't do today, but the on-call technician might. The
+    // customer hears about the cutoff when the times are shown (BookingBot's scheduling message),
+    // not before the safety questions; the packages already mention the on-call technician.
+    data.emergencyAfterCutoff = true;
     await log("availability.cutoff", { date: preference.date, time: preference.time, cutoff: "14:00 America/Phoenix" });
-    // After the cutoff the regular schedule can't do today, but the on-call technician might (offered with the packages).
-    return "It's past our 2 p.m. cutoff for same-day visits, but we do have an on-call technician who may be available after hours. I'll show you the options after a few safety questions. Please keep the dryer off.";
+    return "";
   }
   const key = `availability_${createHash("sha256").update(`${session}:${preference.date}:${preference.time}`).digest("hex")}`;
   if (await store.requestByIdem(key)) return "";

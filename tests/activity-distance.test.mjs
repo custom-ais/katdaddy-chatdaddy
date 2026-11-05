@@ -94,7 +94,9 @@ test("after the cutoff the safety flow continues, but no same-day emergency text
   const h = await harness(t, { config: { approver: { name: "Ryan", phone: "6235550100", email: "" } } });
   h.advance(3_600_000); // 2 PM Arizona, exactly
   const r = await h.chat(await h.fresh(), "Emergency Clog / Overheating");
-  assert.match(r.reply, /past our 2 p\.m\. cutoff for same-day visits, but we do have an on-call technician/);
+  // The cutoff note is said when the times are shown (BookingBot), not before the safety questions.
+  assert.doesNotMatch(r.reply, /2 p\.m\. cutoff/);
+  assert.equal(r.session.emergencyAfterCutoff, true);
   assert.equal(r.session.pending, "safetyCheck");
   assert.ok(!h.twilio.calls.some((c) => c[0] === "sms"));
 });
