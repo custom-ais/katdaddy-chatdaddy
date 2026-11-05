@@ -124,7 +124,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     return Reflect.get(target, key);
   } });
   jobber = guardProvider(jobber, ['ensureClientAndProperty', 'createScheduledJob', 'exchangeCode', 'disconnect', 'verifyScheduledVisit', 'verifyAssignment', 'listUsers']);
-  geo = guardProvider(geo, ['geocode', 'serviceAreaSamples', 'driveMinutes']);
+  geo = guardProvider(geo, ['geocode', 'geocodeMany', 'serviceAreaSamples', 'driveMinutes']);
   twilio = guardProvider(twilio, ['sendSms', 'sendVerification', 'checkVerification']);
   sendgrid = guardProvider(sendgrid, ['sendEmail']);
   const ownerConsent = createOwnerConsent({store,clock});

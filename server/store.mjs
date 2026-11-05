@@ -272,6 +272,24 @@ export function createStore(db, { clock = Date.now } = {}) {
         [key, json(value), expires],
       );
     },
+    /** Several keys in one round trip: Map key -> value (missing or expired keys are absent). */
+    async kvGetMany(keys) {
+      const unique = [...new Set(keys)];
+      if (!unique.length) return new Map();
+      const rows = await q("select key, value from bob.kv where key in (select jsonb_array_elements_text($1::jsonb)) and (expires is null or expires>$2)", [json(unique), clock()]);
+      return new Map(rows.map((r) => [r.key, r.value]));
+    },
+    /** Several [key, value] entries with one expiry, in one round trip. A repeated key keeps its last value. */
+    async kvSetMany(entries, ttlSeconds) {
+      const latest = new Map(entries);
+      if (!latest.size) return;
+      const expires = ttlSeconds ? clock() + ttlSeconds * 1000 : null;
+      await q(
+        `insert into bob.kv(key,value,expires) select e->>'k', e->'v', $2::bigint from jsonb_array_elements($1::jsonb) e
+         on conflict (key) do update set value=excluded.value, expires=excluded.expires`,
+        [json([...latest].map(([k, v]) => ({ k, v: v ?? null }))), expires],
+      );
+    },
     async consumeKv(key) {
       const rows = await q('delete from bob.kv where key=$1 and (expires is null or expires>$2) returning value', [key, clock()]);
       return rows[0]?.value || null;

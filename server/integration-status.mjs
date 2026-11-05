@@ -1,19 +1,29 @@
 export const sanitizeDiagnostic = value => String(value || '').replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [redacted]').replace(/([?&](?:key|api_key|token|access_token|secret)=)[^&\s)]+/gi, '$1[redacted]').replace(/\bAIza[0-9A-Za-z_-]{20,}\b/g, '[redacted]').replace(/\bpit-[A-Za-z0-9-]{8,}/g, '[redacted]').replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[redacted]').slice(0, 1500);
 // Passive diagnostics: these methods never call a provider. Revision is private
 // server-side configuration identity and is never included in a snapshot.
+const SUCCESS_WRITE_EVERY_MS = 60_000;
 export function createIntegrationStatus({ store, cache = store, provider, revision, configured = true, operations = ['default'], clock = Date.now, maxAgeMs = 15 * 60_000, legacyKey } = {}) {
   const names = [...new Set(operations)];
   const key = operation => `diag:v2:${provider}:${operation}`;
   const read = async operation => { try { return await cache?.kvGet(key(operation)) || null; } catch { return null; } };
   const publicIssue = issue => issue && Number.isFinite(issue.at) ? { at: issue.at, message: sanitizeDiagnostic(issue.message), operation: issue.operation || 'unknown', historical: true } : null;
+  // A success right after another one from this instance changes nothing the panel shows, so it is
+  // written at most once a minute (each is a database read and write). Failures, and the first
+  // success after one, are always written.
+  const lastSuccess = new Map();
   async function record(operation, status, message) {
     if (!configured || !names.includes(operation)) return;
+    if (status === 'healthy') {
+      const last = lastSuccess.get(operation), now = clock();
+      if (last != null && now >= last && now - last < SUCCESS_WRITE_EVERY_MS) return;
+      lastSuccess.set(operation, now);
+    } else lastSuccess.delete(operation);
     try {
       const previous = await read(operation), at = clock();
       const lastIssue = status === 'error' ? { at, message: sanitizeDiagnostic(message || 'Provider operation failed.'), operation } : previous?.lastIssue || null;
       const history = status === 'error' ? [lastIssue, ...(previous?.history || [])].slice(0, 10) : previous?.history || [];
       await cache?.kvSet(key(operation), { revision, status, checkedAt: at, lastSuccessAt: status === 'healthy' ? at : previous?.revision === revision ? previous.lastSuccessAt || null : null, lastIssue, history });
-    } catch {} // Diagnostic storage must not break normal provider operations.
+    } catch { if (status === 'healthy') lastSuccess.delete(operation); } // Diagnostic storage must not break normal provider operations.
   }
   async function snapshot() {
     const detail = {}, history = [];

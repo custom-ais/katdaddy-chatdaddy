@@ -57,7 +57,7 @@ export function controlProviders({ controls, jobber, geo, twilio, sendgrid }) {
       if (key === 'driveMinutes') return Array(args[0]?.length || 0).fill(null);
       if (['suggestAddresses', 'serviceAreaSamples'].includes(key)) return [];
       if (key === 'addressFor') return null;
-      throw disabled('maps', key === 'geocode' ? 'GEO_UNAVAILABLE' : 'ROUTING_UNAVAILABLE');
+      throw disabled('maps', key === 'geocode' || key === 'geocodeMany' ? 'GEO_UNAVAILABLE' : 'ROUTING_UNAVAILABLE');
     };
   });
   const twilioOut = wrap(twilio, (key, fn) => async (...args) => {
