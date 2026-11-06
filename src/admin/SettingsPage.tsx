@@ -14,6 +14,7 @@ import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Modal, Section, Toggle, inputClass, primaryButton, secondaryButton, subtleButton } from './ui';
 import { money } from '../../shared/domain.mjs';
 import { DEFAULT_UPSELLS, PACKAGES } from '../../shared/catalog.mjs';
+import { WEEKDAYS, businessWeek, weekSummary, timeOffLabel, validWorkWeek, validTimeOffEntry } from '../../shared/tech-schedule.mjs';
 import { COVERAGE_IN, COVERAGE_TRAVEL } from '../../shared/coverage.mjs';
 
 const ServiceAreaMap = lazy(() => import('./ServiceAreaMap').then((m) => ({ default: m.ServiceAreaMap })));
@@ -208,6 +209,95 @@ function Connections({ config, onChange }: { config: any; onChange: (key: string
 }
 
 /** Edits are saved by the floating Save button with the rest of the page. */
+const phoenixToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Phoenix', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+
+/**
+ * One technician's work schedule and time off. BOB only offers this tech for a visit that fits in
+ * their hours that day and doesn't touch their time off; Jobber is still checked before booking.
+ */
+function TechSchedule({ tech, onChange }: { tech: Technician; onChange: (patch: Partial<Technician>) => void }) {
+  const { data } = useDashboard();
+  const week = Array.isArray(tech.workWeek) && tech.workWeek.length === 7 ? tech.workWeek : null;
+  const today = phoenixToday();
+  const upcoming = (tech.timeOff || []).filter((t) => t.to >= today);
+  const [draft, setDraft] = useState({ from: today, to: today, allDay: true, start: '12:00', end: '17:00', note: '' });
+  const [draftError, setDraftError] = useState('');
+  const setDay = (i: number, patch: any) => onChange({ workWeek: (week || businessWeek(data.config)).map((d, j) => (j === i ? { ...d, ...patch } : d)) });
+  const addTimeOff = () => {
+    const entry = { id: `off-${crypto.randomUUID().slice(0, 8)}`, from: draft.from, to: draft.to || draft.from, start: draft.allDay ? '' : draft.start, end: draft.allDay ? '' : draft.end, note: draft.note.trim() };
+    if (!validTimeOffEntry(entry)) { setDraftError(entry.from > entry.to ? 'The last day is before the first day.' : !draft.allDay && entry.start >= entry.end ? 'The end time needs to be after the start time.' : 'Check the dates and times.'); return; }
+    if (entry.to < today) { setDraftError('That time off has already passed.'); return; }
+    setDraftError('');
+    onChange({ timeOff: [...(tech.timeOff || []), entry].sort((a, b) => a.from.localeCompare(b.from)) });
+    setDraft({ ...draft, note: '' });
+  };
+  const weekOk = !week || validWorkWeek(week);
+  return (
+    <details className="rounded-xl border border-slate-200 bg-white" data-tech-schedule={tech.id}>
+      <summary className="cursor-pointer select-none px-3 py-2.5 text-sm font-bold text-slate-800">
+        Work schedule &amp; time off
+        <span className="block text-xs font-semibold text-slate-500">{weekSummary(week)}{upcoming.length ? ` · ${upcoming.length} upcoming time off` : ''}</span>
+      </summary>
+      <div className="px-3 pb-3 space-y-4">
+        <div className="space-y-2">
+          <Toggle checked={!week} onChange={(v) => onChange({ workWeek: v ? null : businessWeek(data.config) })} label="Works whenever the business is open"
+            detail={week ? 'Off: BOB only offers this tech inside the hours below.' : 'On: any open time can go to this tech. Turn off to set their own days and hours.'} />
+          {week && (
+            <div className="space-y-1.5">
+              {[1, 2, 3, 4, 5, 6, 0].map((i) => (
+                <div key={i} className="grid grid-cols-[7rem_1fr] items-center gap-2">
+                  <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                    <input type="checkbox" className="size-4 accent-orange-500" checked={week[i].on} onChange={(e) => setDay(i, { on: e.target.checked })} aria-label={`${tech.name || 'Technician'} works ${WEEKDAYS[i]}`} />{WEEKDAYS[i].slice(0, 3)}
+                  </label>
+                  {week[i].on ? (
+                    <span className="flex items-center gap-1.5 text-sm text-slate-500">
+                      <input type="time" step={900} className={`${inputClass} !py-1.5`} value={week[i].start} onChange={(e) => setDay(i, { start: e.target.value })} aria-label={`${WEEKDAYS[i]} start`} />
+                      to
+                      <input type="time" step={900} className={`${inputClass} !py-1.5`} value={week[i].end} onChange={(e) => setDay(i, { end: e.target.value })} aria-label={`${WEEKDAYS[i]} end`} />
+                    </span>
+                  ) : <span className="text-sm text-slate-400">Off</span>}
+                </div>
+              ))}
+              {!weekOk && <p role="alert" className="text-xs font-semibold text-rose-700">Each working day needs a start time before its end time.</p>}
+              <p className="text-[11px] text-slate-400 leading-snug">The whole visit has to fit: a 90-minute visit at 3 PM needs them until 4:30 PM.</p>
+            </div>
+          )}
+        </div>
+        <div className="space-y-2">
+          <p className="text-xs font-bold text-slate-700">Time off</p>
+          {upcoming.length ? (
+            <ul className="space-y-1.5">
+              {upcoming.map((t) => (
+                <li key={t.id} className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 border border-slate-200 px-2.5 py-1.5 text-sm">
+                  <span className="min-w-0"><span className="font-semibold text-slate-800">{timeOffLabel(t)}</span>{t.note && <span className="block text-xs text-slate-500 truncate">{t.note}</span>}</span>
+                  <button type="button" className="shrink-0 text-xs font-bold text-rose-700 hover:text-rose-900" onClick={() => onChange({ timeOff: (tech.timeOff || []).filter((x) => x.id !== t.id) })} aria-label={`Remove time off ${timeOffLabel(t)}`}>Remove</button>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="text-xs text-slate-500">None coming up.</p>}
+          <div className="rounded-lg border border-dashed border-slate-300 p-2.5 space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="First day"><input type="date" min={today} className={`${inputClass} !py-1.5`} value={draft.from} onChange={(e) => setDraft({ ...draft, from: e.target.value, to: draft.to < e.target.value ? e.target.value : draft.to })} /></Field>
+              <Field label="Last day"><input type="date" min={draft.from || today} className={`${inputClass} !py-1.5`} value={draft.to} onChange={(e) => setDraft({ ...draft, to: e.target.value })} /></Field>
+            </div>
+            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" className="size-4 accent-orange-500" checked={draft.allDay} onChange={(e) => setDraft({ ...draft, allDay: e.target.checked })} />All day</label>
+            {!draft.allDay && (
+              <span className="flex items-center gap-1.5 text-sm text-slate-500">
+                <input type="time" step={900} className={`${inputClass} !py-1.5`} value={draft.start} onChange={(e) => setDraft({ ...draft, start: e.target.value })} aria-label="Time off starts" />
+                to
+                <input type="time" step={900} className={`${inputClass} !py-1.5`} value={draft.end} onChange={(e) => setDraft({ ...draft, end: e.target.value })} aria-label="Time off ends" />
+              </span>
+            )}
+            <input className={`${inputClass} !py-1.5`} maxLength={120} placeholder="Note (optional), e.g. Vacation" value={draft.note} onChange={(e) => setDraft({ ...draft, note: e.target.value })} aria-label="Time off note" />
+            {draftError && <p role="alert" className="text-xs font-semibold text-rose-700">{draftError}</p>}
+            <button type="button" className={secondaryButton} onClick={addTimeOff}><Plus size={14} />Add time off</button>
+          </div>
+        </div>
+      </div>
+    </details>
+  );
+}
+
 function Technicians({ techs, onChange }: { techs: Technician[]; onChange: (next: Technician[]) => void }) {
   const { data, can } = useDashboard();
   const [users, setUsers] = useState<any[] | null>(null);
@@ -221,7 +311,7 @@ function Technicians({ techs, onChange }: { techs: Technician[]; onChange: (next
     onChange(techs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
   };
   return (
-    <Section icon={<Users size={18} />} title="Technicians" description="Link each tech to their Jobber user so BOB reads their own calendar and assigns visits to them. Visits for a Jobber user no tech is linked to (or no one) block every tech."
+    <Section icon={<Users size={18} />} title="Technicians" description="Set each tech's work schedule and time off here: BOB only offers a tech when the whole visit falls on their shift. Link each tech to their Jobber user so BOB also checks their Jobber calendar, fresh, before every booking and assigns the visit to them. Visits for a Jobber user no tech is linked to (or no one) block every tech."
       action={<button className={secondaryButton} onClick={() => onChange([...techs, { id: `tech-${crypto.randomUUID().slice(0, 8)}`, name: '', phone: '', zone: 'West Valley', status: 'off_duty', color: '#3b82f6', jobberUserId: '', vehicle: '', bio: '' } as Technician])}><Plus size={15} />Add technician</button>}>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {techs.map((t, i) => (
@@ -234,7 +324,7 @@ function Technicians({ techs, onChange }: { techs: Technician[]; onChange: (next
               <Field label="Phone" hint={recipientProtected(t) ? 'Master Admin controls this SMS recipient number.' : undefined}><PhoneInput className={inputClass} type="tel" value={t.phone} disabled={recipientProtected(t)} onValueChange={(value) => edit(i, { phone: value })} /></Field>
               <Field label="Truck or van"><input className={inputClass} value={t.vehicle || ''} onChange={(e) => edit(i, { vehicle: e.target.value })} placeholder="Van 2" /></Field>
               <Field label="Home area"><input className={inputClass} value={t.zone} onChange={(e) => edit(i, { zone: e.target.value })} /></Field>
-              <Field label="Status today" hint="Off duty only keeps them off today's openings. Other days follow their Jobber calendar for that day.">
+              <Field label="Status today" hint="Off duty only keeps them off today's openings. Other days follow their work schedule below and their Jobber calendar.">
                 <select className={inputClass} value={t.status} onChange={(e) => edit(i, { status: e.target.value })}>
                   <option value="available">Available</option><option value="on_route">On the way</option><option value="on_job">On a job</option><option value="off_duty">Off duty</option>
                 </select>
@@ -246,6 +336,7 @@ function Technicians({ techs, onChange }: { techs: Technician[]; onChange: (next
                 {(users || []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
               </select>
             </Field>
+            <TechSchedule tech={t} onChange={(patch) => edit(i, patch)} />
             <Field label="Short bio for the office" hint={!can('finance.view') ? 'Restricted: viewing and editing office bios requires financial and unrestricted notes access.' : undefined}><textarea rows={2} className={inputClass} disabled={!can('finance.view')} placeholder={!can('finance.view') ? 'Restricted' : undefined} value={can('finance.view') ? t.bio || '' : ''} onChange={(e) => edit(i, { bio: e.target.value })} /></Field>
             {techs.length > 1 && !data.appointments.some((a) => a.technicianId === t.id) && (
               <button className={`${subtleButton} text-rose-700`} disabled={recipientProtected(t)} title={recipientProtected(t) ? 'Master Admin controls this SMS recipient.' : undefined} onClick={() => { if (!recipientProtected(t)) onChange(techs.filter((_, j) => j !== i)); }}><Trash2 size={14} />Remove</button>

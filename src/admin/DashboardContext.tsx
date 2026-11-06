@@ -22,6 +22,10 @@ export interface Appointment {
 export interface Technician {
   id: string; name: string; phone: string; status: 'available' | 'on_route' | 'on_job' | 'off_duty'; color: string; zone: string;
   jobberUserId: string; vehicle?: string; bio?: string;
+  /** null = works whenever the business is open; otherwise 7 days, Sunday first. */
+  workWeek?: { on: boolean; start: string; end: string }[] | null;
+  /** No start/end = the whole day. */
+  timeOff?: { id: string; from: string; to: string; start: string; end: string; note: string }[];
 }
 
 export interface Snapshot {

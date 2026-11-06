@@ -6,6 +6,7 @@
 // techIds null = blocks every technician (e.g. an unassigned Jobber visit).
 
 import { phoenixDate, dateTime } from "../shared/domain.mjs";
+import { onShift } from "../shared/tech-schedule.mjs";
 import { emergencySameDayEligible } from "./activity.mjs";
 import { routeScore } from "./route-score.mjs";
 import { paceBonus } from "./revenue-pace.mjs";
@@ -140,6 +141,8 @@ export function openSlots({ config, technicians, blocks, drive, durationMins, no
     let best = null;
     for (const tech of techs) {
       if (offToday(tech, candidate.date, now)) continue;
+      // Their work schedule and time off in Settings: the whole visit has to fall on shift.
+      if (!onShift(tech, candidate)) continue;
       const result = evaluateTech({ candidate, tech, blocks, drive, config });
       if (!result.ok) continue;
       const needsNearby = (candidate.sameDay && config.sameDay?.requireNearby) || (candidate.overflow && config.overflow?.requireNearby);
