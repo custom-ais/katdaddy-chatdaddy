@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from 'node:util';
 import { CONFIG_FIELD_PERMISSIONS, PERMISSION_KEYS, hasPermission, isMaster } from '../shared/admin-permissions.mjs';
+import { cleanWorkWeek, cleanTimeOff } from '../shared/tech-schedule.mjs';
 
 const forbidden = () => Object.assign(new Error('You do not have permission for this management action.'), {status:403,code:'PERMISSION_DENIED'});
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value) && [Object.prototype,null].includes(Object.getPrototypeOf(value));
@@ -261,7 +262,11 @@ function projectApproval(row,principal) {
 }
 function projectTechnician(row,principal) {
   const result = pick(row,['id','name','status','color','zone']);
-  if (hasPermission(principal,'settings.schedule.view')) Object.assign(result,pick(row,['phone','jobberUserId','vehicle',...(finance(principal)?['bio']:[])]));
+  if (hasPermission(principal,'settings.schedule.view')) {
+    Object.assign(result,pick(row,['phone','jobberUserId','vehicle',...(finance(principal)?['bio']:[])]));
+    result.workWeek = cleanWorkWeek(row?.workWeek);
+    result.timeOff = cleanTimeOff(row?.timeOff);
+  }
   return result;
 }
 function projectIntegrations(value,principal) {

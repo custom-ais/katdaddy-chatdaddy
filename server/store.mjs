@@ -51,7 +51,7 @@ export function createStore(db, { clock = Date.now } = {}) {
       return withConfigDefaults(await store.get("config"));
     },
     async technicians() {
-      return ((await store.get("technicians")) || []).map((t) => ({ jobberUserId: "", ...t }));
+      return ((await store.get("technicians")) || []).map((t) => ({ jobberUserId: "", workWeek: null, timeOff: [], ...t }));
     },
 
     // ---- sessions ------------------------------------------------------------

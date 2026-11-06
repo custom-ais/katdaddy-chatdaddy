@@ -35,6 +35,7 @@ import {
 import { initialSession, WELCOME, detectSafety, turn } from "../shared/conversation.mjs";
 import { territoryFor, WEST_VALLEY_ZIPS } from "../shared/territory.mjs";
 import { PACKAGES, upsellSettings } from "../shared/catalog.mjs";
+import { validWorkWeek, validTimeOff, cleanWorkWeek, cleanTimeOff } from "../shared/tech-schedule.mjs";
 import { chatTurn } from "./chat.mjs";
 import { confirmationEmail, confirmationSms, approvalRequestText, afterHoursRequestSms, afterHoursRequestEmail } from "./messages.mjs";
 
@@ -1782,10 +1783,23 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           }
           const linked = b.technicians.map((t) => t.jobberUserId).filter(Boolean);
           if (new Set(linked).size !== linked.length) fail(400, "Each Jobber user can be linked to only one technician.");
-          await store.set("technicians", b.technicians.map((t) => ({
-            id: t.id, name: t.name.trim(), phone: String(t.phone || "").slice(0, 30), status: t.status, color: /^#[0-9a-f]{6}$/i.test(t.color || "") ? t.color : "#f97316",
-            zone: String(t.zone || "").slice(0, 200), jobberUserId: String(t.jobberUserId || ""), vehicle: String(t.vehicle || "").slice(0, 60), bio: String(t.bio || "").slice(0, 400),
-          })));
+          // Work schedule and time off: a request that leaves them out keeps what was saved.
+          const saved = await store.technicians();
+          for (const t of b.technicians) {
+            const who = t.name.trim();
+            if (Object.hasOwn(t, "workWeek") && !validWorkWeek(t.workWeek)) fail(400, `Check ${who}'s work schedule: each working day needs a start time before its end time.`);
+            if (Object.hasOwn(t, "timeOff") && !validTimeOff(t.timeOff)) fail(400, `Check ${who}'s time off: each entry needs a start date on or before its end date (up to a year), and a start time before its end time if it isn't all day.`);
+          }
+          const today = phoenixDate(new Date(clock()));
+          await store.set("technicians", b.technicians.map((t) => {
+            const before = saved.find((x) => x.id === t.id) || {};
+            return {
+              id: t.id, name: t.name.trim(), phone: String(t.phone || "").slice(0, 30), status: t.status, color: /^#[0-9a-f]{6}$/i.test(t.color || "") ? t.color : "#f97316",
+              zone: String(t.zone || "").slice(0, 200), jobberUserId: String(t.jobberUserId || ""), vehicle: String(t.vehicle || "").slice(0, 60), bio: String(t.bio || "").slice(0, 400),
+              workWeek: cleanWorkWeek(Object.hasOwn(t, "workWeek") ? t.workWeek : before.workWeek),
+              timeOff: cleanTimeOff(Object.hasOwn(t, "timeOff") ? t.timeOff : before.timeOff, today),
+            };
+          }));
           await store.audit("technicians.updated", "technicians");
           return send(200, await snapshot());
         }
