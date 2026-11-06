@@ -8,8 +8,8 @@ import { openSlots } from "../server/schedule-rules.mjs";
 import { createJobber } from "../server/jobber.mjs";
 import { harness, contact } from "./helpers.mjs";
 
-const NOW = Date.parse("2026-09-21T20:00:00Z"); // Mon Sep 21, 1:00 PM Arizona
-const config = { ...DEFAULT_CONFIG, serviceZips: ["85326"], pricesAcknowledged: true, scheduleAcknowledged: true, bookingEnabled: true, bufferMinutes: 15, leadHours: 1, activeTechnicianIds: ["tech-ryan", "tech-andrew"] };
+const NOW = Date.parse("2026-09-21T10:00:00Z"); // Mon Sep 21, 3:00 AM Arizona: 3 PM meets the 12-hour minimum
+const config = { ...DEFAULT_CONFIG, serviceZips: ["85326"], pricesAcknowledged: true, scheduleAcknowledged: true, bookingEnabled: true, bufferMinutes: 15, leadHours: 12, sameDay: { ...DEFAULT_CONFIG.sameDay, enabled: true, minNoticeHours: 12 }, activeTechnicianIds: ["tech-ryan", "tech-andrew"] };
 const RYAN = { id: "tech-ryan", name: "Ryan", status: "available", jobberUserId: "J-RYAN" };
 const ANDREW = { id: "tech-andrew", name: "Andrew", status: "available", jobberUserId: "J-ANDREW" };
 const open = (technicians, date, cfg = config) => openSlots({ config: cfg, technicians, blocks: [], drive: new Map(), durationMins: serviceQuote("cleaning", cfg).durationMins, now: NOW, date })

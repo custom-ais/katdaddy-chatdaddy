@@ -111,7 +111,7 @@ export function createScheduler({ store, jobber, geo }) {
    * Open slots for a located customer.
    * date: "YYYY-MM-DD" to search one day; empty = whole horizon (nearby-first when enabled).
    */
-  async function slots({ config, technicians, durationMins, leadHours, emergencyRequestedAt = null, location, zip = "", neighborhood = "", ticketCents = 0, now, date = "", excludeSession = "", ignoreAppointmentId = null, fresh = false }) {
+  async function slots({ config, technicians, durationMins, leadHours, emergencyRequestedAt = null, location, zip = "", neighborhood = "", ticketCents = 0, now, date = "", excludeSession = "", ignoreAppointmentId = null, fresh = false, urgent = false }) {
     if (leadHours != null) config = { ...config, leadHours };
     if (emergencyRequestedAt != null) config = { ...config, emergencyRequestedAt };
     const from = date ? Date.parse(`${date}T00:00:00-07:00`) - 86_400_000 : now - 86_400_000;
@@ -119,17 +119,17 @@ export function createScheduler({ store, jobber, geo }) {
     const list = await blocks({ config, technicians, from, to, excludeSession, ignoreAppointmentId, fresh });
     const drive = await driveMap(list, location, fresh);
     const place = { location, zip, neighborhood };
-    const found = openSlots({ config, technicians, blocks: list, drive, durationMins, now, date, place, ticketCents });
+    const found = openSlots({ config, technicians, blocks: list, drive, durationMins, now, date, place, ticketCents, urgent });
     if (date) return found;
-    return orderSlots(found, { now, nearbyFirst: config.nearbyFirst, routeScoring: config.routeScoring !== false, pace: await pace({ config, now, fresh }) });
+    return orderSlots(found, { now, nearbyFirst: config.nearbyFirst, routeScoring: config.routeScoring !== false, pace: urgent ? null : await pace({ config, now, fresh }), urgent });
   }
 
   /** Re-check one start time. Prefers the given tech when several can take it. */
-  async function check({ config, technicians, durationMins, leadHours, emergencyRequestedAt = null, location, zip = "", neighborhood = "", ticketCents = 0, now, iso, preferTech, excludeSession = "", ignoreAppointmentId = null, fresh = true }) {
+  async function check({ config, technicians, durationMins, leadHours, emergencyRequestedAt = null, location, zip = "", neighborhood = "", ticketCents = 0, now, iso, preferTech, excludeSession = "", ignoreAppointmentId = null, fresh = true, urgent = false }) {
     const start = Date.parse(iso);
     if (!Number.isFinite(start)) return null;
     const date = phoenixDate(new Date(start));
-    const found = await slots({ config, technicians, durationMins, leadHours, emergencyRequestedAt, location, zip, neighborhood, ticketCents, now, date, excludeSession, ignoreAppointmentId, fresh });
+    const found = await slots({ config, technicians, durationMins, leadHours, emergencyRequestedAt, location, zip, neighborhood, ticketCents, now, date, excludeSession, ignoreAppointmentId, fresh, urgent });
     const match = found.filter((s) => s.start === start);
     if (!match.length) return null;
     if (preferTech) {
@@ -138,7 +138,7 @@ export function createScheduler({ store, jobber, geo }) {
       if (preferred && match[0].technicianId !== preferTech) {
         const only = await slots({
           config: { ...config, activeTechnicianIds: [preferTech] },
-          technicians, durationMins, leadHours, emergencyRequestedAt, location, zip, neighborhood, ticketCents, now, date, excludeSession, ignoreAppointmentId, fresh,
+          technicians, durationMins, leadHours, emergencyRequestedAt, location, zip, neighborhood, ticketCents, now, date, excludeSession, ignoreAppointmentId, fresh, urgent,
         });
         const mine = only.find((s) => s.start === start);
         if (mine) return mine;

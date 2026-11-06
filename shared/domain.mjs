@@ -49,8 +49,8 @@ export const DEFAULT_CONFIG = {
   bookingOwnerSmsPhone: '',
   // Service catalog (packages, home versions, add-ons). Edited in admin → Services & prices.
   services: SERVICE_CATALOG,
-  // Emergency Same-Day Clog Relief can be booked with less notice than regular visits.
-  emergencyLeadHours: 2,
+  // Every visit, including emergency service, needs at least 12 hours' notice.
+  emergencyLeadHours: 12,
   // Rulebook (Oct 20): a LeadConnector text code proves the customer controls the phone
   // before an appointment is created.
   requirePhoneVerification: true,
