@@ -63,13 +63,48 @@ const APPLIANCE_FREE = new Set(["express", "inspection"]); // no dryer to discon
 // End-of-booking upsell. DryerFlex is $79 as an add-on (regular $99); Ultimate and Restoration
 // already include it, and Express has no dryer to connect it to. Added together, DryerFlex and the
 // sanitizing fog save $20 (taken off the fog line, so there's never a negative line item).
+// These are the defaults; Settings → Upsells at checkout can change the wording, hide an offer, or
+// change the deal. Prices come from the add-on rows in the Services table.
 export const ADDON_PROMOS = Object.freeze({ dryerflex: Object.freeze({ wasCents: 9900 }) });
 export const ADDON_BUNDLE_SAVINGS_CENTS = 2000;
+export const DRYERFLEX_URL = "https://www.dryerflex.com"; // the manufacturer's (InOvate) site
+export const DEFAULT_UPSELLS = Object.freeze({
+  dryerflexEnabled: true,
+  dryerflexTitle: "DryerFlex hose upgrade",
+  dryerflexBadge: "Online booking special",
+  dryerflexWasCents: ADDON_PROMOS.dryerflex.wasCents,
+  // One selling point per line; the first is shown in bold with a shield.
+  dryerflexPoints: [
+    "Backed by our 3-year warranty",
+    "UL 2158A listed, with zero flame spread",
+    "Crush-resistant 5-layer aluminum keeps the full 4-inch airflow",
+    "Replaces foil or vinyl hoses that kink behind the dryer, installed with airtight clamps",
+  ].join("\n"),
+  dryerflexLink: DRYERFLEX_URL,
+  foggingEnabled: true,
+  foggingTitle: "Sanitizing fog treatment",
+  foggingDescription: "An antimicrobial fogging treatment inside the vent line. A good finishing step after pests, nests or musty smells.",
+  bundleEnabled: true,
+  bundleSavingsCents: ADDON_BUNDLE_SAVINGS_CENTS,
+  ultimateEnabled: true,
+  ultimatePitch: "exterior termination cleanout, a DryerFlex transition upgrade, before-and-after photos, a 3-year parts and labor warranty, and a 4-pack of wool dryer balls",
+});
+/** The saved upsell settings with any missing field filled from the defaults. */
+export const upsellSettings = (config) => {
+  const saved = config?.upsells && typeof config.upsells === "object" && !Array.isArray(config.upsells) ? config.upsells : {};
+  return { ...DEFAULT_UPSELLS, ...saved };
+};
+/** The DryerFlex selling points as a list (blank lines dropped). */
+export const upsellPoints = (text) => String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+/** What DryerFlex and the fog save when added together: 0 when the deal is off. */
+export const bundleSavings = (config) => {
+  const u = upsellSettings(config);
+  return u.bundleEnabled && u.dryerflexEnabled && u.foggingEnabled ? Math.max(0, Math.round(u.bundleSavingsCents) || 0) : 0;
+};
 // $20 off when the dryer was purchased or serviced in the last 90 days.
 export const RECENT_SERVICE_DISCOUNT_CENTS = 2000;
 export const RECENT_SERVICE_DISCOUNT = Object.freeze({ id: "discount-recent-service", name: "New or recently serviced dryer discount", description: "$20 off for a dryer purchased or serviced in the last 90 days." });
 export const NO_DRYERFLEX = new Set(["ultimate", "restoration", "express", "inspection"]);
-export const DRYERFLEX_URL = "https://www.dryerflex.com"; // the manufacturer's (InOvate) site
 // Setup surcharges (pedestal, stacked) apply to the core packages, per the assistant rules manual.
 const SETUP_FAMILIES = new Set(["premium", "ultimate", "postservice"]);
 
@@ -121,7 +156,7 @@ export function lineForService(services, family, property) {
   return { id: item.id, name: item.name, description: item.description, cents: item.priceCents, mins: item.minutes, certain };
 }
 
-export function addOnLines(services, { family, route, property = {}, addOns = {} }) {
+export function addOnLines(services, { family, route, property = {}, addOns = {}, bundleSavingsCents = ADDON_BUNDLE_SAVINGS_CENTS }) {
   const lines = [];
   const add = (variant) => {
     const item = findService(services, "addon", variant);
@@ -140,8 +175,8 @@ export function addOnLines(services, { family, route, property = {}, addOns = {}
   if (addOns.fogging && family !== "restoration") { // Restoration already includes fogging
     add("fogging");
     const fog = lines.at(-1);
-    if (dryerflex && fog?.id === "addon-fogging" && lines.some((l) => l.id === "addon-dryerflex")) {
-      fog.cents = Math.max(0, fog.cents - ADDON_BUNDLE_SAVINGS_CENTS);
+    if (bundleSavingsCents > 0 && dryerflex && fog?.id === "addon-fogging" && lines.some((l) => l.id === "addon-dryerflex")) {
+      fog.cents = Math.max(0, fog.cents - bundleSavingsCents);
       fog.name = `${fog.name} (bundle price with DryerFlex)`;
     }
   }

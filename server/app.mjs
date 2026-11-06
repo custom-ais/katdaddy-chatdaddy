@@ -34,9 +34,12 @@ import {
 } from "../shared/domain.mjs";
 import { initialSession, WELCOME, detectSafety, turn } from "../shared/conversation.mjs";
 import { territoryFor, WEST_VALLEY_ZIPS } from "../shared/territory.mjs";
-import { PACKAGES } from "../shared/catalog.mjs";
+import { PACKAGES, upsellSettings } from "../shared/catalog.mjs";
 import { chatTurn } from "./chat.mjs";
 import { confirmationEmail, confirmationSms, approvalRequestText, afterHoursRequestSms, afterHoursRequestEmail } from "./messages.mjs";
+
+/** Whether an optional add-on that doubles as a checkout upsell is switched on in Settings. */
+const upsellOn = (c, key) => key === "dryerflex" ? upsellSettings(c).dryerflexEnabled : key === "fogging" ? upsellSettings(c).foggingEnabled : true;
 
 const digest = (v) => createHash("sha256").update(String(v || "")).digest("hex");
 const secret = () => randomBytes(32).toString("base64url");
@@ -305,7 +308,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       textMessages: !ownerAlertsOnly && smsReady(c) && c.smsConfirmations !== false, // off: no SMS consent question and no texts to customers
       approverName: c.approver?.name || "",
       // Optional extras the customer can tick on the details form.
+      // DryerFlex and the fog follow Settings → Upsells at checkout: a hidden offer isn't listed anywhere.
       addOns: [["dryerflex", "dryerflex"], ["fogging", "fogging"], ["toolRetrieval", "tool"]].flatMap(([key, variant]) => {
+        if (!upsellOn(c, key)) return [];
         const item = (c.services || []).find((x) => x.family === "addon" && x.variant === variant && x.active !== false);
         return item ? [{ key, name: item.name, description: item.description, cents: item.priceCents }] : [];
       }),
@@ -1068,7 +1073,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         // End-of-booking upsell: Premium can move up to Ultimate (which already includes DryerFlex).
         if (body.upgrade === "ultimate" && data.package === "premium" && ["cleaning", "bundle"].includes(data.route) && data.property?.hasDryer !== "No") data.package = "ultimate";
         data.addOns = ["cleaning", "bundle"].includes(data.route)
-          ? { fogging: body.addOns?.fogging === true, toolRetrieval: body.addOns?.toolRetrieval === true, dryerflex: body.addOns?.dryerflex === true && data.package !== "ultimate" }
+          ? { fogging: body.addOns?.fogging === true && upsellOn(c, "fogging"), toolRetrieval: body.addOns?.toolRetrieval === true, dryerflex: body.addOns?.dryerflex === true && data.package !== "ultimate" && upsellOn(c, "dryerflex") }
           : {};
         data.zip = body.zip;
         data.location = where.location;

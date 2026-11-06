@@ -5,7 +5,7 @@ import { renderMessageTemplate, messageTemplateValues, CUSTOMER_SMS_FOOTER, MESS
 import { normalizeClientHubUrl } from "../shared/client-hub.mjs";
 
 import { money, windowLabel, serviceQuote } from "../shared/domain.mjs";
-import { ADDON_PROMOS, NO_DRYERFLEX, DRYERFLEX_URL } from "../shared/catalog.mjs";
+import { NO_DRYERFLEX, upsellSettings, upsellPoints } from "../shared/catalog.mjs";
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 /** A phone link every phone can dial: tel:+1 and ten digits. */
@@ -18,18 +18,21 @@ export function emailUpsells(appt, config) {
   const have = new Set((appt.lineItems || []).map((l) => l.id));
   const find = (variant) => services.find((x) => x.family === "addon" && x.variant === variant && x.active !== false);
   const out = [];
+  // Same offers and wording as the review screen (Settings → Upsells at checkout).
+  const u = upsellSettings(config);
+  const sentence = (t) => /[.!?]$/.test(t) ? t : `${t}.`;
   const df = find("dryerflex");
-  if (df && !have.has(df.id) && !NO_DRYERFLEX.has(appt.packageId) && appt.property?.hasDryer !== "No") {
-    const was = ADDON_PROMOS.dryerflex?.wasCents;
-    out.push({ key: "dryerflex", title: "DryerFlex hose upgrade", price: money(df.priceCents), was: was > df.priceCents ? money(was) : "", text: "A crush-resistant, UL 2158A listed aluminum transition hose that keeps the full 4-inch airflow. Professionally installed and backed by our 3-year warranty.", learnMore: DRYERFLEX_URL });
+  if (u.dryerflexEnabled && df && !have.has(df.id) && !NO_DRYERFLEX.has(appt.packageId) && appt.property?.hasDryer !== "No") {
+    const was = u.dryerflexWasCents;
+    out.push({ key: "dryerflex", title: u.dryerflexTitle, price: money(df.priceCents), was: was > df.priceCents ? money(was) : "", text: upsellPoints(u.dryerflexPoints).map(sentence).join(" "), ...(u.dryerflexLink ? { learnMore: u.dryerflexLink } : {}) });
   }
   const fog = find("fogging");
-  if (fog && !have.has(fog.id)) out.push({ key: "fogging", title: "Sanitizing fog treatment", price: money(fog.priceCents), was: "", text: "An antimicrobial fogging treatment inside the vent line. A good finishing step after pests, nests or musty smells." });
-  if (appt.packageId === "premium") {
+  if (u.foggingEnabled && fog && !have.has(fog.id)) out.push({ key: "fogging", title: u.foggingTitle, price: money(fog.priceCents), was: "", text: u.foggingDescription });
+  if (u.ultimateEnabled && appt.packageId === "premium") {
     try {
       const route = appt.route === "bundle" ? "bundle" : "cleaning";
       const now = serviceQuote(route, config, { package: "premium", property: appt.property || {} }), up = serviceQuote(route, config, { package: "ultimate", property: appt.property || {} });
-      if (up.priceCents > now.priceCents) out.push({ key: "ultimate", title: "Upgrade to Ultimate Protection", price: `+${money(up.priceCents - now.priceCents)}`, was: "", text: "Adds exterior termination cleanout, a DryerFlex hose, before-and-after photos and a 3-year parts and labor warranty." });
+      if (up.priceCents > now.priceCents) out.push({ key: "ultimate", title: "Upgrade to Ultimate Protection", price: `+${money(up.priceCents - now.priceCents)}`, was: "", text: `Adds ${sentence(u.ultimatePitch)}` });
     } catch {}
   }
   return out;

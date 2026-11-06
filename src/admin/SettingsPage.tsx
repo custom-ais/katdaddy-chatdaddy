@@ -7,13 +7,13 @@ import { PhoneInput } from '../components/PhoneInput';
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Technician } from './DashboardContext';
-import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, Mail, MapPin, MessageSquare, Plus, RotateCcw, Route, Save, ShieldCheck, Tag, Target, Trash2, Users } from 'lucide-react';
+import { BookOpen, Building2, CalendarClock, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, Mail, MapPin, MessageSquare, Plus, RotateCcw, Route, Save, ShieldCheck, Sparkles, Tag, Target, Trash2, Users } from 'lucide-react';
 import { api, saveText } from '../lib/api';
 import { askConfirm } from '../components/ConfirmDialog';
 import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Modal, Section, Toggle, inputClass, primaryButton, secondaryButton, subtleButton } from './ui';
 import { money } from '../../shared/domain.mjs';
-import { PACKAGES } from '../../shared/catalog.mjs';
+import { DEFAULT_UPSELLS, PACKAGES } from '../../shared/catalog.mjs';
 import { COVERAGE_IN, COVERAGE_TRAVEL } from '../../shared/coverage.mjs';
 
 const ServiceAreaMap = lazy(() => import('./ServiceAreaMap').then((m) => ({ default: m.ServiceAreaMap })));
@@ -389,6 +389,69 @@ function RevenuePacing({ value, onChange }: { value: any; onChange: (patch: any)
   );
 }
 
+/** Wording only: the on/off switches and amounts stay as they are when this is restored. */
+const UPSELL_WORDING = ['dryerflexTitle', 'dryerflexBadge', 'dryerflexPoints', 'dryerflexLink', 'foggingTitle', 'foggingDescription', 'ultimatePitch'] as const;
+
+/**
+ * The optional add-ons offered on the review screen before booking (and again in the confirmation
+ * email): which ones show and what they say. Their prices stay in the Services table.
+ */
+function Upsells({ value, services, onChange, editable }: { value: any; services: any[]; onChange: (patch: any) => void; editable: (path: string) => boolean }) {
+  const { can } = useDashboard();
+  const u: any = { ...DEFAULT_UPSELLS, ...(value || {}) };
+  const row = (variant: string) => services.find((x: any) => x.family === 'addon' && x.variant === variant);
+  const priceNote = (r: any) => !r ? 'There is no matching add-on in the Services table, so this offer can\'t show.'
+    : r.active === false ? `${r.name} is turned off in the Services table, so this offer can't show.`
+    : can('finance.view') ? `Price ${money(r.priceCents)}, from "${r.name}" in the Services table.` : `Price comes from "${r.name}" in the Services table.`;
+  const off = (key: string) => !editable(`upsells.${key}`);
+  const text = (key: string, label: string, max: number, hint?: React.ReactNode) => (
+    <Field label={label} hint={hint}><input className={inputClass} value={u[key]} maxLength={max} disabled={off(key)} onChange={(e) => onChange({ [key]: e.target.value })} /></Field>
+  );
+  const area = (key: string, label: string, max: number, rows: number, hint?: React.ReactNode) => (
+    <Field label={label} hint={hint}><textarea rows={rows} className={inputClass} value={u[key]} maxLength={max} disabled={off(key)} onChange={(e) => onChange({ [key]: e.target.value })} /></Field>
+  );
+  const box = (on: boolean) => `rounded-2xl border p-4 space-y-3 ${on ? 'border-slate-200' : 'border-dashed border-slate-300 bg-slate-50/70'}`;
+  const df = row('dryerflex'), fog = row('fogging');
+  const changedWording = UPSELL_WORDING.some((k) => u[k] !== (DEFAULT_UPSELLS as any)[k]);
+  return (
+    <Section icon={<Sparkles size={18} />} title="Upsells at checkout"
+      description="Optional add-ons offered on the review screen before the customer books, and again in the confirmation email. Turn one off to hide it everywhere. Prices come from the Services table above."
+      action={changedWording && UPSELL_WORDING.every((k) => !off(k)) ? <button type="button" className={subtleButton} onClick={() => onChange(Object.fromEntries(UPSELL_WORDING.map((k) => [k, (DEFAULT_UPSELLS as any)[k]])))}><RotateCcw size={14} />Restore default wording</button> : undefined}>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className={box(u.dryerflexEnabled)} data-upsell="dryerflex">
+          <Toggle checked={u.dryerflexEnabled} disabled={off('dryerflexEnabled')} onChange={(v) => onChange({ dryerflexEnabled: v })} label="Show the DryerFlex hose upgrade"
+            detail={`${priceNote(df)} Not offered with Ultimate or Restoration (already included) or Express.`} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {text('dryerflexTitle', 'Name', 80)}
+            {text('dryerflexBadge', 'Badge', 40, 'The small tag above the name. Leave blank for none.')}
+          </div>
+          <Dollars label="Regular price, shown crossed out" value={u.dryerflexWasCents} disabled={off('dryerflexWasCents')} onChange={(n) => onChange({ dryerflexWasCents: n })} hint="Only shown when it's higher than the add-on price. $0 hides it." />
+          {area('dryerflexPoints', 'Selling points, one per line', 800, 5, 'The first line is shown in bold with a shield.')}
+          {text('dryerflexLink', '"Learn more" link', 300, 'Must start with https://. Leave blank to hide the link.')}
+        </div>
+        <div className="space-y-4">
+          <div className={box(u.foggingEnabled)} data-upsell="fogging">
+            <Toggle checked={u.foggingEnabled} disabled={off('foggingEnabled')} onChange={(v) => onChange({ foggingEnabled: v })} label="Show the sanitizing fog treatment"
+              detail={`${priceNote(fog)} Not offered with Restoration (already included).`} />
+            {text('foggingTitle', 'Name', 80)}
+            {area('foggingDescription', 'Description', 400, 3)}
+          </div>
+          <div className={box(u.bundleEnabled && u.dryerflexEnabled && u.foggingEnabled)} data-upsell="bundle">
+            <Toggle checked={u.bundleEnabled} disabled={off('bundleEnabled')} onChange={(v) => onChange({ bundleEnabled: v })} label="Bundle deal when both are added"
+              detail={!u.dryerflexEnabled || !u.foggingEnabled ? 'Needs both DryerFlex and the fog treatment showing.' : `Shown as "Add both and save ${money(u.bundleSavingsCents)}". The savings come off the fog line, never below $0.`} />
+            <Dollars label="Savings" value={u.bundleSavingsCents} disabled={off('bundleSavingsCents')} onChange={(n) => onChange({ bundleSavingsCents: n })} />
+          </div>
+          <div className={box(u.ultimateEnabled)} data-upsell="ultimate">
+            <Toggle checked={u.ultimateEnabled} disabled={off('ultimateEnabled')} onChange={(v) => onChange({ ultimateEnabled: v })} label="Offer the Ultimate upgrade to Premium customers"
+              detail="The extra cost is the difference between the customer's Premium and Ultimate prices in the Services table." />
+            {area('ultimatePitch', 'What Ultimate adds', 400, 3, 'Shown as "Adds …". List what Premium doesn\'t include.')}
+          </div>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
 function BookingReportTest() {
   const [busy, setBusy] = useState(false), [result, setResult] = useState<{ status: string; to: string } | null>(null), [error, setError] = useState('');
   const send = async () => {
@@ -541,7 +604,7 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
     if (key in CONFIG_FIELD_PERMISSIONS && !editable(key)) { setError('You do not have permission to change this setting.'); return; }
     setC((s: any) => ({ ...s, [key]: value })); setDirty(true);
   };
-  const nested = (key: 'sameDay' | 'overflow' | 'approver' | 'revenuePacing', patch: any) => { if (!manage(page) || Object.keys(patch).some(field => !editable(`${key}.${field}`))) return; setC((s: any) => ({ ...s, [key]: { ...s[key], ...patch } })); setDirty(true); };
+  const nested = (key: 'sameDay' | 'overflow' | 'approver' | 'revenuePacing' | 'upsells', patch: any) => { if (!manage(page) || Object.keys(patch).some(field => !editable(`${key}.${field}`))) return; setC((s: any) => ({ ...s, [key]: { ...s[key], ...patch } })); setDirty(true); };
   const updateService = (id: string, patch: any) => update('services', c.services.map((x: any) => (x.id === id ? { ...x, ...patch } : x)));
   const categories = useMemo(() => [...new Set(c.services.map((x: any) => x.category))] as string[], [c.services]);
   const families = useMemo(() => [...new Set(c.services.map((x: any) => x.family))].filter((f) => (PACKAGES as any)[f as string]) as string[], [c.services]);
@@ -751,6 +814,7 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
           <Field label="How BOB describes an assessment"><textarea rows={3} className={inputClass} value={c.assessmentProcess} disabled={!editable('assessmentProcess')} onChange={(e) => update('assessmentProcess', e.target.value)} /></Field>
         </div>
       </Section>
+      <Upsells value={c.upsells} services={c.services} editable={editable} onChange={(patch) => nested('upsells', patch)} />
       </fieldset></div>}
 
       {view('coverage') && <div hidden={page !== 'coverage'} className="space-y-6" data-settings-panel="coverage"><fieldset disabled={!manage('coverage')} className="space-y-6 min-w-0">

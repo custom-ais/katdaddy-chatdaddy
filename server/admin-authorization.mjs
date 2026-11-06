@@ -55,7 +55,7 @@ export function requireAdminRoute(principal, method, path) {
 }
 
 const nestedFields = new Set(Object.keys(CONFIG_FIELD_PERMISSIONS).filter(key => key.includes('.')).map(key => key.split('.')[0]));
-const monetaryFields = new Set(['services','travelFeeTiers','travelZoneFeeCents','dailyRevenueTargetCents','revenuePacing.targetCents','revenuePacing.outsideJobCents','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','bundlePriceCents','overflow.minTicketCents']);
+const monetaryFields = new Set(['upsells.dryerflexWasCents','upsells.bundleSavingsCents','services','travelFeeTiers','travelZoneFeeCents','dailyRevenueTargetCents','revenuePacing.targetCents','revenuePacing.outsideJobCents','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','bundlePriceCents','overflow.minTicketCents']);
 const textFields = new Set(['messageTemplates.confirmationSms','messageTemplates.confirmationEmailSubject','messageTemplates.confirmationEmailBody']);
 const arraySchemas = {
   services:['id','family','variant','name','description','category','priceCents','minutes','active'],
@@ -152,6 +152,7 @@ function blankConfig() {
     sameDay:{enabled:false,cutoffHour:0,minNoticeHours:0,requireNearby:false},
     overflow:{enabled:false,start:'',maxDurationMins:0,requireNearby:false},
     revenuePacing:{enabled:false,period:'month',targetCents:0,outsideJobCents:0},
+    upsells:{dryerflexEnabled:false,dryerflexTitle:'',dryerflexBadge:'',dryerflexWasCents:0,dryerflexPoints:'',dryerflexLink:'',foggingEnabled:false,foggingTitle:'',foggingDescription:'',bundleEnabled:false,bundleSavingsCents:0,ultimateEnabled:false,ultimatePitch:''},
     cleaningMinutes:0,assessmentMinutes:0,bundleMinutes:0,bufferMinutes:0,minVisitMinutes:0,maxJobsPerDay:0,leadHours:0,horizonDays:0,
     weekdayStarts:[],weekdayClose:'',saturdayStarts:[],saturdayClose:'',blockedDates:[],serviceZips:[],travelZips:[],coverageVersion:0,activeTechnicianIds:[],assessmentCredited:false,
   };
@@ -165,7 +166,7 @@ const configReadGroups = {
   'integrations.manage':['approver.phone','approver.email'],
   'ownerSms.manage':['bookingOwnerSmsEnabled','ownerErrorSmsEnabled','bookingOwnerSmsPhone','messageTemplates.ownerBookingSms'],
   'settings.templates.view':['messageTemplates.confirmationSms','messageTemplates.confirmationEmailSubject','messageTemplates.confirmationEmailBody','messageEmailFormat'],
-  'settings.services.view':['pricesAcknowledged','services','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','bundlePriceCents','cleaningMinutes','assessmentMinutes','bundleMinutes','assessmentCredited'],
+  'settings.services.view':['pricesAcknowledged','services','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','bundlePriceCents','cleaningMinutes','assessmentMinutes','bundleMinutes','assessmentCredited','upsells.dryerflexEnabled','upsells.dryerflexTitle','upsells.dryerflexBadge','upsells.dryerflexWasCents','upsells.dryerflexPoints','upsells.dryerflexLink','upsells.foggingEnabled','upsells.foggingTitle','upsells.foggingDescription','upsells.bundleEnabled','upsells.bundleSavingsCents','upsells.ultimateEnabled','upsells.ultimatePitch'],
   'settings.coverage.view':['baseAddress','baseLocation.lat','baseLocation.lng','customServiceAreas','serviceAreaMode','serviceAreaMiles','travelAreaMiles','serviceZips','travelZips','coverageVersion','travelZoneFeeCents','travelFeeTiers'],
   'settings.schedule.view':['maxDriveFromBaseMin','maxDriveBetweenJobsMin','nearbyFirst','routeScoring','sameDay.enabled','sameDay.cutoffHour','sameDay.minNoticeHours','sameDay.requireNearby','overflow.enabled','overflow.start','overflow.maxDurationMins','overflow.minTicketCents','overflow.requireNearby','dailyRevenueTargetCents','revenuePacing.enabled','revenuePacing.period','revenuePacing.targetCents','revenuePacing.outsideJobCents','bufferMinutes','minVisitMinutes','maxJobsPerDay','leadHours','horizonDays','weekdayStarts','weekdayClose','saturdayStarts','saturdayClose','blockedDates','activeTechnicianIds'],
   'appointments.view':['scheduleSource'],

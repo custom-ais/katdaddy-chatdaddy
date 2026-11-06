@@ -26,7 +26,7 @@
 // facts below; every decision about price and booking happens here or on the server.
 
 import { DEFAULT_CONFIG, money, serviceQuote, areaFor, bundleAssessmentCents } from "./domain.mjs";
-import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant, noDryerNeedsPremium, ADDON_PROMOS, ADDON_BUNDLE_SAVINGS_CENTS, NO_DRYERFLEX, RECENT_SERVICE_DISCOUNT_CENTS, DRYERFLEX_URL } from "./catalog.mjs";
+import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant, noDryerNeedsPremium, NO_DRYERFLEX, RECENT_SERVICE_DISCOUNT_CENTS, upsellSettings, upsellPoints, bundleSavings } from "./catalog.mjs";
 import { restrictionScore, restrictionLevel } from "./airflow.mjs";
 import { formatUsPhone } from "./phone-display.mjs";
 
@@ -1105,19 +1105,25 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     // No upgrades on emergency, nest or restoration visits; Ultimate gets only the sanitizing fog.
     if (NO_UPSELL.has(s.package) || s.intent === "emergency") return null;
     const find = (variant) => services.find((x) => x.family === "addon" && x.variant === variant && x.active !== false);
+    // Wording and which offers show come from Settings → Upsells at checkout.
+    const u = upsellSettings(config);
     const out = {};
     const df = find("dryerflex");
-    if (df && !NO_DRYERFLEX.has(s.package)) {
-      const was = ADDON_PROMOS.dryerflex?.wasCents;
-      out.dryerflex = { name: df.name, description: df.description, cents: df.priceCents, learnMore: DRYERFLEX_URL, ...(was > df.priceCents ? { wasCents: was } : {}) };
+    if (u.dryerflexEnabled && df && !NO_DRYERFLEX.has(s.package)) {
+      const was = u.dryerflexWasCents;
+      out.dryerflex = {
+        name: df.name, title: u.dryerflexTitle, description: df.description, cents: df.priceCents, badge: u.dryerflexBadge, points: upsellPoints(u.dryerflexPoints),
+        ...(u.dryerflexLink ? { learnMore: u.dryerflexLink } : {}), ...(was > df.priceCents ? { wasCents: was } : {}),
+      };
     }
     const fog = find("fogging");
-    if (fog && s.package !== "restoration") out.fogging = { name: fog.name, description: fog.description, cents: fog.priceCents };
-    if (out.dryerflex && out.fogging) out.bundleSavingsCents = Math.min(ADDON_BUNDLE_SAVINGS_CENTS, out.fogging.cents);
-    if (s.package === "premium") {
+    if (u.foggingEnabled && fog && s.package !== "restoration") out.fogging = { name: fog.name, title: u.foggingTitle, description: u.foggingDescription, cents: fog.priceCents };
+    const deal = bundleSavings(config);
+    if (out.dryerflex && out.fogging && deal > 0) out.bundleSavingsCents = Math.min(deal, out.fogging.cents);
+    if (u.ultimateEnabled && s.package === "premium") {
       try {
         const now = quoteFor("premium"), up = quoteFor("ultimate");
-        if (up.priceCents > now.priceCents) out.ultimate = { name: PACKAGES.ultimate.label, extraCents: up.priceCents - now.priceCents, pitch: UPGRADES.ultimate };
+        if (up.priceCents > now.priceCents) out.ultimate = { name: PACKAGES.ultimate.label, extraCents: up.priceCents - now.priceCents, pitch: u.ultimatePitch };
       } catch {}
     }
     return Object.keys(out).length ? out : null;

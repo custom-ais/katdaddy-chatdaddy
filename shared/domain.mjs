@@ -1,5 +1,5 @@
 import { DEFAULT_MESSAGE_TEMPLATES, validateMessageTemplates } from './message-templates.mjs';
-import {SERVICE_CATALOG,RETIRED_FAMILIES,effectiveFamily,lineForService,addOnLines,RECENT_SERVICE_DISCOUNT,RECENT_SERVICE_DISCOUNT_CENTS} from './catalog.mjs';
+import {SERVICE_CATALOG,RETIRED_FAMILIES,effectiveFamily,lineForService,addOnLines,RECENT_SERVICE_DISCOUNT,RECENT_SERVICE_DISCOUNT_CENTS,DEFAULT_UPSELLS,bundleSavings} from './catalog.mjs';
 import {difficultyMinutes} from './airflow.mjs';
 import {COVERAGE_VERSION,COVERAGE_IN,COVERAGE_TRAVEL,validPoint,customCoverage} from './coverage.mjs';
 // Cleaning packages get extra time when the answers point to a restricted or severe vent.
@@ -75,6 +75,8 @@ export const DEFAULT_CONFIG = {
   // once it's met, the week's remaining openings go to jobs that fit the route and farther customers
   // see the next week first. outsideJobCents values jobs booked outside BOB (0 = BOB's average ticket).
   revenuePacing: { enabled: false, period: 'month', targetCents: 0, outsideJobCents: 0 },
+  // The optional add-ons offered on the review screen (Settings → Upsells at checkout).
+  upsells: { ...DEFAULT_UPSELLS },
   cleaningPriceCents: 17900,
   assessmentPriceCents: 11900,
   bundlePriceCents: BUNDLE_PRICE_CENTS,
@@ -117,7 +119,8 @@ export const windowLabel = iso => {
  const t = new Date(iso).getTime();
  const f = d => new Intl.DateTimeFormat('en-US',{timeZone:TIME_ZONE,hour:'numeric',minute:'2-digit'}).format(d);
  const day = new Intl.DateTimeFormat('en-US',{timeZone:TIME_ZONE,weekday:'long',month:'short',day:'numeric',year:'numeric'}).format(new Date(t));
- return `${day} · ${f(new Date(t-1800000))}–${f(new Date(t+1800000))} arrival · Arizona time`;
+ const a = f(new Date(t-1800000)), b = f(new Date(t+1800000)), [ta, pa] = a.split(/\s+/), [, pb] = b.split(/\s+/);
+ return `${day} · ${f(new Date(t))} (arrival window ${pa && pa === pb ? ta : a}–${b}) · Arizona time`;
 };
 /**
  * What a visit costs and how long it takes.
@@ -132,7 +135,7 @@ export function serviceQuote(route,config=DEFAULT_CONFIG,ctx={}) {
  else if(route==='cleaning'){family=effectiveFamily(ctx.package||'essential',property);base=lineForService(services,family,property);}
  else throw new Error('Choose cleaning, assessment, or cleaning + assessment.');
  if(!base)throw new Error('That service is not available right now.');
- const lines=[base,...addOnLines(services,{family,route:route==='bundle'?'cleaning':route,property,addOns:ctx.addOns||{}})];
+ const lines=[base,...addOnLines(services,{family,route:route==='bundle'?'cleaning':route,property,addOns:ctx.addOns||{},bundleSavingsCents:bundleSavings(config)})];
  if(property.recentService==='Yes'&&RECENT_SERVICE_DISCOUNT_CENTS>0)lines.push({...RECENT_SERVICE_DISCOUNT,cents:-RECENT_SERVICE_DISCOUNT_CENTS,mins:0,certain:true});
  if(route==='bundle')lines.push({id:'assessment-with-cleaning',name:'Repair Assessment (with cleaning)',description:'Evaluation of the vent issue during the cleaning visit, with documented findings. Repairs are quoted separately.',cents:bundleAssessmentCents(config),mins:config.assessmentMinutes,certain:true});
  // With no dryer, Premium's usual time for cleaning the dryer covers the extra vent work, so no difficulty time is added.
@@ -163,6 +166,8 @@ export const withConfigDefaults = saved => {
  c.messageTemplates=templates===undefined?{...DEFAULT_MESSAGE_TEMPLATES}:templates&&typeof templates==='object'&&!Array.isArray(templates)?{...DEFAULT_MESSAGE_TEMPLATES,...templates}:templates;
  const pacing=saved?.revenuePacing;
  if(pacing&&typeof pacing==='object'&&!Array.isArray(pacing))c.revenuePacing={...DEFAULT_CONFIG.revenuePacing,...pacing};
+ const upsells=saved?.upsells;
+ c.upsells=upsells&&typeof upsells==='object'&&!Array.isArray(upsells)?{...DEFAULT_CONFIG.upsells,...upsells}:{...DEFAULT_CONFIG.upsells};
  const gates=saved?.integrations;
  c.integrations=gates===undefined?{...DEFAULT_CONFIG.integrations}:gates&&typeof gates==='object'&&!Array.isArray(gates)?{...DEFAULT_CONFIG.integrations,...gates}:gates;
  // Settings saved before the office's coverage list switch to it once; later edits in Settings stand.
@@ -263,6 +268,17 @@ export function validateConfig(c) {
  const rp=c.revenuePacing||{};
  if(typeof rp.enabled!=='boolean'||!['month','week'].includes(rp.period)||!Number.isInteger(rp.targetCents)||rp.targetCents<0||rp.targetCents>100000000||!Number.isInteger(rp.outsideJobCents)||rp.outsideJobCents<0||rp.outsideJobCents>10000000)errors.push('Check the revenue target: a whole-dollar amount per month or per week.');
  else if(rp.enabled&&rp.targetCents<=0)errors.push('Enter the revenue target amount, or turn revenue pacing off.');
+ const up=c.upsells;
+ if(up!==undefined){
+  const bool=k=>typeof up?.[k]==='boolean',str=(k,max,required)=>typeof up?.[k]==='string'&&up[k].length<=max&&(!required||up[k].trim().length>0),cents=k=>Number.isInteger(up?.[k])&&up[k]>=0&&up[k]<=100000;
+  if(!up||typeof up!=='object'||Array.isArray(up)||!['dryerflexEnabled','foggingEnabled','bundleEnabled','ultimateEnabled'].every(bool))errors.push('Check the upsell on/off switches.');
+  else{
+   if(!str('dryerflexTitle',80,true)||!str('foggingTitle',80,true))errors.push('Give each upsell a name (up to 80 characters).');
+   if(!str('dryerflexBadge',40)||!str('dryerflexPoints',800)||!str('foggingDescription',400)||!str('ultimatePitch',400,true))errors.push('Shorten the upsell wording: badge up to 40 characters, DryerFlex points up to 800, fog description and Ultimate list up to 400 (the Ultimate list can\'t be empty).');
+   if(!str('dryerflexLink',300)||(up.dryerflexLink&&!/^https:\/\/[^\s<>"']+$/.test(up.dryerflexLink)))errors.push('The DryerFlex "Learn more" link must start with https://, or be left blank.');
+   if(!cents('dryerflexWasCents')||!cents('bundleSavingsCents'))errors.push('Upsell amounts must be between $0 and $1,000.');
+  }
+ }
  if(c.bookingEnabled&&!isBookable(c))errors.push('Review prices, acknowledge the schedule source, select a technician, and configure the service area before enabling bookings.');
  return errors;
 }

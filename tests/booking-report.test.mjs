@@ -47,7 +47,7 @@ test("the report email has the counts, commission, revenue, job and customer", (
   for (const body of [text, html]) {
     assert.match(body, /\$872/, "the month's running revenue");
     assert.match(body, /DVS-TEST1/);
-    assert.match(body, /Tuesday, Nov 10, 2026 · 9:30 AM–10:30 AM arrival · Arizona time/);
+    assert.match(body, /Tuesday, Nov 10, 2026 · 10:00 AM \(arrival window 9:30–10:30 AM\) · Arizona time/);
     assert.match(body, /#101/);
     assert.match(body, /\(623\) 555-0100 \(verified\)/);
     assert.match(body, /Takes about 2 cycles/);
