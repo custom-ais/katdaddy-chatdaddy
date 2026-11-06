@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { approvalPolicy } from "../server/approval-policy.mjs";
-import { captureAvailabilityRequest } from "../server/availability-request.mjs";
 
 const now = Date.parse("2026-11-01T00:00:00Z"); // October 31 in Phoenix
 const today = { start: Date.parse("2026-11-01T01:00:00Z") };
@@ -36,25 +35,4 @@ test("approval policy rechecks date at decision time and does not trust a sameDa
   const emergency = { package: "emergency" };
   assert.equal(approvalPolicy(emergency, { ...today, sameDay: false }, config, now).required, true);
   assert.equal(approvalPolicy(emergency, today, config, now + 86_400_000).blocked, true);
-});
-
-test("ordinary explicit same-day availability inquiry never calls staff messaging or creates a request", async () => {
-  const forbidden = () => { throw new Error("Unexpected staff side effect"); };
-  const result = await captureAvailabilityRequest({
-    store: new Proxy({}, { get: () => forbidden }), lc: new Proxy({}, { get: () => forbidden }),
-    config, data: { intent: "cleaning", package: "premium", stage: "evaluating", history: [] },
-    message: "Can a tech come today at 5pm?", session: "test-session", now,
-    origin: "https://example.test", log: forbidden,
-  });
-  assert.equal(result, "");
-});
-
-test("future emergency availability does not trigger company texts", async () => {
-  const forbidden = () => { throw new Error("Unexpected staff side effect"); };
-  assert.equal(await captureAvailabilityRequest({
-    store: new Proxy({}, { get: () => forbidden }), lc: {}, config,
-    data: { intent: "emergency", stage: "evaluating", history: [] },
-    message: "Tomorrow at 10am", session: "test-session", now,
-    origin: "https://example.test", log: forbidden,
-  }), "");
 });

@@ -28,6 +28,11 @@
 import { DEFAULT_CONFIG, money, serviceQuote, areaFor, bundleAssessmentCents } from "./domain.mjs";
 import { SERVICE_CATALOG, PACKAGES, TIERS, MORE, fromPrice, homeVariant, noDryerNeedsPremium, ADDON_PROMOS, ADDON_BUNDLE_SAVINGS_CENTS, NO_DRYERFLEX, RECENT_SERVICE_DISCOUNT_CENTS, DRYERFLEX_URL } from "./catalog.mjs";
 import { restrictionScore, restrictionLevel } from "./airflow.mjs";
+import { formatUsPhone } from "./phone-display.mjs";
+
+/** Emergencies go to the office by phone (Settings → business phone, else this number). */
+export const OFFICE_PHONE = "6232941826";
+export const officePhone = (config) => formatUsPhone(String(config?.phone || "").replace(/\D/g, "").length >= 10 ? config.phone : OFFICE_PHONE);
 
 export const initialSession = () => ({
   v: 3,
@@ -47,6 +52,7 @@ export const initialSession = () => ({
   symptomConflict: null, // { tries } while BOB is waiting for a typed clarification
   help: false, // "Help Me Choose Package" path
   repairScope: null, // the repair issue picked first on the repair path
+  safeConfirmed: false, // emergency path: the customer said everyone is safe
   dryerHot: null, // emergency path: was the dryer running or hot?
   dryerOffConfirmed: false,
   concernDescribed: false,
@@ -65,7 +71,7 @@ export const initialSession = () => ({
 });
 
 /** Welcome cards, in the office's order. The engine accepts them as typed text too. */
-export const WELCOME = ["Book a Cleaning", "Repairs, Reroutes & Upgrades", "Emergency Clog / Overheating", "Pest / Nest Removal", "Something Else"];
+export const WELCOME = ["Book a Cleaning", "Repairs, Reroutes & Upgrades", "Emergency", "Pest / Nest Removal", "Something Else"];
 const [CLEANING_START, REPAIR_START] = WELCOME;
 /** Starting-path names, including earlier button labels that may still be typed or sent by the AI layer. */
 const START = {
@@ -74,7 +80,8 @@ const START = {
   "repairs, reroutes and upgrades": "repair",
   "something else": "other",
   "help me choose a cleaning": "help",
-  "emergency clog / overheating": "emergency",
+  emergency: "emergency",
+  "emergency clog / overheating": "emergency", // earlier button label
   "standard vent cleaning": "cleaning",
   "dryer vent cleaning": "cleaning",
   "help me choose package": "help",
@@ -105,10 +112,12 @@ export const QUESTIONS = {
   symptomClarify: { text: "Those answers don't match. How many drying cycles does it usually take? Please type it out in your own words.", options: [] },
   animals: { text: "Have you noticed any visible signs of animals around the vent?", options: ["Yes, signs of animals", "No signs", "I don't know", "Other"] },
   concern: { text: "Please describe the issue in a sentence or two. For example: the duct came apart in the attic, or the roof cap is crushed.", options: ["Skip"] },
-  // Emergency path
-  // DVS is a vent company, not an emergency service: BOB never talks about dispatching or emergency equipment.
+  // Emergency path: make sure everyone is safe (911 for smoke, fire or gas), the dryer is off, then
+  // the office takes it by phone. DVS is a vent company, not an emergency service: BOB never talks
+  // about dispatching or emergency equipment, and emergencies aren't booked online.
+  safeNow: { text: "First, is everyone safe right now, with no smoke, fire or gas smell?", options: ["Yes, everyone is safe", "There's smoke or fire", "I smell gas"] },
   safetyCheck: { text: "Is your dryer currently running or heating?", options: ["Yes, it's still running / hot", "No, it's turned off now"] },
-  powerOff: { text: "⚠️ Please stop the dryer immediately if you can safely do so. I'll stay right here. Once it's off, we can review what's happening and go over the safest solution options.", options: ["Dryer is off now"] },
+  powerOff: { text: "⚠️ Please stop the dryer immediately if you can safely do so. I'll stay right here. Let me know once it's off.", options: ["Dryer is off now"] },
   triage: {
     text: "Let's pinpoint what we're dealing with. What's happening with the dryer? (Select all that apply)",
     options: ["Overheating or shutting off", "Showing an error code (D80 / D90 / D95)", "Little or no airflow outside", "Taking multiple cycles to dry", "Possible nest or blockage", "Burning smell", "Other / something else"],
@@ -388,6 +397,9 @@ function learn(text, s) {
         if (/possible nest/.test(t)) p.animals = "Yes";
         if (other) askOther();
       }
+    } else if (key === "safeNow") {
+      // Smoke, fire or gas never get here: they're caught first and get the 911 instructions.
+      if (/^(?:yes|yep|yeah|we(?:'re| are) (?:all )?(?:safe|ok(?:ay)?|fine)|everyone(?:'s| is) (?:safe|ok(?:ay)?|fine)|all safe|safe|no(?: smoke| fire| gas)?)\b/.test(t)) s.safeConfirmed = true;
     } else if (key === "safetyCheck") {
       if (/^(?:yes|it's still running|still running|running|hot)\b/.test(t)) s.dryerHot = true;
       else if (/^(?:no|it's (?:turned )?off|turned off|off)\b/.test(t)) {
@@ -500,9 +512,8 @@ export function questionOrder(s) {
     return ["serviceAddress", !s.concernDescribed && "repairScope", ...layout, "power", "mount", "repairPerf", "concern"].filter(Boolean);
   }
   if (s.intent === "emergency") {
-    // Safety comes first on the emergency path; the address follows what's happening.
-    // A regular package picked from the emergency offer also needs the dryer setup for its price.
-    return ["safetyCheck", s.dryerHot && "powerOff", "triage", "serviceAddress", ...layout, hasDryer(s) && "power", TIERS.includes(s.package) && hasDryer(s) && "mount"].filter(Boolean);
+    // Safety only: then BOB gives the office's number (see callOffice).
+    return ["safeNow", "safetyCheck", s.dryerHot && "powerOff"].filter(Boolean);
   }
   // nest: what price and access depend on
   return ["serviceAddress", "hasDryer", ...layout, hasDryer(s) && "power"].filter(Boolean);
@@ -519,6 +530,8 @@ const answered = (s, key) => {
       return Array.isArray(s.property.symptoms);
     case "triage":
       return Array.isArray(s.property.triage);
+    case "safeNow":
+      return s.safeConfirmed;
     case "safetyCheck":
       return s.dryerHot != null;
     case "powerOff":
@@ -875,6 +888,8 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
         return "Thanks, that helps me match the right service.";
       case "animals":
         return p.animals === "Yes" ? "Got it, signs of animals at the vent." : p.animals === "No" ? "Good, no signs of animals." : "";
+      case "safeNow":
+        return "Good, I'm glad everyone is safe.";
       case "safetyCheck":
         return s.dryerHot ? "" : "Good. That reduces risk.";
       case "powerOff":
@@ -965,11 +980,6 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   };
 
   const afterHoursFee = () => services.find((x) => x.family === "addon" && x.variant === "afterhours" && x.active !== false)?.priceCents ?? null;
-  /** The on-call offer, shown to customers with an emergency or who ask for something sooner. */
-  const afterHoursOffer = () => {
-    const fee = afterHoursFee();
-    return `We do have an on-call technician who may be available after hours.${priced && fee ? ` The after-hours service premium is ${money(fee)} in addition to the regular charges.` : " After-hours service has a premium in addition to the regular charges."} Would you like me to check our after-hours availability?`;
-  };
 
   const specialOffer = (families, suggested, lead, brief, extraOptions = ["Ask a question"], { airflow = null, summary = "" } = {}) => {
     s.suggested = suggested;
@@ -1014,17 +1024,6 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
 
   const offer = (brief = false) => {
     if (s.intent === "repair") return assessmentOffer(brief);
-    if (s.intent === "emergency" && s.sameDayUnavailable) {
-      return specialOffer(["premium", "ultimate"], "premium", "We couldn't get a technician to you today. You can book **Premium 1-2-3** or **Ultimate Protection** on our regular schedule. Please keep the dryer off until then.", brief, ["Request a callback"]);
-    }
-    if (s.intent === "emergency") {
-      // A clog or overheating dryer: Ultimate first (it clears the exterior termination and replaces the
-      // hose), Premium as the simpler option, and the on-call tech for anyone who can't wait.
-      const lead =
-        "For a clog or an overheating dryer, I recommend **Ultimate Protection**, our most comprehensive package. It cleans the full vent path, clears the exterior termination where clogs usually pack in, and replaces the transition hose with a crush-resistant DryerFlex, backed by a 3-year parts and labor warranty. If a complete clog or nest has to be removed, you get $50 off that removal. **Premium 1-2-3** is the standard full cleaning if you'd rather keep it simple. Please keep the dryer off until your visit." +
-        `\n\n${afterHoursOffer()}`;
-      return specialOffer(["ultimate", "premium"], "ultimate", lead, brief, [AFTER_HOURS_BUTTON, "Ask a question"]);
-    }
     if (s.intent === "nest" || s.property.animals === "Yes") {
       return specialOffer(["nest", "restoration"], "nest", "Birds or pests in a vent need to be removed before the vent is cleaned.", brief);
     }
@@ -1169,6 +1168,22 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     Object.assign(s, { zip: "", serviceAddress: null, travelAccepted: false, travelDeclined: false, stage: "evaluating" });
   };
 
+  /**
+   * Emergencies are handled by phone, not booked online: once everyone is safe and the dryer is off,
+   * BOB gives the office's number (the page shows a call button). A regular cleaning stays one tap away.
+   */
+  const callOffice = (again = false) => {
+    s.stage = "call_office";
+    s.pending = null;
+    s.serviceAccepted = false;
+    const phone = officePhone(config);
+    return respond(
+      `${again ? "For an emergency, please call" : "Please call"} our office at **${phone}** so the team can help you right away. Keep the dryer off until it's been checked.\n\nIf it can wait for a regular appointment, you can book a cleaning here instead.`,
+      [CLEANING_START],
+      { action: "call_office", phone },
+    );
+  };
+
   /** Where the booking stands: the next unanswered question, the offer, the details, or contact. */
   const next = (brief = false) => {
     if (!s.intent) return welcome();
@@ -1193,6 +1208,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     const missing = questionOrder(s).find((k) => !answered(s, k));
     if (missing) return ask(missing);
     s.pending = null;
+    if (s.intent === "emergency") return callOffice();
     if (s.serviceAccepted) return contactStep();
     if (s.package) return details(brief);
     return offer(brief);
@@ -1203,6 +1219,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     const body = faq ? `💡 I can answer that for you:\n\n${lead}` : lead;
     if (s.stage === "review") return respond(body, [], { action: "request" });
     if (["emergency", "confirmed"].includes(s.stage)) return respond(body, []);
+    if (s.stage === "call_office") return respond(`${body}\n\nFor an emergency, please call our office at **${officePhone(config)}**.`, [CLEANING_START], { action: "call_office", phone: officePhone(config) });
     if (["contact", "verify", "slots", "approval"].includes(s.stage)) return respond(`${body}\n\nWhen you're ready, continue with the booking below.`, [], { action: "resume" });
     if (s.stage === "bundle_offer") {
       const price = priced ? bundlePrice() : "";
@@ -1230,10 +1247,11 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       s.safety = null;
       s.fireCleared = true;
       startIntent("emergency");
+      s.safeConfirmed = true;
       s.dryerHot = false; // they were told to unplug it or switch off the breaker
       s.dryerOffConfirmed = true;
       if (!s.concerns.includes(FIRE_NOTE)) s.concerns.push(FIRE_NOTE);
-      ack = "I am so glad to hear that everyone is safe!\n\nNow that the immediate danger has passed, let's pinpoint what led to this so we can get your system properly inspected and cleared.";
+      ack = "I am so glad to hear that everyone is safe! Please don't use the dryer again until it's been inspected.";
       return next();
     }
     if (stillDanger !== "gas") {
@@ -1267,7 +1285,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.serviceAccepted = false;
     return respond(FIRE_ALERT, [FIRE_SAFE], { action: "emergency" });
   }
-  if (s.stage === "emergency") return respond("Do not resume using the dryer. Emergency responders or a qualified professional must confirm the immediate danger is resolved. For non-emergency follow-up, you can send the DVS team a request.", [], { action: "request" });
+  if (s.stage === "emergency") return respond(`Do not resume using the dryer. Emergency responders or a qualified professional must confirm the immediate danger is resolved. Once everyone is safe, call our office at **${officePhone(config)}** and the team will help you.`, [], { action: "call_office", phone: officePhone(config) });
   // Help Me Choose: "Overheating / Error Code" moves to the emergency path, which starts with the safety check.
   if (safety === "stop" && s.help && s.pending === "symptoms" && s.intent === "cleaning") {
     const found = parseSymptoms(t);
@@ -1345,7 +1363,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   }
   if (start === "emergency" || /^emergency clog(?: relief)?$/.test(t)) {
     startIntent("emergency");
-    ack = "🚨 Got it — this sounds like a possible airflow restriction, clog, or overheating issue. Let's handle this safely first.";
+    ack = "🚨 Got it. Let's make sure you're safe first.";
     return next();
   }
   if (start === "nest") {
@@ -1361,6 +1379,8 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     const picks = approvedFaqs.slice(0, 5).map((f) => f.question);
     return respond("What would you like to know? Your booking answers stay in this conversation.", [...picks, ...(s.intent ? ["Continue booking"] : [])]);
   }
+  // After an emergency, anything but a new start (above) gets the office's number again.
+  if (s.stage === "call_office") return callOffice(true);
   if (/^(?:yes,? let'?s schedule|let'?s schedule)[.!]?$/.test(t)) return s.intent ? next() : welcome("Great! How can I help restore your dryer exhaust system today?");
   if (/^(?:continue|continue booking|back to (?:my )?booking|resume)$/.test(t)) return s.intent ? next() : welcome();
 
@@ -1425,6 +1445,12 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
   // -- package picks -----------------------------------------------------------------------
   const pickText = t.replace(/^select\s+/, "");
   const pick = s.stage !== "bundle_offer" && PICKS.find(([, re]) => re.test(pickText));
+  if (pick && pick[0] === "emergency") {
+    // Same-day emergency visits aren't booked online any more: safety first, then the office.
+    startIntent("emergency");
+    ack = "🚨 Got it. Let's make sure you're safe first.";
+    return next();
+  }
   if (pick) {
     const family = pick[0];
     if (!s.intent || (s.intent === "repair" && s.route !== "bundle")) s.intent = family === "emergency" ? "emergency" : ["nest", "restoration"].includes(family) ? "nest" : "cleaning";
@@ -1466,7 +1492,9 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     if (!s.intent) s.intent = "cleaning";
     s.stage = "offer";
     s.serviceAccepted = false;
-    return respond("Here are our other services:\n" + MORE.map((f) => line(f)).join("\n"), [...MORE.map(label), "Back to packages"]);
+    // Same-day emergency visits aren't booked online (the emergency path goes to the office).
+    const others = MORE.filter((f) => f !== "emergency");
+    return respond("Here are our other services:\n" + others.map((f) => line(f)).join("\n"), [...others.map(label), "Back to packages"]);
   }
   const cancelPick = /^(?:cancel(?: (?:this|the|my|that))? (?:package|selection)|change (?:my |the )?package)$/.test(t);
   if (cancelPick || /^(?:back to (?:packages|options))$/.test(t)) {
@@ -1553,35 +1581,13 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return next();
   }
 
-  // -- after-hours (on-call) service ---------------------------------------------------------
-  if (AFTER_HOURS_YES.test(t)) {
-    const fee = afterHoursFee();
-    const family = s.package || s.suggested || (s.intent === "emergency" ? "ultimate" : null);
-    s.pending = null;
-    // BOB handles it in the chat: the service, the premium, the customer's details, then the request
-    // goes to the on-call technician and the answer shows up here. No price list entry, no online request.
-    if (fee == null || !family || !["cleaning", "bundle"].includes(s.route)) {
-      s.stage = "review";
-      return respond("I'll pass this to our on-call technician. Share your details below and they'll call you to confirm whether they can come after hours. Nothing is booked until they confirm.", [], { action: "request" });
-    }
-    s.afterHours = true;
-    let base = "";
-    try { if (priced) { const q = quoteFor(family); base = ` on top of ${PACKAGES[family]?.short || q.name} (${money(q.priceCents)})`; } } catch {}
-    const price = priced ? ` The after-hours premium is ${money(fee)}${base}.` : "";
-    if (["contact", "verify", "slots"].includes(s.stage)) {
-      const where = s.stage === "slots" ? "Review the request below and send it when you're ready." : "Finish your details below and I'll send it.";
-      return respond(`Okay, I'll check with our on-call technician.${price} ${where}`, [], { action: "resume" });
-    }
-    s.package = family;
-    s.serviceAccepted = true;
-    ack = `Okay, I'll check with our on-call technician.${price}`;
-    return next();
-  }
+  // -- no after-hours (on-call) service online: urgent visits go to the office by phone -----------
+  if (AFTER_HOURS_YES.test(t)) return resume(`We don't take after-hours requests online. If you need help sooner, please call our office at **${officePhone(config)}**.`);
   if (/^keep (?:the )?regular (?:times|schedule)$/.test(t)) {
     s.afterHours = false;
     return resume("No problem, we'll stick with the regular schedule.");
   }
-  if (asksForSooner(text, s)) return respond(`The times shown are our soonest regular openings. ${afterHoursOffer()}`, [AFTER_HOURS_BUTTON, "Keep regular times"]);
+  if (asksForSooner(text, s)) return resume(`The times shown are our soonest openings. If you need help sooner, please call our office at **${officePhone(config)}**.`);
 
   // -- routing from free text ----------------------------------------------------------------
   const intent = classify(text, s);

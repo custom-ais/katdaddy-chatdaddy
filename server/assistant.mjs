@@ -10,6 +10,7 @@
 // API credentials are server-only; a ChatGPT subscription is not an API key.
 
 import { PACKAGES, TIERS, MORE } from "../shared/catalog.mjs";
+import { officePhone } from "../shared/conversation.mjs";
 import { QUESTIONS, FACT_VALUES, SYMPTOMS, WELCOME, SAVINGS_AVERAGES, savingsEstimate } from "../shared/conversation.mjs";
 import { bundleAssessmentCents, money, serviceQuote } from "../shared/domain.mjs";
 
@@ -149,8 +150,9 @@ export function normalizeVoice(out, { config, faqs, kb = "", next = "" }) {
 
 function knowledge(config, faqs) {
   const priced = Boolean(config.pricesAcknowledged);
-  const services = (config.services || []).filter((x) => x.active !== false);
-  const families = [...TIERS, ...MORE];
+  // Same-day emergency visits and the after-hours add-on aren't booked online (emergencies go to the office).
+  const services = (config.services || []).filter((x) => x.active !== false && x.family !== "emergency" && x.variant !== "afterhours");
+  const families = [...TIERS, ...MORE.filter((f) => f !== "emergency")];
   const svc = families
     .map((f) => {
       const rows = services.filter((x) => x.family === f);
@@ -179,7 +181,7 @@ Gas dryers: the Gas Appliance Safety Procedure is added automatically to cleanin
 ASSESSMENT: ${config.assessmentProcess}${priced ? ` Price ${money(config.assessmentPriceCents)}.` : ""} Repairs, parts and replacement are quoted separately.
 CLEANING + ASSESSMENT: suggested when a customer wants a cleaning but thinks something may be broken. It is the Premium 1-2-3 cleaning plus an assessment of the issue in one visit${priced ? `: ${bundleTotals(config)}` : ""}. Gas dryers and stacked or pedestal setups add their usual fee. If the customer books just a cleaning and the technician finds a problem: when the damage prevents the cleaning, the visit becomes an assessment (the standalone assessment price) instead of the cleaning; when the cleaning can still be done, the customer can add an assessment for an upgrade, reroute, or minor damage at the add-on price${priced ? ` (${money(bundleAssessmentCents(config))})` : ""}. Repairs are quoted separately.
 No dryer installed → the visit is Express Vent Cleaning (vent only).
-Emergency Same-Day Clog Relief needs approval from the team before it's confirmed.
+EMERGENCIES: same-day, emergency and after-hours visits are not booked online. On the Emergency path BOB makes sure everyone is safe (911 for smoke, fire or a gas smell), that the dryer is off, and then asks the customer to call the office at ${officePhone(config)}. Never offer a same-day, emergency or after-hours booking.
 Before booking, the customer completes the verification method offered by the booking form, then picks a live time and approves the final summary. Email verification proves email ownership only, not phone ownership.
 ${savingsKnowledge()}
 NO OBLIGATION: getting a price or chatting doesn't commit the customer to anything. Nothing is booked until they pick a time and approve the final summary, which shows the full price. Say this only when they ask about commitment or booking.

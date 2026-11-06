@@ -58,21 +58,3 @@ test('ordinary SMS defaults to configured Twilio and email remains explicitly un
   assert.equal(a.notifications.emailReason, 'disabled_or_not_configured');
 });
 
-test('emergency approver Twilio text is independent of LC CRM outage', async t => {
-  const twilio = transport();
-  const h = await harness(t, { config: { requirePhoneVerification: false, emergencyLeadHours: 1, approver: { name: 'Office', phone: '6235559999', email: 'office@example.com' } }, twilio, env: { BOOKING_SMS_PROVIDER: 'twilio' } });
-  h.lc.upsertContact = async () => { throw new Error('CRM down'); };
-  const token = await h.prepare('emergency');
-  const available = await h.slots(token);
-  const held = await h.hold(token, available[0].scheduledAt);
-  assert.equal(held.status, 201, JSON.stringify(held.data));
-  const response = await h.call('/api/approvals', { method: 'POST', token, body: { holdId: held.data.hold.id, approved: true } });
-  assert.equal(response.status, 201, JSON.stringify(response.data));
-  const approval = await h.store.approval(response.data.approval.id);
-  assert.equal(approval.notified.sms, 'sent');
-  assert.equal(approval.notified.email, 'skipped');
-  assert.equal(approval.notified.emailReason, 'disabled_or_not_configured');
-  assert.deepEqual(h.lc.calls, []);
-  assert.equal(twilio.calls.some(c => c.phone === '+16235559999' && /approval needed/.test(c.message)), true);
-  assert.equal(await h.count('appointments'), 0);
-});

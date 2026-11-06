@@ -28,7 +28,7 @@ export const INITIAL_FAQS = [
     "Dryer vents usually exit through an outside wall with a louvered or flapper cap, or up through the attic to a vent on the roof. Your technician locates the exact exit point during the visit and checks that air is flowing out.",
     ["where does it exit", "exit location", "outside vent", "exterior wall", "roof cap"]),
   f("faq-6", "Scheduling", "Availability", "Can you get here today?",
-    "Same-day help is available through Emergency Same-Day Clog Relief when the schedule allows, and every same-day visit is approved by our team before it's confirmed. Choose Emergency Clog in the booking assistant to see the soonest openings.",
+    "We don't book same-day or emergency visits online. For an emergency, please call our office at (623) 294-1826 and the team will help you as quickly as possible. The booking assistant shows our soonest regular openings.",
     ["today", "same day", "asap", "availability", "how soon", "fast"]),
   f("faq-7", "Service", "Access", "Where do you clean the vent from?",
     "We clean bidirectionally! We access both from behind your dryer inside the laundry room and from the exterior termination point (wall or roof) to ensure every bend, elbow, and damper flap is completely cleared of restriction.",
@@ -119,6 +119,11 @@ export const INITIAL_FAQS = [
 // Answers revised on Oct 30 2026 (website packages and prices). A saved answer that still has the
 // earlier default wording gets the new wording; an answer the office edited is left alone.
 const REVISED = {
+ // Nov 6 2026: emergencies go to the office by phone; no same-day booking online.
+ "faq-6": {
+  "question": "Can you get here today?",
+  "answer": "Same-day help is available through Emergency Same-Day Clog Relief when the schedule allows, and every same-day visit is approved by our team before it's confirmed. Choose Emergency Clog in the booking assistant to see the soonest openings."
+ },
  // Nov 3 2026: airflow isn't always measured before and after, so the answer no longer promises it.
  "faq-18": {
   "question": "Why is my dryer taking multiple cycles to dry clothes?",

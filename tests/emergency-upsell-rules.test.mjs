@@ -1,4 +1,4 @@
-// Emergency pitch and after-hours option, upsell rules, the recent-service discount, BOB's
+// The Emergency path (safety, then the office by phone; no same-day or after-hours booking), upsell rules, the recent-service discount, BOB's
 // explanation of his pick, and the confirmation email's upgrades.
 
 import test from "node:test";
@@ -11,32 +11,33 @@ import { harness, contact } from "./helpers.mjs";
 
 const config = { ...DEFAULT_CONFIG, serviceZips: ["85326"], pricesAcknowledged: true };
 const run = (steps, s = initialSession(), cfg = config) => { let r; for (const m of steps) { r = turn(m, s, cfg, INITIAL_FAQS); s = r.session; } return r; };
-const emergency = ["Emergency Clog / Overheating", "No, it's turned off now", "Possible nest or blockage", "85326", "1-Story Home", "Electric Dryer"];
+const cleaningBase = ["Dryer Vent Cleaning", "85326", "Have Dryer", "No", "1-Story Home", "Electric Dryer", "Standard Floor Setup", "Dries in one normal cycle", "No signs"];
 
-test("the emergency offer leads with Ultimate and offers the on-call tech; yes is handled in the chat", () => {
-  const offer = run(emergency);
-  assert.deepEqual(offer.card.picks.map((p) => p.family), ["ultimate", "premium"]);
-  assert.match(offer.reply, /most comprehensive package.*clears the exterior termination.*DryerFlex.*3-year parts and labor warranty.*\$50 off that removal/s);
-  assert.ok(offer.options.includes("Check after-hours availability"));
-  const yes = run(["Check after-hours availability"], offer.session);
-  assert.notEqual(yes.action, "request", "no request form");
-  assert.equal(yes.session.afterHours, true);
-  assert.match(yes.reply, /^Okay, I'll check with our on-call technician\. The after-hours premium is \$199 on top of Ultimate Protection \(\$299\)\./);
+test("the Emergency button: safety first, then the office by phone; no same-day or after-hours offer", () => {
+  const r = run(["Emergency", "Yes, everyone is safe", "No, it's turned off now"]);
+  assert.equal(r.action, "call_office");
+  assert.equal(r.phone, "(623) 294-1826");
+  assert.equal(r.card, undefined, "no package offer");
+  assert.doesNotMatch(r.reply, /after-hours|on-call|same-day|\$199|\$349/i);
+  const typed = run(["Check after-hours availability"], r.session);
+  assert.match(typed.reply, /call our office at \*\*\(623\) 294-1826\*\*/);
+  assert.ok(!typed.session.afterHours, "after-hours can't be requested online");
+  const office = run(["Emergency", "Yes, everyone is safe", "No, it's turned off now"], initialSession(), { ...config, phone: "(623) 555-0123" });
+  assert.match(office.reply, /\*\*\(623\) 555-0123\*\*/, "the office phone in Settings is used when set");
 });
 
-test("asking for something sooner once a service is chosen offers after-hours; otherwise it doesn't", () => {
-  const accepted = run([...emergency, "Premium 1-2-3 · $179", "Standard Floor Setup", "Accept"]).session;
+test("asking for something sooner once a service is chosen gives the office's number; otherwise it doesn't", () => {
+  const accepted = run([...cleaningBase, "Premium 1-2-3 · $179", "Accept"]).session;
   const sooner = run(["do you have anything sooner?"], { ...accepted, stage: "slots" });
-  assert.match(sooner.reply, /^The times shown are our soonest regular openings\. We do have an on-call technician.*\$199 in addition to the regular charges/s);
-  assert.deepEqual(sooner.options, ["Check after-hours availability", "Keep regular times"]);
-  const keep = run(["Keep regular times"], sooner.session);
-  assert.equal(keep.session.stage, "slots", "back to the regular times");
+  assert.match(sooner.reply, /^The times shown are our soonest openings\. If you need help sooner, please call our office at \*\*\(623\) 294-1826\*\*\./);
+  assert.doesNotMatch(sooner.reply, /on-call|after-hours|\$199/);
+  assert.equal(sooner.session.stage, "slots", "still on the regular times");
+  assert.ok(!sooner.session.afterHours);
   const early = run(["Dryer Vent Cleaning", "anything sooner?"]);
-  assert.doesNotMatch(early.reply, /on-call/, "not before the service is chosen");
+  assert.doesNotMatch(early.reply, /call our office/, "not before the service is chosen");
 });
 
-test("no upgrades on emergency, nest or restoration visits; Ultimate gets only the fog", () => {
-  assert.equal(run([...emergency, "Ultimate Protection · $299", "Standard Floor Setup", "Accept"]).session.upsell, null, "emergency path");
+test("no upgrades on nest or restoration visits; Ultimate gets only the fog", () => {
   const nest = run(["There's a bird nest in my dryer vent", "85326", "Have Dryer Installed", "1-Story Home", "Electric Dryer", "Nest Removal + Cleaning · $389", "Accept"]);
   assert.equal(nest.session.upsell, null, "nest");
   const base = ["Dryer Vent Cleaning", "85326", "Have Dryer", "No", "1-Story Home", "Electric Dryer", "Standard Floor Setup", "Dries in one normal cycle", "No signs"];
@@ -76,24 +77,12 @@ test("the confirmation email offers the upgrades with working links", () => {
   assert.equal(emailUpsells({ ...appt, packageId: "emergency", urgency: "high" }, cfg).length, 0);
 });
 
-test("an after-hours request is marked, priced and emailed to the on-call contact", async (t) => {
-  const sendgrid = { configured: true, calls: [], async sendEmail(to, m) { this.calls.push({ to, ...m }); return { status: "accepted" }; } };
-  const h = await harness(t, { sendgrid, env: { BOOKING_EMAIL_PROVIDER: "sendgrid" }, config: { pricesAcknowledged: true, approver: { name: "Seth", phone: "", email: "oncall@example.test" } } });
-  const token = await h.fresh();
-  for (const m of [...emergency.slice(0, 3), "85326", "1-Story Home", "Electric Dryer", "Check after-hours availability"]) await h.chat(token, m);
-  const r = await h.call("/api/requests", { method: "POST", token, body: { name: contact.name, phone: contact.phone, email: "", zip: "85326", message: "After-hours emergency visit requested.", preference: "phone", idempotencyKey: "after-hours-request-0001" } });
-  assert.equal(r.status, 201, JSON.stringify(r.data));
-  const [saved] = (await h.store.requests()).filter((x) => x.kind === "after_hours");
-  assert.ok(saved, "saved as an after-hours request");
-  assert.match(saved.message, /^AFTER-HOURS EMERGENCY REQUEST: Ultimate Protection \(\$299\) \+ after-hours premium \$199\./);
-  const mail = sendgrid.calls.find((c) => c.to === "oncall@example.test");
-  assert.ok(mail, "the on-call contact is emailed");
-  assert.match(mail.subject, /^After-hours emergency request: /);
-});
 
 test("the opening menu is in the office's order; Something Else offers help choosing, questions, or the team", async () => {
   const { WELCOME } = await import("../shared/conversation.mjs");
-  assert.deepEqual(WELCOME, ["Book a Cleaning", "Repairs, Reroutes & Upgrades", "Emergency Clog / Overheating", "Pest / Nest Removal", "Something Else"]);
+  assert.deepEqual(WELCOME, ["Book a Cleaning", "Repairs, Reroutes & Upgrades", "Emergency", "Pest / Nest Removal", "Something Else"]);
+  assert.equal(run(["Emergency"]).session.intent, "emergency");
+  assert.equal(run(["Emergency Clog / Overheating"]).session.intent, "emergency", "the earlier label still works");
   assert.equal(run(["Book a Cleaning"]).session.intent, "cleaning");
   assert.equal(run(["Repairs, Reroutes & Upgrades"]).session.intent, "repair");
   assert.equal(run(["Pest / Nest Removal"]).session.intent, "nest");

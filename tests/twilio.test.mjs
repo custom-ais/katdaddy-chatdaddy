@@ -131,16 +131,3 @@ test("Virtual Phone test mode sends every text to Twilio's Virtual Phone, marked
   assert.deepEqual(Object.fromEntries(calls[0].form), { To: "+18777804236", MessagingServiceSid: sid("MG"), Body: "[Test for •••-0100] Custom-AIs ChatDaddy alert: booking confirmed." });
 });
 
-test("in Virtual Phone test mode the after-hours text goes out (to the Virtual Phone) without the campaign flag", async (t) => {
-  const { harness: bob, contact } = await import("./helpers.mjs");
-  const h = await bob(t, { env: { SMS_OWNER_ALERTS_ONLY: "true", SMS_VIRTUAL_PHONE: "true" }, config: { pricesAcknowledged: true, bookingOwnerSmsPhone: "6235550100", bookingOwnerSmsEnabled: true } });
-  const consent = createOwnerConsent({ store: h.store, clock: h.store.clock });
-  await consent.record({ action: "grant", revision: 0, phone: "6235550100", consent: true, disclosureVersion: OWNER_SMS_CONSENT_VERSION, idempotencyKey: crypto.randomUUID() }, "synthetic-owner-session");
-  const token = await h.fresh();
-  for (const m of ["Emergency Clog / Overheating", "No, it's turned off now", "Possible nest or blockage", "85326", "1-Story Home", "Electric Dryer", "Check after-hours availability", "Standard Floor Setup"]) await h.chat(token, m);
-  await h.contactAndVerify(token, contact);
-  const sent = await h.call("/api/approvals/after-hours", { method: "POST", token, body: { approved: true } });
-  assert.equal(sent.status, 201, JSON.stringify(sent.data));
-  assert.equal((await h.store.approval(sent.data.approval.id)).notified.sms, "sent");
-  assert.equal(h.twilio.calls.filter((c) => c[0] === "sms").length, 1);
-});

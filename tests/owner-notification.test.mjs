@@ -118,24 +118,6 @@ test('uncertain Jobber appointment alerts only after office confirms it exists, 
   assert.equal(calls.length, 1);
 });
 
-test('emergency booking owner alert waits for named approval and successful booking', async t => {
-  const calls = [];
-  const twilio = { ...fakeTwilio(), messagingConfigured: true, sendSms: async (phone, text) => { calls.push({ phone, text }); return { messageId: 'SM-owner', status: 'queued' }; } };
-  const h = await appHarness(t, { config: { emergencyLeadHours: 1, bookingOwnerSmsEnabled: true, bookingOwnerSmsPhone: '6235550100', approver: { name: 'Office', phone: '6235559999', email: '' } }, twilio });
-  await grantOwnerConsent(h);
-  const token = await h.prepare('emergency');
-  const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
-  const asked = await h.call('/api/approvals', { method: 'POST', token, body: { holdId: held.data.hold.id, approved: true } });
-  assert.equal(asked.status, 201);
-  const ownerCalls = () => calls.filter(c => /^Custom-AIs ChatDaddy alert: booking confirmed/.test(c.text));
-  assert.equal(ownerCalls().length, 0);
-  const cookie = await h.login();
-  const result = await h.call(`/api/admin/approvals/${asked.data.approval.id}`, { method: 'POST', cookie, body: { decision: 'approve', approverName: 'Office' } });
-  assert.equal(result.status, 200, JSON.stringify(result.data));
-  assert.equal(result.data.result.status, 'booked');
-  assert.equal(ownerCalls().length, 1);
-  assert.equal(ownerCalls()[0].phone, '+16235550100');
-});
 
 test('malformed owner transport responses remain uncertain and never retry', async () => {
   for (const response of [undefined, {}, {messageId:'SM-test'}, {status:'queued'}, {messageId:' ',status:'accepted'}, {messageId:'SM-test',status:'failed'}]) {
