@@ -88,6 +88,10 @@ test('slots show the start time with the arrival window; Settings wording shows 
   await page.getByRole('checkbox').check({ force: true });
   await page.getByRole('button', { name: /Confirm & book/ }).click();
   await page.getByText("You're booked!").waitFor({ timeout: 30_000 });
+  // The confirmation offers saving it, not starting over (the header still has its restart button).
+  const card = page.locator('div', { has: page.getByRole('heading', { name: "You're booked!" }) }).filter({ has: page.getByRole('button', { name: /Save confirmation/ }) }).last();
+  assert.equal(await card.getByRole('button', { name: /Save confirmation/ }).count(), 1);
+  assert.equal(await card.getByRole('button', { name: /Start over/i }).count(), 0, 'no Start over on the confirmation');
   const timer = page.getByRole('timer').filter({ hasText: /Returning to dryerventsquadaz\.com/ });
   assert.match(await timer.textContent(), /in (60|59)s/);
   await page.clock.runFor(30_000);
