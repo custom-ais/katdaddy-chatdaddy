@@ -209,6 +209,34 @@ export function normalizePhone(value) {
  if(raw.startsWith('+')&&!/^1\d{10}$/.test(digits))return null;
  return /^1?\d{10}$/.test(digits) ? `+1${digits.slice(-10)}` : null;
 }
+const NAME_PARTICLES=new Set(['van','von','der','den','de','del','della','da','di','du','la','le','bin','al']);
+const NAME_NUMERALS=new Set(['ii','iii','iv','vi','vii','viii']);
+const capWord=w=>w.toLowerCase().replace(/(^|[-'’.])(\p{L})/gu,(_,sep,ch)=>sep+ch.toUpperCase()).replace(/^Mc(\p{Ll})/u,(_,ch)=>'Mc'+ch.toUpperCase());
+/**
+ * Capitalizes a person's name (or a city) the way people expect, word by word:
+ * "jack frost", "JACK FROST" and "Jack frost" → "Jack Frost"; "o'brien" → "O'Brien";
+ * "mary-jane" → "Mary-Jane"; "mccoy" → "McCoy"; "john smith iii" → "John Smith III".
+ * Words typed with their own capitals ("DeShawn", "McDonald"), short all-caps initials in an
+ * otherwise normal name ("JD Smith"), and lowercase particles in a name that has other capitals
+ * ("van der Berg") are kept as typed. Extra spaces are collapsed.
+ */
+export function properName(value) {
+ const name=String(value??'').trim().replace(/\s+/g,' ');
+ const all=name.match(/\p{L}/gu)?.join('')||'';
+ if(!all)return name;
+ const deliberate=all!==all.toLowerCase()&&all!==all.toUpperCase();
+ return name.split(' ').map((word,i)=>{
+  const w=word.match(/\p{L}/gu)?.join('')||'';
+  if(!w)return word;
+  const lower=w.toLowerCase(),upper=w.toUpperCase();
+  if(i>0&&NAME_NUMERALS.has(lower))return word.toUpperCase();
+  const plain=w.slice(1)===w.slice(1).toLowerCase()||w===upper;
+  if(!plain)return word;
+  if(deliberate&&w===upper&&w.length>1&&w.length<=3)return word;
+  if(deliberate&&i>0&&w===lower&&NAME_PARTICLES.has(lower))return word;
+  return capWord(word);
+ }).join(' ');
+}
 export function validateContact(data,{address=true}={}) {
  const errors=[];
  if(typeof data.name!=='string'||data.name.trim().length<2||data.name.length>100)errors.push('Enter your full name.');
