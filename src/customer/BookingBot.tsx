@@ -508,12 +508,6 @@ function VerifyPhone({ token, verification, onVerified, onEdit, onRequest }: { t
 }
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
-/**
- * An emergency that came in after the 2 p.m. same-day cutoff: said when the times are shown, so the
- * customer hears it at scheduling rather than before the safety questions. The server sets the flag.
- */
-const CUTOFF_NOTE = "It's past our 2 p.m. cutoff for same-day visits, so these are our soonest regular openings. We do have an on-call technician who may be available after hours: tap “Need it sooner than these times?” below to ask. Please keep the dryer off.";
-const afterCutoff = (s: any) => Boolean(s?.emergencyAfterCutoff && !s?.afterHours && (s?.intent === 'emergency' || s?.package === 'emergency'));
 const LOADING_STEPS = ['Checking the schedule for openings…', 'Calculating routes…', 'Assigning a technician…', 'Gathering optional alternatives…'];
 const BOOKING_STEPS = ['Creating your account…', 'Assigning your technician…', 'Adding your visit to the schedule…', 'Sending your confirmation…'];
 
@@ -1383,7 +1377,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       setSession(r.session);
       say('model', `Got it — ${r.address || `${d.address}, ${d.city}, AZ ${d.zip}`}.`);
       if (r.verification?.required) { setVerification(r.verification); setAction('verify'); }
-      else { if (afterCutoff(r.session)) say('model', CUTOFF_NOTE); setAction('slots'); }
+      else setAction('slots');
     } catch (err) {
       const msg = (err as Error).message;
       say('model', msg);
@@ -1544,7 +1538,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
 
             <div className="pl-9 sm:pl-10 space-y-4">
               {!receipt && !requestId && contactStep === 'addons' && session?.upsell && !busy && <UpsellOffer upsell={session.upsell} onDone={chooseUpsell} />}
-              {!receipt && !requestId && action === 'verify' && verification && <VerifyPhone token={token} verification={verification} onVerified={(s) => { setSession(s); setVerification(null); setAction('slots'); say('model', `Thanks — your ${s.verifiedContact?.channel === 'email' ? 'email' : 'phone'} is confirmed. ${s.afterHours ? "Here's your after-hours request. Send it and I'll check with our on-call technician right away." : afterCutoff(s) ? CUTOFF_NOTE : 'Here are the soonest openings for the full visit.'}`); }} onEdit={editDetails} onRequest={() => setAction('request')} />}
+              {!receipt && !requestId && action === 'verify' && verification && <VerifyPhone token={token} verification={verification} onVerified={(s) => { setSession(s); setVerification(null); setAction('slots'); say('model', `Thanks — your ${s.verifiedContact?.channel === 'email' ? 'email' : 'phone'} is confirmed. ${s.afterHours ? "Here's your after-hours request. Send it and I'll check with our on-call technician right away." : 'Here are the soonest openings for the full visit.'}`); }} onEdit={editDetails} onRequest={() => setAction('request')} />}
               {!receipt && !requestId && action === 'slots' && session?.afterHours && <AfterHoursSend token={token} onSent={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRegular={() => void send('Keep regular times')} />}
               {!receipt && !requestId && action === 'slots' && !session?.afterHours && <SlotPicker token={token} session={session} config={config} onSooner={() => void send('Do you have anything sooner?')} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); setAutoClose(!p && !preview); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
               {!receipt && !requestId && action === 'approval' && approval && <ApprovalWait token={token} initial={approval} onBooked={onApprovalBooked} onEnded={onApprovalEnded} onCancelled={onApprovalCancelled} />}
