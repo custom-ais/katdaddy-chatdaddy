@@ -493,7 +493,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
   };
 
   /** Jobber: client + property + job + scheduled visit. Returns appointment.jobber details. */
-  async function pushToJobber(appt, slot, notes) {
+  async function pushToJobber(appt, slot, notes, c = null) {
     if (!slot.jobberUserId || !jobber.verifyAssignment) throw new Error("The selected technician needs a verified Jobber user mapping before booking.");
     const hubAccountBefore = await clientHub.capture();
     await jobber.verifyAssignment(slot.jobberUserId);
@@ -526,6 +526,8 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       start: Date.parse(appt.scheduledAt),
       end: Date.parse(appt.scheduledAt) + appt.durationMins * 60_000,
       jobberUserId: slot.jobberUserId,
+      // Settings → Technicians → "Also put on every BOB visit": extra people, so the visit shows on their schedule too.
+      alsoAssign: (c || (await store.config())).alsoAssignJobberUserIds || [],
     });
     if (!visit?.id) throw Object.assign(new Error("The scheduled Jobber visit could not be verified."), { jobberJob: job, uncertain: true });
     const hubAccountAfter = hubAccountBefore ? await clientHub.capture() : null;
@@ -821,7 +823,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       }
       if (jobberMode(c)) {
         try {
-          appt.jobber = await pushToJobber(appt, slot, contact.notes);
+          appt.jobber = await pushToJobber(appt, slot, contact.notes, c);
         } catch (error) {
           console.error("[bookings] jobber", error.message);
           if (error.jobberJob || error.uncertain) {
@@ -1888,7 +1890,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
             a.status = jobberMode(c) ? "confirming" : "confirmed";
             await store.insertAppointment(a);
             if (jobberMode(c)) {
-              try { a.jobber = await pushToJobber(a, slot, b.notes); a.status = "confirmed"; }
+              try { a.jobber = await pushToJobber(a, slot, b.notes, c); a.status = "confirmed"; }
               catch (error) {
                 if (!error.jobberJob && !error.uncertain) {
                   await store.retireAppointment(a, "failed");
@@ -1934,7 +1936,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
             const tech = (await store.technicians()).find(t => t.id === a.technicianId);
             if (!tech?.jobberUserId || !jobber.verifyScheduledVisit) fail(409, "A mapped technician and verified Jobber visit are required before this appointment can be confirmed.");
             let verifiedVisit;
-            try { verifiedVisit = await jobber.verifyScheduledVisit({ visitId, jobNumber: Number(number), start: Date.parse(a.scheduledAt), end: Date.parse(a.scheduledAt) + a.durationMins * 60_000, jobberUserId: tech.jobberUserId }); if (!verifiedVisit?.id) throw new Error("Missing verified visit ID"); }
+            try { verifiedVisit = await jobber.verifyScheduledVisit({ visitId, jobNumber: Number(number), start: Date.parse(a.scheduledAt), end: Date.parse(a.scheduledAt) + a.durationMins * 60_000, jobberUserId: tech.jobberUserId, alsoAssign: c.alsoAssignJobberUserIds || [] }); if (!verifiedVisit?.id) throw new Error("Missing verified visit ID"); }
             catch { fail(409, "Jobber has not verified this visit's time and technician. Keep it pending and correct the visit in Jobber."); }
             a.jobber = { ...(a.jobber || {}), jobNumber: Number(number), visitId: verifiedVisit.id };
             a.jobberState = "resolved";

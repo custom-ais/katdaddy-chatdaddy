@@ -234,7 +234,7 @@ function Technicians({ techs, onChange }: { techs: Technician[]; onChange: (next
               <Field label="Phone" hint={recipientProtected(t) ? 'Master Admin controls this SMS recipient number.' : undefined}><PhoneInput className={inputClass} type="tel" value={t.phone} disabled={recipientProtected(t)} onValueChange={(value) => edit(i, { phone: value })} /></Field>
               <Field label="Truck or van"><input className={inputClass} value={t.vehicle || ''} onChange={(e) => edit(i, { vehicle: e.target.value })} placeholder="Van 2" /></Field>
               <Field label="Home area"><input className={inputClass} value={t.zone} onChange={(e) => edit(i, { zone: e.target.value })} /></Field>
-              <Field label="Status">
+              <Field label="Status today" hint="Off duty only keeps them off today's openings. Other days follow their Jobber calendar for that day.">
                 <select className={inputClass} value={t.status} onChange={(e) => edit(i, { status: e.target.value })}>
                   <option value="available">Available</option><option value="on_route">On the way</option><option value="on_job">On a job</option><option value="off_duty">Off duty</option>
                 </select>
@@ -331,6 +331,42 @@ const weekLabel = (ms: number) => new Intl.DateTimeFormat('en-US', { timeZone: '
  * The revenue minimum BOB paces the schedule to, with this week and the next two against it. The
  * preview uses the values being edited, before they're saved.
  */
+/**
+ * Extra Jobber team members put on every visit BOB books, beside the technician doing it, so the
+ * visit shows on their own Jobber schedule (an owner or office login). Who does the job doesn't change.
+ */
+function AlsoAssign({ value, techs, onChange, disabled }: { value: string[]; techs: Technician[]; onChange: (next: string[]) => void; disabled?: boolean }) {
+  const { data } = useDashboard();
+  const connected = Boolean(data.integrations?.jobber?.connected);
+  const [users, setUsers] = useState<any[] | null>(null), [error, setError] = useState('');
+  useEffect(() => {
+    if (!connected) return;
+    api('/api/admin/jobber/users').then((r) => { setUsers(r.users || []); setError(''); }, (e) => { setUsers([]); setError((e as Error).message); });
+  }, [connected]);
+  const chosen = value || [];
+  const techFor = (id: string) => techs.find((t) => t.jobberUserId === id);
+  const gone = users ? chosen.filter((id) => !users.some((u) => u.id === id)) : [];
+  return (
+    <Section icon={<Users size={18} />} title="Also put on every BOB visit"
+      description="Each visit BOB books goes to the technician doing it. Add yourself or the office here and the same visit also shows on your Jobber schedule. It doesn't change who does the job or which times are open. Jobber sends its usual visit notice to everyone on the visit.">
+      {!connected ? <p className="text-sm text-slate-600">Connect Jobber to choose team members.</p>
+        : users === null ? <p className="text-sm text-slate-500 flex items-center gap-2"><Loader2 size={14} className="animate-spin" />Loading Jobber team members…</p>
+        : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
+            {users.map((u) => {
+              const tech = techFor(u.id);
+              return <Toggle key={u.id} checked={chosen.includes(u.id)} disabled={disabled || (!chosen.includes(u.id) && chosen.length >= 10)} label={u.name}
+                detail={tech ? `Linked to ${tech.name || 'a technician'}: they'll be on every visit, and those times count as busy on their calendar too.` : undefined}
+                onChange={(v) => onChange(v ? [...chosen, u.id] : chosen.filter((id) => id !== u.id))} />;
+            })}
+          </div>
+        )}
+      {gone.length > 0 && <p className="text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{gone.length === 1 ? 'One person' : `${gone.length} people`} chosen here {gone.length === 1 ? 'is' : 'are'} no longer in your Jobber account and {gone.length === 1 ? 'is' : 'are'} skipped. <button type="button" className="underline" disabled={disabled} onClick={() => onChange(chosen.filter((id) => !gone.includes(id)))}>Remove</button></p>}
+      {error && <ErrorNote>{error}</ErrorNote>}
+    </Section>
+  );
+}
+
 function RevenuePacing({ value, onChange }: { value: any; onChange: (patch: any) => void }) {
   const { can } = useDashboard();
   const rp = { enabled: false, period: 'month', targetCents: 0, outsideJobCents: 0, ...(value || {}) };
@@ -780,6 +816,7 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
       </Section>
 
             <Technicians techs={techs} onChange={(next) => { setTechs(next); setTechDirty(true); }} />
+            {can('integrations.manage') && <AlsoAssign value={c.alsoAssignJobberUserIds || []} techs={techs} disabled={!editable('alsoAssignJobberUserIds')} onChange={(next) => update('alsoAssignJobberUserIds', next)} />}
       </fieldset></div>}
 
       {view('services') && <div hidden={page !== 'services'} className="space-y-6" data-settings-panel="services"><fieldset disabled={!manage('services')} className="space-y-6 min-w-0">
