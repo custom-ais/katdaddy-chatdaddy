@@ -181,6 +181,35 @@ export function openSlots({ config, technicians, blocks, drive, durationMins, no
 }
 
 /**
+ * Why a day has no openings, for the server log: every candidate start, every technician's reason
+ * (or "ok"), whether the daily cap is reached, and what's already on the calendar that day (where it
+ * came from, its time, whose it is, and whether BOB could place it on the map). No names or addresses.
+ */
+export function explainDay({ config, technicians, blocks, drive, durationMins, now, date, ticketCents = 0, urgent = false }) {
+  const at = (ms) => new Intl.DateTimeFormat("en-US", { timeZone: "America/Phoenix", hour: "numeric", minute: "2-digit" }).format(ms);
+  const source = (b) => (b.kind === "jobber" ? (b.source === "assessment" ? "jobber request" : b.own ? "jobber visit booked by BOB" : "jobber visit") : b.kind === "appointment" ? "BOB booking record" : b.kind);
+  const candidates = candidateStarts({ config, durationMins, now, date, ticketCents });
+  return {
+    date, durationMins, candidates: candidates.length,
+    dayFull: dayIsFull({ date, blocks, config }), maxJobsPerDay: config.maxJobsPerDay,
+    onCalendar: blocks.filter((b) => touchesDate(b, date)).map((b) => ({
+      from: source(b), time: b.allDay ? "all day" : `${at(b.start)}-${at(b.end)}`, techs: b.techIds || "everyone",
+      onMap: Boolean(b.location), drive: drive.get(b.id) || null,
+    })),
+    times: candidates.map((c) => ({
+      time: at(c.start),
+      techs: Object.fromEntries(technicians.map((tech) => {
+        if (!config.activeTechnicianIds.includes(tech.id)) return [tech.id, "not taking online bookings"];
+        if (offToday(tech, c.date, now)) return [tech.id, "off duty today"];
+        if (!onShift(tech, c)) return [tech.id, "outside work schedule or time off"];
+        const r = evaluateTech({ candidate: c, tech, blocks, drive, config, urgent });
+        return [tech.id, r.ok ? "ok" : `${r.reason}${r.minutes != null ? ` (${r.minutes} min)` : ""}`];
+      })),
+    })),
+  };
+}
+
+/**
  * Route clustering. With route scoring on, the next two weeks are ranked by route fit
  * (ties go to the earlier time) and later dates follow in order. Otherwise slots next to
  * nearby jobs in the next two weeks come first.

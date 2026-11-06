@@ -139,7 +139,18 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     usersCache = null;
   };
 
+  // Calls that find the token expiring at the same moment (a calendar read and a request read run
+  // side by side) share one renewal. They used to queue on the lock, each waiting 600 ms. The lock
+  // still covers two separate server instances renewing at once.
+  let renewing = null;
   async function refresh(current) {
+    if (!renewing) renewing = renewOnce(current).finally(() => { renewing = null; });
+    const tokens = await renewing;
+    forgetPerRequest("jobber:tokens"); // this request reads the new token next time
+    return tokens;
+  }
+
+  async function renewOnce(current) {
     for (let attempt = 0; attempt < 10; attempt++) {
       if (await store.lock("jobber-refresh", 20)) {
         try {

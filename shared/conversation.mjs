@@ -100,7 +100,8 @@ export const QUESTIONS = {
   zip: { text: "What's the five-digit ZIP code for the service address?", options: [] },
   hasDryer: { text: "Do you currently have a dryer installed at the location, or do you only need the exhaust duct line serviced?", options: ["Have Dryer Installed", "No Dryer Present (Duct Only)"] },
   recentService: { text: "Has your dryer been purchased or serviced in the last 90 days?", options: ["Yes", "No", "Not sure"] },
-  stories: { text: "Is your home a 1-story or 2-story residence?", options: ["1-Story Home", "2-Story (1st Floor Laundry)", "2-Story (2nd Floor Laundry)", "Not sure"] },
+  // A 2-story home is asked which floor the laundry is on next (laundryFloor).
+  stories: { text: "Is your home a 1-story or 2-story residence?", options: ["1-Story Home", "2-Story Home", "Not sure"] },
   laundryFloor: { text: "Is the laundry room on the 1st floor or the 2nd floor?", options: ["1st Floor", "2nd Floor", "Not sure"] },
   power: { text: "Is your dryer gas or electric?", options: ["Electric Dryer", "Gas Dryer", "I don't know", "Other"], info: ["gas_electric", "why_we_ask"] },
   mount: { text: "Is your dryer standard, on a fixed pedestal, or stacked with a washer?", options: ["Standard Floor Setup", "Fixed Pedestal", "Stacked Washer/Dryer", "I don't know", "Other"], info: ["why_we_ask"] },
@@ -958,6 +959,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
       case "stories":
       case "laundryFloor":
         if (p.stories === "2-story" && p.laundryFloor === "2nd floor") return "Understood, second-floor laundry setup.";
+        if (key === "stories" && p.stories === "2-story" && !p.laundryFloor) return "Got it, a 2-story home.";
         return layoutPhrase() ? `Got it, ${layoutPhrase()} setup.` : "Got it.";
       case "power":
         if (p.power === "Gas") {

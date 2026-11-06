@@ -44,7 +44,7 @@ test("a hesitant customer gets a real answer, then the required question and its
   assert.match(r.reply, /^No pressure at all\. Nothing is booked until you approve the final summary, and I can show you the exact price first\.\n\nIs your home a 1-story or 2-story residence\?$/);
   assert.doesNotMatch(r.reply, /didn't catch that/);
   assert.equal(r.session.pending, "stories", "the required question is still pending");
-  assert.deepEqual(r.options, ["1-Story Home", "2-Story (1st Floor Laundry)", "2-Story (2nd Floor Laundry)", "Not sure"]);
+  assert.deepEqual(r.options, ["1-Story Home", "2-Story Home", "Not sure"]);
   assert.equal(r.session.history.at(-1).text, r.reply, "the conversation record shows what the customer saw");
   assert.equal(r.session.history.at(-2).text, "i dont know if i want to book yet");
   const req = voiceCalls()[0];
