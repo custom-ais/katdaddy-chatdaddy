@@ -1,4 +1,5 @@
 import { createOwnerConsent } from './owner-consent.mjs';
+import { bookingNoticeAllows } from '../shared/booking-notice.mjs';
 import { notifyOwnerError } from './owner-error-notification.mjs';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createAdminAuth } from './admin-auth.mjs';
@@ -33,6 +34,7 @@ import {
   validateConfig, normalizePhone, properName, isBookable, BUNDLE_PRICE_CENTS, phoenixDate, areaFor, drivingAreaFor, money,
 } from "../shared/domain.mjs";
 import { initialSession, WELCOME, detectSafety, turn } from "../shared/conversation.mjs";
+import { isUrgentBooking } from "../shared/booking-urgency.mjs";
 import { territoryFor, WEST_VALLEY_ZIPS } from "../shared/territory.mjs";
 import { PACKAGES, upsellSettings } from "../shared/catalog.mjs";
 import { validWorkWeek, validTimeOff, cleanWorkWeek, cleanTimeOff } from "../shared/tech-schedule.mjs";
@@ -589,12 +591,15 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
   };
   const slotOptions = (data, c, q) => ({
     durationMins: q.durationMins,
+    urgent: isUrgentBooking(data),
     leadHours: q.package === "emergency" ? c.emergencyLeadHours : c.leadHours,
     zip: data.contact?.zip || data.zip || "",
     neighborhood: data.location?.neighborhood || "",
     ticketCents: q.totalCents,
     emergencyRequestedAt: q.package === "emergency" ? (data.emergencyRequestedAt ?? clock()) : null,
   });
+
+  const noticeForSlot = (slot, c, quote) => slot.sameDay ? c.sameDay?.minNoticeHours : quote?.package === "emergency" ? c.emergencyLeadHours : c.leadHours;
 
   const newId = (prefix) => `${prefix}-${randomBytes(4).toString("hex").toUpperCase()}`;
   const UNDO_DEPTH = 30, UNDO_TTL = 60 * 60 * 24;
@@ -729,6 +734,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     }
     const arrival = typeof b.arrivalAt === "number" ? b.arrivalAt : Date.parse(String(b.arrivalAt || ""));
     if (!Number.isFinite(arrival) || arrival < clock() - 10 * 60_000 || arrival > clock() + 18 * 3600_000) fail(400, "Choose an arrival time in the next 18 hours.");
+    if (!bookingNoticeAllows(c, arrival, clock(), c.leadHours)) fail(409, "Visits require at least 12 hours' notice and must follow the current same-day setting. Choose a later arrival time.");
     const techs = (await store.technicians()).filter((t) => t.active !== false);
     // Office users without schedule access can't see the list; with one technician on file, that's who goes.
     const tech = b.technicianId ? techs.find((t) => t.id === b.technicianId) : techs.length === 1 ? techs[0] : null;
@@ -739,7 +745,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       a.status = "failed";
       a.failure = "The customer's conversation expired.";
     } else {
-      const slot = { start: arrival, technicianId: tech.id, technicianName: tech.name, jobberUserId: tech.jobberUserId || null, overflow: false, sameDay: true, routeScore: null };
+      const slot = { start: arrival, technicianId: tech.id, technicianName: tech.name, jobberUserId: tech.jobberUserId || null, overflow: false, sameDay: phoenixDate(new Date(arrival)) === phoenixDate(new Date(clock())), routeScore: null };
       try {
         const { appt, pending } = await commitBooking({ token: a.session, data, hold: { start: arrival, quote: a.quote, tech: tech.id }, c, idem: `approval-${a.id}`, approval: a, afterHours: { slot } });
         a.status = pending ? "action_needed" : "booked";
@@ -803,6 +809,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       }
       const slot = afterHours ? afterHours.slot : await step("recheck", async () => scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, q), location: data.location, now: clock(), iso: new Date(hold.start).toISOString(), preferTech: hold.tech, excludeSession: token, fresh: true }));
       if (!slot) fail(409, "That opening changed. Please select another time.", { code: "SLOT_GONE" });
+      // Recheck after slow routing/calendar reads and before any appointment or Jobber write.
+      // The office-selected after-hours lane also has to respect the minimum notice.
+      if (!bookingNoticeAllows(c, slot.start, clock(), afterHours ? c.leadHours : noticeForSlot(slot, c, q))) fail(409, "That opening no longer meets the 12-hour minimum or current same-day setting. Please select another time.", { code: "SLOT_GONE" });
       if (!afterHours) {
         requireAllowedSlot(q, slot, c);
         if (approval && !needsApproval(q, slot, c)) fail(409, 'This request needs office scheduling; its approval is no longer applicable.');
@@ -1141,7 +1150,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           console.error("[availability]", error.message);
           fail(502, "We couldn't reach the live schedule. Please try again, or send the team a request.");
         }
-        all = all.filter(slot => !approvalPolicy(q, slot, c, clock()).blocked);
+        all = all.filter(slot => bookingNoticeAllows(c, slot.start, clock(), noticeForSlot(slot, c, q)) && !approvalPolicy(q, slot, c, clock()).blocked);
         const start = Math.max(0, Number(url.searchParams.get("cursor")) || 0);
         return send(200, {
           slots: all.slice(start, start + 3).map((s, i) => ({
@@ -1174,6 +1183,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           requireAllowedSlot(quote, slot, c);
           const hold = { id: newId("HOLD"), session: token, tech: slot.technicianId, start: slot.start, end: slot.end, expires: clock() + 300_000, quote, lat: data.location.lat, lng: data.location.lng, address: `${data.contact.address}, ${data.contact.city}, AZ ${data.contact.zip}`, overflow: Boolean(slot.overflow) };
           await store.releaseHolds(token);
+          if (!bookingNoticeAllows(c, slot.start, clock(), noticeForSlot(slot, c, quote))) fail(409, "That time no longer meets the booking notice rules. Please choose a fresh opening.");
           await store.insertHold(hold);
           return send(201, { hold: { id: hold.id, expiresAt: hold.expires, scheduledAt: slot.scheduledAt, quote, approvalRequired: needsApproval(quote, slot, c), overflow: Boolean(slot.overflow) } });
         } finally {
@@ -1203,6 +1213,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           const slot = await scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(next, c, quote), location: data.location, now: clock(), iso: new Date(hold.start).toISOString(), preferTech: hold.tech, excludeSession: token, fresh: true });
           if (!slot) fail(409, "That add-on makes the visit too long for this time. Keep the visit as it is, or pick another time to add it.", { code: "EXTRAS_DONT_FIT" });
           requireAllowedSlot(quote, slot, c);
+          if (!bookingNoticeAllows(c, slot.start, clock(), noticeForSlot(slot, c, quote))) fail(409, "That time no longer meets the booking notice rules. Please choose a fresh opening.");
           await store.updateHold(hold.id, { quote, tech: slot.technicianId, end: slot.end });
           Object.assign(data, { package: next.package, upgradedFrom: next.upgradedFrom, addOns: next.addOns });
           await store.saveSession(token, data);
@@ -1263,6 +1274,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         if (!needsApproval(q, hold, c)) fail(409, "This visit doesn't need approval. Confirm it directly.");
         const slot = await scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, q), location: data.location, now: clock(), iso: new Date(hold.start).toISOString(), preferTech: hold.tech, excludeSession: token, fresh: true });
         if (!slot) fail(409, "That time is no longer available. Please choose a fresh opening.");
+        if (!bookingNoticeAllows(c, slot.start, clock(), noticeForSlot(slot, c, q))) fail(409, "That time no longer meets the booking notice rules. Please choose a fresh opening.");
         const expiresAt = Math.min(clock() + APPROVAL_WINDOW, hold.start - 30 * 60_000);
         if (expiresAt < clock() + 5 * 60_000) fail(409, "That time is too soon for an approval. Please choose a later opening.");
         const a = {
@@ -1900,8 +1912,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
             const q = quoteFor(office, c);
             const techs = await store.technicians();
             const prefer = typeof b.technicianId === "string" && techs.some((t) => t.id === b.technicianId) ? b.technicianId : undefined;
-            const slot = await scheduler.check({ config: forced, technicians: techs, durationMins: q.durationMins, leadHours: 0, location: where.location, zip: b.zip, neighborhood: where.location.neighborhood, ticketCents: q.totalCents, now: clock(), iso: b.scheduledAt, preferTech: prefer, fresh: true });
+            const slot = await scheduler.check({ config: forced, technicians: techs, durationMins: q.durationMins, location: where.location, zip: b.zip, neighborhood: where.location.neighborhood, ticketCents: q.totalCents, now: clock(), iso: b.scheduledAt, preferTech: prefer, fresh: true });
             if (!slot) fail(409, "That appointment does not fit the schedule, drive-time, capacity, or hours rules.");
+            if (!bookingNoticeAllows(c, slot.start, clock(), noticeForSlot(slot, c))) fail(409, "That appointment no longer meets the 12-hour minimum or current same-day setting.");
             const a = {
               id: newId("DVS"), customerName: properName(b.name), email: b.email || "", phone: normalizePhone(b.phone), address: b.address, city: properName(b.city), zip: b.zip,
               location: where.location, territory: where.territory, package: q.name, packageId: q.package, serviceId: q.serviceId, lineItems: q.lineItems, addOns: office.addOns,
@@ -1996,8 +2009,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           if (rescheduling || reactivating || reassigning) {
             const preserved = { ...c, bookingEnabled: true, scheduleAcknowledged: true, pricesAcknowledged: true, ...(reassigning ? { activeTechnicianIds: [b.technicianId] } : {}) };
             const location = a.location || (await locate(c, a)).location;
-            const slot = location && (await scheduler.check({ config: preserved, technicians: await store.technicians(), durationMins: a.durationMins, leadHours: 0, location, zip: a.zip, now: clock(), iso: b.scheduledAt || a.scheduledAt, ignoreAppointmentId: id, fresh: true }));
+            const slot = location && (await scheduler.check({ config: preserved, technicians: await store.technicians(), durationMins: a.durationMins, urgent: isUrgentBooking(a), location, zip: a.zip, now: clock(), iso: b.scheduledAt || a.scheduledAt, ignoreAppointmentId: id, fresh: true }));
             if (!slot) fail(409, "That change does not fit the current schedule. The original booking was not changed.");
+            if (!bookingNoticeAllows(c, slot.start, clock(), noticeForSlot(slot, c))) fail(409, "That change no longer meets the 12-hour minimum or current same-day setting. The original booking was not changed.");
             a.scheduledAt = slot.scheduledAt;
             a.technicianId = slot.technicianId;
             a.technicianName = slot.technicianName;

@@ -43,8 +43,8 @@ function clock(t: string | number) {
 
 // One plain-words example of what the two same-day numbers do together, using the real start times.
 function sameDayExample(c: any) {
-  const { cutoffHour, minNoticeHours } = c.sameDay;
-  if (minNoticeHours >= c.leadHours) return `Notice is as long as your regular booking notice (${c.leadHours} hours), so same-day adds nothing. Use fewer hours.`;
+  const { cutoffHour } = c.sameDay;
+  const minNoticeHours = Math.max(12, c.sameDay.minNoticeHours);
   const bookedAt = Math.min(8, cutoffHour - 1);
   const earliest = bookedAt + minNoticeHours;
   const first = (c.weekdayStarts as string[]).find((t) => Number(t.split(':')[0]) + Number(t.split(':')[1] || 0) / 60 >= earliest);
@@ -915,11 +915,11 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
               checked={c.sameDay.enabled}
               onChange={(v) => nested('sameDay', { enabled: v })}
               label="Same-day regular visits"
-              detail={c.sameDay.enabled ? 'Customers can book a visit for later today, using the rules below.' : `Off: customers only see times at least ${c.leadHours} hours away. Turn on to use the settings below.`}
+              detail={c.sameDay.enabled ? 'Visits today still require at least 12 hours of notice and the rules below.' : 'Off: no visits today. Every booking also requires at least 12 hours of notice.'}
             />
             <div className={`grid grid-cols-2 gap-3 ${c.sameDay.enabled ? '' : 'opacity-60'}`}>
               <Num label="Book before" suffix="hour, 24h" min={6} max={20} disabled={!c.sameDay.enabled} value={c.sameDay.cutoffHour} onChange={(n) => nested('sameDay', { cutoffHour: n })} hint="Same-day stops showing at this hour. 6–20; 12 = noon, 14 = 2 PM." />
-              <Num label="Notice" suffix="hours" min={0} max={12} disabled={!c.sameDay.enabled} value={c.sameDay.minNoticeHours} onChange={(n) => nested('sameDay', { minNoticeHours: n })} hint="Gap between booking and the visit starting. 0–12; 2–4 is typical." />
+              <Num label="Notice" suffix="hours" min={12} max={12} disabled={!c.sameDay.enabled} value={Math.max(12, c.sameDay.minNoticeHours)} onChange={(n) => nested('sameDay', { minNoticeHours: n })} hint="A 12-hour minimum applies to every visit, including same-day and emergency service." />
             </div>
             {c.sameDay.enabled && (
               <p className="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 leading-snug">
@@ -952,7 +952,7 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Num label="Most jobs per day" value={c.maxJobsPerDay} onChange={(n) => update('maxJobsPerDay', n)} />
-          <Num label="Booking notice" suffix="hours" value={c.leadHours} onChange={(n) => update('leadHours', n)} />
+          <Num label="Booking notice" suffix="hours" min={12} value={Math.max(12, c.leadHours)} onChange={(n) => update('leadHours', n)} hint="At least 12 hours for every booking. Longer notice still applies." />
           <Num label="Book up to" suffix="days ahead" value={c.horizonDays} onChange={(n) => update('horizonDays', n)} />
         </div>
         <div className="max-w-sm"><Num label="Count every calendar visit as at least" suffix="min" value={c.minVisitMinutes ?? 90} onChange={(n) => update('minVisitMinutes', n)} hint="Jobber visits and assessments BOB didn't book (BidBee, the office) block at least this long, even when Jobber shows less. 0 uses Jobber's times exactly." /></div>
@@ -993,7 +993,7 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
           <Dollars label="Assessment" value={c.assessmentPriceCents} onChange={(n) => update('assessmentPriceCents', n)} />
           <Num label="Assessment" suffix="min" value={c.assessmentMinutes} onChange={(n) => update('assessmentMinutes', n)} />
           <Dollars label="Assessment added to a cleaning" value={c.bundleAssessmentCents ?? 6000} onChange={(n) => update('bundleAssessmentCents', n)} hint="Cleaning + Assessment = the Premium 1-2-3 price for the home plus this amount ($179 + $60 = $239 for a 1-story home)." />
-          <Num label="Emergency notice" suffix="hours" value={c.emergencyLeadHours} disabled={!editable('emergencyLeadHours')} onChange={(n) => update('emergencyLeadHours', n)} />
+          <Num label="Emergency notice" suffix="hours" min={12} value={Math.max(12, c.emergencyLeadHours)} disabled={!editable('emergencyLeadHours')} onChange={(n) => update('emergencyLeadHours', n)} hint="Emergency visits also require at least 12 hours of notice." />
         </div>
         <Toggle checked={c.pricesAcknowledged} onChange={(v) => update('pricesAcknowledged', v)} label="These prices are approved for customers to see and book" />
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
