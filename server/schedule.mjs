@@ -1,7 +1,7 @@
 // Live availability: Jobber's calendar + BOB's holds/bookings + drive-time rules.
 
 import { phoenixDate } from "../shared/domain.mjs";
-import { openSlots, orderSlots } from "./schedule-rules.mjs";
+import { openSlots, orderSlots, offToday } from "./schedule-rules.mjs";
 import { zipOf } from "./route-score.mjs";
 import { pacingOn, revenuePace, weekStartOf, PACE_WEEKS } from "./revenue-pace.mjs";
 
@@ -38,11 +38,13 @@ export function createScheduler({ store, jobber, geo }) {
         out.push({ id: `ja:${v.id}`, kind: "jobber", source: "assessment", start: v.start, end: v.end, allDay: v.allDay, techIds: crew(v.jobberUserIds), address: v.address, location: null });
       }
     }
+    const alsoTechs = new Set(technicians.filter((t) => t.jobberUserId && (config.alsoAssignJobberUserIds || []).includes(t.jobberUserId)).map((t) => t.id));
     for (const a of await store.activeAppointments(from, to, ignoreAppointmentId)) {
       // Only a verified confirmed appointment observed on the current Jobber board
       // can replace its local reservation. Uncertain/readback-mismatched visits
       // must continue protecting the intended technician and interval.
-      const mirror = config.scheduleSource === "Jobber" && a.status === "confirmed" && a.jobberVisitId && out.find(b => b.id === `j:${a.jobberVisitId}` && !b.allDay && b.start === a.start && b.end === a.end && b.techIds?.length === 1 && b.techIds[0] === a.tech);
+      // Its Jobber visit may also carry the people Settings adds to every BOB visit.
+      const mirror = config.scheduleSource === "Jobber" && a.status === "confirmed" && a.jobberVisitId && out.find(b => b.id === `j:${a.jobberVisitId}` && !b.allDay && b.start === a.start && b.end === a.end && b.techIds?.includes(a.tech) && b.techIds.every(t => t === a.tech || alsoTechs.has(t)));
       if (mirror) { mirror.own = true; continue; }
       out.push({ id: `a:${a.id}`, kind: "appointment", start: a.start, end: a.end, allDay: false, techIds: [a.tech], address: a.address, location: a.location, overflow: Boolean(a.overflow) });
     }
@@ -132,7 +134,7 @@ export function createScheduler({ store, jobber, geo }) {
     if (!match.length) return null;
     if (preferTech) {
       // openSlots returns the best tech per start; re-run for the preferred tech if it differs.
-      const preferred = technicians.find((t) => t.id === preferTech && config.activeTechnicianIds.includes(t.id) && t.status !== "off_duty");
+      const preferred = technicians.find((t) => t.id === preferTech && config.activeTechnicianIds.includes(t.id) && !offToday(t, date, now));
       if (preferred && match[0].technicianId !== preferTech) {
         const only = await slots({
           config: { ...config, activeTechnicianIds: [preferTech] },

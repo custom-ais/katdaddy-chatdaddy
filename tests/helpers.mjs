@@ -85,8 +85,9 @@ export function fakeJobber({ connected = true } = {}) {
       if (!user) throw new Error("Invalid Jobber mapping");
       return user;
     },
-    async verifyScheduledVisit({ visitId, jobNumber, start, end, jobberUserId }) {
-      const found = j.visits.filter(v => (visitId ? v.id === visitId : v.jobNumber === jobNumber) && v.start === start && v.end === end && v.jobberUserIds?.length === 1 && v.jobberUserIds[0] === jobberUserId);
+    async verifyScheduledVisit({ visitId, jobNumber, start, end, jobberUserId, alsoAssign = [] }) {
+      const allowed = new Set([jobberUserId, ...alsoAssign]);
+      const found = j.visits.filter(v => (visitId ? v.id === visitId : v.jobNumber === jobNumber) && v.start === start && v.end === end && v.jobberUserIds?.includes(jobberUserId) && v.jobberUserIds.every(id => allowed.has(id)));
       if (found.length !== 1) throw new Error("Visit not verified");
       return { id: found[0].id, assignmentVerified: true };
     },
@@ -119,7 +120,7 @@ export function fakeJobber({ connected = true } = {}) {
       const prop = j.clients.at(-1)?.address;
       j.visits.push({
         id: visit.id, title: args.title, start: args.start, end: args.end, allDay: false,
-        jobberUserIds: args.jobberUserId ? [args.jobberUserId] : [],
+        jobberUserIds: args.jobberUserId ? [args.jobberUserId, ...(args.alsoAssign || []).filter(id => id !== args.jobberUserId)] : [],
         address: prop ? `${prop.street1}, ${prop.city}, AZ ${prop.zip}` : "",
       });
       return { job, visit };

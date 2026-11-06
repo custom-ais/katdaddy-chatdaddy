@@ -465,7 +465,21 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
 
   /** Read-only verification for creation and office reconciliation. Never accepts
    * a job number as proof of a correctly scheduled and assigned visit. */
-  async function verifyScheduledVisit({ visitId, jobNumber, start, end, jobberUserId }) {
+  /**
+   * The people Settings adds to every BOB visit (so it shows on their own Jobber schedule), kept to
+   * current users of the connected account. Someone removed from Jobber is skipped, never a reason
+   * to refuse the booking.
+   */
+  async function extraAssignees(alsoAssign, jobberUserId) {
+    const wanted = [...new Set((Array.isArray(alsoAssign) ? alsoAssign : []).filter((id) => typeof id === "string" && id.trim() && id.length <= 200 && id !== jobberUserId))];
+    if (!wanted.length) return [];
+    const known = new Set((await listUsers()).map((u) => u.id));
+    const missing = wanted.filter((id) => !known.has(id));
+    if (missing.length) console.warn(`[jobber] skipped ${missing.length} "also assign" user(s) no longer in the connected Jobber account`);
+    return wanted.filter((id) => known.has(id));
+  }
+
+  async function verifyScheduledVisit({ visitId, jobNumber, start, end, jobberUserId, alsoAssign = [] }) {
     const hasId = typeof visitId === "string" && Boolean(visitId.trim());
     const number = String(jobNumber ?? "").trim();
     const hasNumber = jobNumber != null && number !== "";
@@ -473,7 +487,9 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
       throw Object.assign(new Error("A Jobber visit ID or job number, assigned technician and expected time are required for verification."), { code: "JOBBER_VISIT_UNVERIFIED" });
     }
     const visits = await readVisits(start - 60_000, end + 60_000, { fresh: true });
-    const exact = v => v.start === start && v.end === end && !v.allDay && v.jobberUserIds.length === 1 && v.jobberUserIds[0] === jobberUserId;
+    // The technician must be on it; anyone else on it must be one of the people Settings adds.
+    const allowed = new Set([jobberUserId, ...(Array.isArray(alsoAssign) ? alsoAssign : [])]);
+    const exact = v => v.start === start && v.end === end && !v.allDay && v.jobberUserIds.includes(jobberUserId) && v.jobberUserIds.every(id => allowed.has(id));
     // A job number is only a search hint, never proof: require one exact matching
     // visit in the connected account and return its actual ID for reconciliation.
     const matches = visits.filter(v => (hasId ? v.id === visitId && (!hasNumber || String(v.jobNumber) === number) : String(v.jobNumber) === number) && exact(v));
@@ -485,8 +501,9 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
   }
 
   /** Creates the job (no visits) and then its one scheduled visit. */
-  async function createScheduledJob({ propertyId, title, instructions, lineItems, start, end, jobberUserId }) {
+  async function createScheduledJob({ propertyId, title, instructions, lineItems, start, end, jobberUserId, alsoAssign = [] }) {
     await verifyAssignment(jobberUserId);
+    const extra = await extraAssignees(alsoAssign, jobberUserId);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("A valid scheduled visit interval is required.");
     const created = await gql(
       `mutation BobJobCreate($input: JobCreateAttributes!) {
@@ -513,7 +530,7 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     const job = created?.jobCreate?.job;
     if (!job?.id) throw Object.assign(new Error("Jobber did not return the created job. Office review is required."), { uncertain: true, code: "JOBBER_JOB_UNVERIFIED" });
     const schedule = { startAt: local(start), endAt: local(end), notifyTeam: env.JOBBER_NOTIFY_TEAM !== "false" };
-    schedule.teamMemberIdsToAssign = [jobberUserId];
+    schedule.teamMemberIdsToAssign = [jobberUserId, ...extra];
     let createdVisit = null;
     try {
       const visitData = await gql(
@@ -527,7 +544,7 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
       if (!createdVisit?.id || visitData.visitCreate.createdVisits.length !== 1) throw new Error("Jobber did not return exactly one created visit.");
       // Read from the existing documented Visits connection, not a guessed root
       // lookup. fresh:true bypasses any availability cache from before creation.
-      const verified = await verifyScheduledVisit({ visitId: createdVisit.id, start, end, jobberUserId });
+      const verified = await verifyScheduledVisit({ visitId: createdVisit.id, start, end, jobberUserId, alsoAssign: extra });
       return { job, visit: { ...createdVisit, ...verified } };
     } catch (error) {
       createdVisit ||= error.jobberVisit || null;

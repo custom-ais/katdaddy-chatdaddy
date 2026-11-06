@@ -76,7 +76,7 @@ function validateArrayKeys(path,value) {
     } else if (Object.values(row).some(item => item !== null && typeof item === 'object')) throw forbidden();
   }
 }
-const arrayFields = new Set(['services','travelFeeTiers','customServiceAreas','serviceZips','travelZips','approvalServices','weekdayStarts','saturdayStarts','blockedDates','activeTechnicianIds']);
+const arrayFields = new Set(['alsoAssignJobberUserIds','services','travelFeeTiers','customServiceAreas','serviceZips','travelZips','approvalServices','weekdayStarts','saturdayStarts','blockedDates','activeTechnicianIds']);
 function canChange(principal,path) {
   const permission = CONFIG_FIELD_PERMISSIONS[path];
   if (!permission || !hasPermission(principal,permission)) return false;
@@ -154,7 +154,7 @@ function blankConfig() {
     revenuePacing:{enabled:false,period:'month',targetCents:0,outsideJobCents:0},
     upsells:{dryerflexEnabled:false,dryerflexTitle:'',dryerflexBadge:'',dryerflexWasCents:0,dryerflexPoints:'',dryerflexLink:'',foggingEnabled:false,foggingTitle:'',foggingDescription:'',bundleEnabled:false,bundleSavingsCents:0,ultimateEnabled:false,ultimatePitch:''},
     cleaningMinutes:0,assessmentMinutes:0,bundleMinutes:0,bufferMinutes:0,minVisitMinutes:0,maxJobsPerDay:0,leadHours:0,horizonDays:0,
-    weekdayStarts:[],weekdayClose:'',saturdayStarts:[],saturdayClose:'',blockedDates:[],serviceZips:[],travelZips:[],coverageVersion:0,activeTechnicianIds:[],assessmentCredited:false,
+    weekdayStarts:[],weekdayClose:'',saturdayStarts:[],saturdayClose:'',blockedDates:[],serviceZips:[],travelZips:[],coverageVersion:0,activeTechnicianIds:[],alsoAssignJobberUserIds:[],assessmentCredited:false,
   };
 }
 // Reading a status page never inherits every field controlled by its administrator.
@@ -163,7 +163,7 @@ const configReadGroups = {
   'settings.business.view':['businessName','phone','email','preparation','cleaningProcess','assessmentProcess','assessmentProcessVersion'],
   'settings.booking.view':['bookingEnabled','scheduleAcknowledged','scheduleSource','requirePhoneVerification','aiAssistant','smsConfirmations','emailConfirmations','emergencyLeadHours','approvalServices','approver.name'],
   'settings.connections.view':['scheduleSource','requirePhoneVerification','aiAssistant','aiProvider','integrations.jobber','integrations.maps','integrations.verification','integrations.sms','integrations.email'],
-  'integrations.manage':['approver.phone','approver.email'],
+  'integrations.manage':['approver.phone','approver.email','alsoAssignJobberUserIds'],
   'ownerSms.manage':['bookingOwnerSmsEnabled','ownerErrorSmsEnabled','bookingOwnerSmsPhone','messageTemplates.ownerBookingSms'],
   'settings.templates.view':['messageTemplates.confirmationSms','messageTemplates.confirmationEmailSubject','messageTemplates.confirmationEmailBody','messageEmailFormat'],
   'settings.services.view':['pricesAcknowledged','services','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','bundlePriceCents','cleaningMinutes','assessmentMinutes','bundleMinutes','assessmentCredited','upsells.dryerflexEnabled','upsells.dryerflexTitle','upsells.dryerflexBadge','upsells.dryerflexWasCents','upsells.dryerflexPoints','upsells.dryerflexLink','upsells.foggingEnabled','upsells.foggingTitle','upsells.foggingDescription','upsells.bundleEnabled','upsells.bundleSavingsCents','upsells.ultimateEnabled','upsells.ultimatePitch'],

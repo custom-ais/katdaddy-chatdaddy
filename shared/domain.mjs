@@ -97,6 +97,9 @@ export const DEFAULT_CONFIG = {
   coverageVersion: COVERAGE_VERSION,
   travelZoneFeeCents: 0,
   activeTechnicianIds: ['tech-ryan'],
+  // Jobber users added to every visit BOB books, next to the technician doing it, so the visit shows
+  // on their own Jobber schedule too (the owner or office). Their calendars aren't used to find times.
+  alsoAssignJobberUserIds: [],
   preparation: 'Please make the laundry area accessible and secure pets before the visit. Do not move or disconnect the dryer yourself. Let the team know about access restrictions.',
   cleaningProcess: 'Every See-It-Clean visit is a full vent cleaning with a live camera inspection during service.',
   assessmentProcess: "We'll start by asking what you've noticed, then inspect the vent from the connection behind your dryer to the outlet on your wall or roof.\n\nYour technician will use a camera to look inside the duct and measure airflow at both ends. That helps us pinpoint problems like a blockage, a crushed section, or a loose connection. We'll show you photos of what we find, explain what needs attention, and give you an itemized estimate so you can review your options before approving any work.\n\nAssessments start at $119. If you choose us for the repair, we'll apply the full assessment fee toward it.",
@@ -236,6 +239,7 @@ export function validateConfig(c) {
  if(c.assessmentProcessVersion!=null&&!Number.isInteger(c.assessmentProcessVersion))errors.push('Invalid assessmentProcessVersion.');
  if(!Number.isInteger(c.travelZoneFeeCents)||c.travelZoneFeeCents<0||c.travelZoneFeeCents>50000)errors.push('The just-outside travel charge must be $0–$500.');
  if(!Array.isArray(c.blockedDates)||c.blockedDates.length>1000||c.blockedDates.some(d=>!/^\d{4}-\d{2}-\d{2}$/.test(d)||Number.isNaN(Date.parse(d))))errors.push('Invalid blocked dates.');
+ if(c.alsoAssignJobberUserIds!==undefined&&(!Array.isArray(c.alsoAssignJobberUserIds)||c.alsoAssignJobberUserIds.length>10||!c.alsoAssignJobberUserIds.every(id=>typeof id==='string'&&/^[A-Za-z0-9+/=_-]{1,200}$/.test(id))||new Set(c.alsoAssignJobberUserIds).size!==c.alsoAssignJobberUserIds.length))errors.push('Choose up to 10 Jobber team members to add to every BOB visit.');
  if(!Array.isArray(c.activeTechnicianIds)||!c.activeTechnicianIds.every(id=>typeof id==='string'&&id.length<80))errors.push('Invalid technician selection.');
  for(const k of ['bookingEnabled','scheduleAcknowledged','pricesAcknowledged','nearbyFirst','smsConfirmations','emailConfirmations','bookingOwnerSmsEnabled','ownerErrorSmsEnabled'])if(typeof c[k]!=='boolean')errors.push(`Invalid ${k}.`);
  if(!['Jobber','BOB'].includes(c.scheduleSource))errors.push('Choose Jobber or BOB as the schedule source.');

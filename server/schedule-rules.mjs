@@ -123,8 +123,15 @@ export function dayIsFull({ date, blocks, config }) {
  * All open slots, best technician per slot.
  * place: the customer { location, zip, neighborhood } for route scoring.
  */
+/**
+ * A tech's live status (Available, On the way, On a job, Off duty) says who is out right now, so
+ * "Off duty" only keeps them off today's openings. Any other day is decided by their own calendar
+ * for that day.
+ */
+export const offToday = (tech, date, now) => tech.status === "off_duty" && date === phoenixDate(new Date(now));
+
 export function openSlots({ config, technicians, blocks, drive, durationMins, now, date = "", place = null, ticketCents = 0 }) {
-  const techs = technicians.filter((t) => config.activeTechnicianIds.includes(t.id) && t.status !== "off_duty");
+  const techs = technicians.filter((t) => config.activeTechnicianIds.includes(t.id));
   const slots = [];
   for (const candidate of candidateStarts({ config, durationMins, now, date, ticketCents })) {
     // The 5 PM overflow visit is the one exception to the daily cap ("4 standard + 1 overflow").
@@ -132,6 +139,7 @@ export function openSlots({ config, technicians, blocks, drive, durationMins, no
     if (candidate.overflow && blocks.some((b) => b.overflow && phoenixDate(new Date(b.start)) === candidate.date)) continue;
     let best = null;
     for (const tech of techs) {
+      if (offToday(tech, candidate.date, now)) continue;
       const result = evaluateTech({ candidate, tech, blocks, drive, config });
       if (!result.ok) continue;
       const needsNearby = (candidate.sameDay && config.sameDay?.requireNearby) || (candidate.overflow && config.overflow?.requireNearby);
