@@ -8,6 +8,14 @@ import { createTwilio } from "./twilio.mjs";
 
 import { createDb } from "./db.mjs";
 import { createStore } from "./store.mjs";
+import { measure } from "./timing.mjs";
+
+/** The database with every query (and transaction query) timed per request. */
+export function timedDb(db) {
+  const query = (text, params) => measure("db", () => db.query(text, params));
+  const tx = db.tx ? (fn) => db.tx((inner) => fn({ ...inner, query: (text, params) => measure("db", () => inner.query(text, params)) })) : undefined;
+  return { ...db, query, ...(tx ? { tx } : {}) };
+}
 import { createJobber } from "./jobber.mjs";
 import { createIntegrationControls, controlProviders } from "./integration-controls.mjs";
 import { createGeo } from "./geo.mjs";
@@ -19,15 +27,17 @@ let instance = null;
 
 export async function bobRuntime(env = process.env) {
   instance ??= (async () => {
-    const db = await createDb(env);
+    const db = timedDb(await createDb(env));
     const store = createStore(db);
     const controls = createIntegrationControls({ store });
+    // Every provider call is timed per request (see timing.mjs).
+    const timedFetch = (kind, fetchImpl) => (input, init) => measure(kind, () => fetchImpl(input, init));
     const { jobber, geo, twilio: gatedTwilio, sendgrid: gatedSendgrid } = controlProviders({
       controls,
-      sendgrid: createSendGrid({ env, fetchImpl: controls.fetchFor('email') }),
-      jobber: createJobber({ store, env, fetchImpl: controls.fetchFor('jobber') }),
-      geo: createGeo({ cache: store, googleKey: env.GOOGLE_MAPS_API_KEY || '', fetchImpl: controls.fetchFor('maps') }),
-      twilio: createTwilio({ env, fetchImpl: controls.fetchFor(input => String(input).startsWith('https://verify.twilio.com/') ? 'verification' : 'sms') }),
+      sendgrid: createSendGrid({ env, fetchImpl: timedFetch('email', controls.fetchFor('email')) }),
+      jobber: createJobber({ store, env, fetchImpl: timedFetch('jobber', controls.fetchFor('jobber')) }),
+      geo: createGeo({ cache: store, googleKey: env.GOOGLE_MAPS_API_KEY || '', fetchImpl: timedFetch('google', controls.fetchFor('maps')) }),
+      twilio: createTwilio({ env, fetchImpl: timedFetch('twilio', controls.fetchFor(input => String(input).startsWith('https://verify.twilio.com/') ? 'verification' : 'sms')) }),
     });
     const scheduler = createScheduler({ store, jobber, geo });
     const rawAssistant = createAssistant({ env, fetchImpl: async (input, init) => {

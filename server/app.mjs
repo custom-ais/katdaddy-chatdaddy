@@ -36,6 +36,10 @@ import { initialSession, WELCOME, detectSafety, turn } from "../shared/conversat
 import { territoryFor, WEST_VALLEY_ZIPS } from "../shared/territory.mjs";
 import { PACKAGES, upsellSettings } from "../shared/catalog.mjs";
 import { validWorkWeek, validTimeOff, cleanWorkWeek, cleanTimeOff } from "../shared/tech-schedule.mjs";
+import { withTiming, step, timingSummary, serverTimingHeader } from "./timing.mjs";
+
+// Booking-flow endpoints report where their time went (header, log line, BOB activity).
+const TIMED_PATHS = new Set(["/api/availability", "/api/holds", "/api/holds/extras", "/api/bookings", "/api/approvals", "/api/contact", "/api/verify/check"]);
 import { chatTurn } from "./chat.mjs";
 import { confirmationEmail, confirmationSms, approvalRequestText, afterHoursRequestSms, afterHoursRequestEmail } from "./messages.mjs";
 
@@ -497,12 +501,12 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
   async function pushToJobber(appt, slot, notes, c = null) {
     if (!slot.jobberUserId || !jobber.verifyAssignment) throw new Error("The selected technician needs a verified Jobber user mapping before booking.");
     const hubAccountBefore = await clientHub.capture();
-    await jobber.verifyAssignment(slot.jobberUserId);
+    await step("jobber.team", () => jobber.verifyAssignment(slot.jobberUserId));
     const { firstName, lastName } = splitName(appt.customerName);
-    const { clientId, propertyId } = await jobber.ensureClientAndProperty(
+    const { clientId, propertyId } = await step("jobber.client", () => jobber.ensureClientAndProperty(
       { firstName, lastName, email: appt.email, phone: appt.phone, smsConsent: appt.smsConsent },
       { street1: appt.address, city: appt.city, zip: appt.zip },
-    );
+    ));
     const lineItems = (appt.lineItems?.length ? appt.lineItems : [{ name: appt.package, cents: appt.servicePriceCents }]).map((l) => ({
       name: l.name, cents: l.cents, description: l.description || "",
     }));
@@ -519,7 +523,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       appt.travelZone ? `Just outside the service area (ZIP ${appt.zip}); the customer accepted a travel charge${appt.travelFeeCents ? ` of $${(appt.travelFeeCents / 100).toFixed(2)}` : " (amount not set in BOB; confirm with the customer)"}.` : "",
       `Phone ${appt.phoneVerified ? "verified by text code" : "not verified"}. Service texts: ${appt.smsConsent ? "consented" : "no consent"}.`,
     ].filter(Boolean).join("\n");
-    const { job, visit } = await jobber.createScheduledJob({
+    // Settings → Technicians → "Also put on every BOB visit": extra people, so the visit shows on their schedule too.
+    const alsoAssign = (c || (await store.config())).alsoAssignJobberUserIds || [];
+    const { job, visit } = await step("jobber.visit", () => jobber.createScheduledJob({
       propertyId,
       title: appt.package,
       instructions,
@@ -527,9 +533,8 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       start: Date.parse(appt.scheduledAt),
       end: Date.parse(appt.scheduledAt) + appt.durationMins * 60_000,
       jobberUserId: slot.jobberUserId,
-      // Settings → Technicians → "Also put on every BOB visit": extra people, so the visit shows on their schedule too.
-      alsoAssign: (c || (await store.config())).alsoAssignJobberUserIds || [],
-    });
+      alsoAssign,
+    }));
     if (!visit?.id) throw Object.assign(new Error("The scheduled Jobber visit could not be verified."), { jobberJob: job, uncertain: true });
     const hubAccountAfter = hubAccountBefore ? await clientHub.capture() : null;
     const hubBinding = hubAccountAfter && hubAccountAfter.id === hubAccountBefore.id && hubAccountAfter.epoch === hubAccountBefore.epoch ? { accountId: hubAccountAfter.id, clientHubEpoch: hubAccountAfter.epoch } : {};
@@ -792,11 +797,11 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     let appt, pending = false;
     try {
       if (c.baseAddress || ["driving_distance", "radius"].includes(c.serviceAreaMode)) {
-        const currentArea = await locate(c, data.contact, { travelZone: Boolean(data.travelZone), fresh: true });
+        const currentArea = await step("address", () => locate(c, data.contact, { travelZone: Boolean(data.travelZone), fresh: true }));
         if (!currentArea.ok) fail(409, "We could not reverify the current travel and service-area rules. Please ask the office to review this appointment.");
         if (currentArea.travelFeeCents !== q.travelFeeCents) fail(409, "Travel details changed. Please review a fresh quote.");
       }
-      const slot = afterHours ? afterHours.slot : await scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, q), location: data.location, now: clock(), iso: new Date(hold.start).toISOString(), preferTech: hold.tech, excludeSession: token, fresh: true });
+      const slot = afterHours ? afterHours.slot : await step("recheck", async () => scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, q), location: data.location, now: clock(), iso: new Date(hold.start).toISOString(), preferTech: hold.tech, excludeSession: token, fresh: true }));
       if (!slot) fail(409, "That opening changed. Please select another time.", { code: "SLOT_GONE" });
       if (!afterHours) {
         requireAllowedSlot(q, slot, c);
@@ -824,7 +829,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       }
       if (jobberMode(c)) {
         try {
-          appt.jobber = await pushToJobber(appt, slot, contact.notes, c);
+          appt.jobber = await step("jobber", () => pushToJobber(appt, slot, contact.notes, c));
         } catch (error) {
           console.error("[bookings] jobber", error.message);
           if (error.jobberJob || error.uncertain) {
@@ -860,16 +865,18 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     }
     if (pending && !approval) await notifyOwnerProblem('booking_action_needed', appt);
     if (!pending) {
-      await notifyOwner(appt, c);
-      appt.notifications = await sendConfirmations(appt, c);
+      await step("owner_text", () => notifyOwner(appt, c));
+      appt.notifications = await step("confirmations", () => sendConfirmations(appt, c));
       await store.updateAppointment(appt);
-      await sendBookingReport(appt, c);
-      await dispatch();
+      await step("report", () => sendBookingReport(appt, c));
+      await step("dispatch", () => dispatch());
     }
     return { appt, pending };
   }
 
-  return async function handle(req, res) {
+  return (req, res) => withTiming(() => handle(req, res));
+
+  async function handle(req, res) {
     req.bobActivity = { requestId: randomBytes(10).toString("hex"), sessionId: "" };
     let conversationLock = null;
     let response = null;
@@ -885,7 +892,8 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         if (data?.config && Array.isArray(data.appointments)) data.access = projectPrincipal(req.adminPrincipal);
       }
       if (req.url !== "/api/health" && (status >= 400 || req.method !== "GET")) {
-        await record(req, "request.finished", { path: String(req.url || "").split("?")[0], method: req.method, status, ...(status >= 400 ? { error: data?.error } : {}) }, status >= 500 ? "error" : status >= 400 ? "warning" : "info");
+        const path = String(req.url || "").split("?")[0];
+        await record(req, "request.finished", { path, method: req.method, status, ...(status >= 400 ? { error: data?.error } : {}), ...(TIMED_PATHS.has(path) ? { timing: timingSummary() } : {}) }, status >= 500 ? "error" : status >= 400 ? "warning" : "info");
       }
       response = { status, data };
     };
@@ -1126,7 +1134,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         const q = quoteFor(data, c);
         let all;
         try {
-          all = await scheduler.slots({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, q), location: data.location, now: clock(), date, excludeSession: token });
+          all = await step("schedule", async () => scheduler.slots({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, q), location: data.location, now: clock(), date, excludeSession: token }));
         } catch (error) {
           if (error.code === "JOBBER_NOT_CONNECTED") return send(200, { slots: [], nextCursor: null, enabled: false });
           console.error("[availability]", error.message);
@@ -1160,7 +1168,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         if (!(await store.lock(`slot:${day}`, 30))) fail(409, "Someone is booking that day right now. Please try again in a moment.");
         try {
           const quote = quoteFor(data, c);
-          const slot = await scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, quote), location: data.location, now: clock(), iso: body.scheduledAt, excludeSession: token, fresh: true });
+          const slot = await step("schedule", async () => scheduler.check({ config: c, technicians: await store.technicians(), ...slotOptions(data, c, quote), location: data.location, now: clock(), iso: body.scheduledAt, excludeSession: token, fresh: true }));
           if (!slot) fail(409, "That time is no longer available. Please choose a fresh opening.");
           requireAllowedSlot(quote, slot, c);
           const hold = { id: newId("HOLD"), session: token, tech: slot.technicianId, start: slot.start, end: slot.end, expires: clock() + 300_000, quote, lat: data.location.lat, lng: data.location.lng, address: `${data.contact.address}, ${data.contact.city}, AZ ${data.contact.zip}`, overflow: Boolean(slot.overflow) };
@@ -2036,10 +2044,16 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     await adminScope.run(req, routeRequest);
     if (response && !res.headersSent) {
       res.setHeader("X-BOB-Request-ID", req.bobActivity.requestId);
+      const path = String(req.url || "").split("?")[0];
+      if (TIMED_PATHS.has(path)) {
+        const timing = timingSummary();
+        res.setHeader("Server-Timing", serverTimingHeader(timing));
+        console.log(`[timing] ${req.method} ${path} ${response.status} ${timing.ms}ms ${JSON.stringify(timing)}`);
+      }
       res.writeHead(response.status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
       res.end(JSON.stringify(response.data));
     }
-  };
+  }
 }
 
 /** Postgres jsonb reorders object keys, so compare quotes structurally. */

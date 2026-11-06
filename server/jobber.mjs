@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { note, oncePerRequest, forgetPerRequest } from "./timing.mjs";
 // Jobber GraphQL integration for BOB the Booking Bot (Jobber app: "BOB the Booking Bot").
 //
 // - OAuth: tokens live in BOB's database. Refresh tokens ROTATE (each refresh returns a
@@ -13,6 +14,9 @@ const AUTHORIZE_URL = "https://api.getjobber.com/api/oauth/authorize";
 const TOKEN_URL = "https://api.getjobber.com/api/oauth/token";
 const TOKENS = "jobber:tokens";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Time BOB spends waiting on Jobber (rate limits, another instance's token refresh) shows in timing.
+const wait = (ms) => { note("jobber_wait", ms); return sleep(ms); };
+const USERS_CACHE_MS = 5 * 60_000;
 
 export class JobberNotConnected extends Error {
   constructor() {
@@ -121,30 +125,37 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     const tokens = await postToken({ grant_type: "authorization_code", code, redirect_uri: cfg.redirectUri });
     await store.kvSet("client-hub:connection-epoch", randomUUID());
     await tokenStore.save(tokens);
+    forgetPerRequest("jobber:tokens");
     return tokens;
   }
 
-  const loadTokens = () => tokenStore.load();
+  // Read once per request (each Jobber call used to read it again); refreshes and saves forget it.
+  const loadTokens = () => oncePerRequest("jobber:tokens", () => tokenStore.load());
   const connected = async () => appConfigured && Boolean((await loadTokens())?.refreshToken);
   const disconnect = async () => {
     await store.kvSet("client-hub:connection-epoch", randomUUID());
     await tokenStore.clear();
+    forgetPerRequest("jobber:tokens");
+    usersCache = null;
   };
 
   async function refresh(current) {
     for (let attempt = 0; attempt < 10; attempt++) {
       if (await store.lock("jobber-refresh", 20)) {
         try {
+          forgetPerRequest("jobber:tokens");
           const latest = (await loadTokens()) || current;
           if (latest.accessToken !== current.accessToken && latest.expiresAt - 120_000 > Date.now()) return latest;
           const tokens = await postToken({ grant_type: "refresh_token", refresh_token: latest.refreshToken });
           await tokenStore.save(tokens);
+          forgetPerRequest("jobber:tokens");
           return tokens;
         } finally {
           await store.unlock("jobber-refresh");
         }
       }
-      await sleep(600);
+      await wait(600);
+      forgetPerRequest("jobber:tokens");
       const latest = await loadTokens();
       if (latest?.accessToken && latest.expiresAt - 120_000 > Date.now()) return latest;
     }
@@ -204,7 +215,7 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
       if (throttled && attempt < 4) {
         const t = json.extensions?.cost?.throttleStatus;
         const need = json.extensions?.cost?.requestedQueryCost || 1000;
-        await sleep(t ? Math.min(6000, Math.max(500, ((need - t.currentlyAvailable) / t.restoreRate) * 1000)) : 1500);
+        await wait(t ? Math.min(6000, Math.max(500, ((need - t.currentlyAvailable) / t.restoreRate) * 1000)) : 1500);
         continue;
       }
       if (!response.ok) {
@@ -348,6 +359,17 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     return all.filter((a) => a.start >= from && a.start < to);
   }
 
+  // The team list changes rarely: bookings reuse it for 5 minutes (per connected account). A
+  // technician missing from a cached list is looked up again before a booking is refused.
+  let usersCache = null;
+  async function cachedUsers() {
+    const binding = await accountIdentityRevision();
+    if (usersCache && usersCache.binding === binding && Date.now() - usersCache.at < USERS_CACHE_MS) return { users: usersCache.users, fresh: false };
+    const users = await listUsers();
+    usersCache = { binding, at: Date.now(), users };
+    return { users, fresh: true };
+  }
+
   async function listUsers() {
     const users = [];
     let cursor = null;
@@ -369,7 +391,13 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     if (typeof jobberUserId !== "string" || !jobberUserId.trim() || jobberUserId.length > 200) {
       throw Object.assign(new Error("Link the active technician to a Jobber user before booking."), { code: "JOBBER_ASSIGNMENT_REQUIRED" });
     }
-    const user = (await listUsers()).find((candidate) => candidate.id === jobberUserId);
+    let { users, fresh } = await cachedUsers();
+    let user = users.find((candidate) => candidate.id === jobberUserId);
+    if (!user && !fresh) {
+      usersCache = null;
+      ({ users } = await cachedUsers());
+      user = users.find((candidate) => candidate.id === jobberUserId);
+    }
     if (!user) throw Object.assign(new Error("The selected technician is not a verified user of the connected Jobber account."), { code: "JOBBER_ASSIGNMENT_INVALID" });
     return user;
   }
@@ -473,7 +501,7 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
   async function extraAssignees(alsoAssign, jobberUserId) {
     const wanted = [...new Set((Array.isArray(alsoAssign) ? alsoAssign : []).filter((id) => typeof id === "string" && id.trim() && id.length <= 200 && id !== jobberUserId))];
     if (!wanted.length) return [];
-    const known = new Set((await listUsers()).map((u) => u.id));
+    const known = new Set((await cachedUsers()).users.map((u) => u.id));
     const missing = wanted.filter((id) => !known.has(id));
     if (missing.length) console.warn(`[jobber] skipped ${missing.length} "also assign" user(s) no longer in the connected Jobber account`);
     return wanted.filter((id) => known.has(id));
