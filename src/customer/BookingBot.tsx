@@ -15,12 +15,32 @@ import { CODE_DIGITS } from '../../shared/verification-code.mjs';
 const TZ = 'America/Phoenix';
 type Msg = { role: 'user' | 'model'; text: string; info?: string[]; card?: any; local?: boolean };
 
-/** "Thursday, Sep 24" and "8:30–9:30 AM arrival". */
+/** "8:30 AM" and "9:30 AM" → "8:30–9:30 AM"; "11:30 AM" and "12:30 PM" stay whole. */
+export const timeRange = (a: string, b: string) => {
+  const [ta, pa] = a.split(/\s+/), [, pb] = b.split(/\s+/);
+  return pa && pa === pb ? `${ta}–${b}` : `${a}–${b}`;
+};
+
+/**
+ * "Thursday, Sep 24", the visit's start "9:00 AM", its arrival window "8:30–9:30 AM", and the
+ * one-line "9:00 AM (arrival window 8:30–9:30 AM)" for text exports.
+ */
 export function windowParts(iso: string) {
   const t = Date.parse(iso);
   const day = new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'long', month: 'short', day: 'numeric' }).format(t);
   const f = (ms: number) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, hour: 'numeric', minute: '2-digit' }).format(ms);
-  return { day, time: `${f(t - 1_800_000)}–${f(t + 1_800_000)} arrival` };
+  const start = f(t), window = timeRange(f(t - 1_800_000), f(t + 1_800_000));
+  return { day, start, window, time: `${start} (arrival window ${window})` };
+}
+
+/** The start time in bold with the arrival window small beside it, wrapping below on narrow screens. */
+function StartTime({ w, tone = 'text-slate-900', sub = 'text-slate-500', size = 'text-lg', suffix = '' }: { w: ReturnType<typeof windowParts>; tone?: string; sub?: string; size?: string; suffix?: string }) {
+  return (
+    <span className="flex flex-wrap items-baseline gap-x-2">
+      <span className={`${size} font-black leading-tight ${tone}`}>{w.start}</span>
+      <span className={`text-xs font-semibold ${sub}`}>Arrival window {w.window}{suffix}</span>
+    </span>
+  );
 }
 
 // ---- expandable info panels (from the dashboard design) ------------------------------------
@@ -193,6 +213,11 @@ function UpsellOffer({ upsell, onDone, live }: { upsell: any; onDone?: (sel: Ext
   const deal = dfOn && sel.fogging && upsell.bundleSavingsCents ? upsell.bundleSavingsCents : 0;
   const extra = (sel.ultimate && up ? up.extraCents : 0) + (dfOn ? df.cents : 0) + (sel.fogging && fog ? fog.cents : 0) - deal;
   const any = sel.ultimate || dfOn || sel.fogging;
+  // Wording from Settings → Upsells at checkout; the defaults cover sessions saved before it existed.
+  const dfTitle: string = df?.title || 'DryerFlex hose upgrade';
+  const dfPoints: string[] = Array.isArray(df?.points) ? df.points : ['Backed by our 3-year warranty', 'UL 2158A listed, with zero flame spread', 'Crush-resistant 5-layer aluminum keeps the full 4-inch airflow', 'Replaces foil or vinyl hoses that kink behind the dryer, installed with airtight clamps'];
+  const fogTitle: string = fog?.title || 'Sanitizing fog treatment';
+  const fogText: string = typeof fog?.description === 'string' ? fog.description : '';
   return (
     <div className={live ? 'mt-6' : ''}>
     <Card className={live ? '!p-4 !shadow-none !border-2 !border-dashed !border-slate-300 !bg-slate-50/70 !rounded-2xl' : '!p-4 sm:!p-5'}>
@@ -202,28 +227,29 @@ function UpsellOffer({ upsell, onDone, live }: { upsell: any; onDone?: (sel: Ext
       {live && <p className="text-sm text-slate-600 mt-0.5">Not included unless you tap Add. Your visit is booked the same without them, and your total updates right away.</p>}
       <div className={`mt-3 space-y-2.5 ${live?.busy ? 'opacity-70 pointer-events-none' : ''}`} aria-busy={live?.busy || undefined}>
         {df && (
-          <Tile on={dfOn} onClick={() => flip('dryerflex')} disabled={sel.ultimate} note={sel.ultimate ? 'Included with Ultimate' : undefined} label={`DryerFlex hose upgrade, ${money(df.cents)}${df.wasCents ? `, was ${money(df.wasCents)}` : ''}`}>
-            <span className="inline-block text-[11px] font-extrabold uppercase tracking-wide bg-amber-100 text-amber-900 rounded-full px-2.5 py-0.5">Online booking special</span>
-            <div className="mt-1.5 flex items-start justify-between gap-3">
-              <p className="font-extrabold text-slate-900 flex items-center gap-1.5"><Wind size={17} className="text-orange-500 shrink-0" />DryerFlex hose upgrade</p>
+          <Tile on={dfOn} onClick={() => flip('dryerflex')} disabled={sel.ultimate} note={sel.ultimate ? 'Included with Ultimate' : undefined} label={`${dfTitle}, ${money(df.cents)}${df.wasCents ? `, was ${money(df.wasCents)}` : ''}`}>
+            {df.badge && <span className="inline-block text-[11px] font-extrabold uppercase tracking-wide bg-amber-100 text-amber-900 rounded-full px-2.5 py-0.5">{df.badge}</span>}
+            <div className={`${df.badge ? 'mt-1.5 ' : ''}flex items-start justify-between gap-3`}>
+              <p className="font-extrabold text-slate-900 flex items-center gap-1.5"><Wind size={17} className="text-orange-500 shrink-0" />{dfTitle}</p>
               <p className="shrink-0 text-right leading-none">{df.wasCents ? <span className="block text-xs font-bold text-slate-400 line-through">{money(df.wasCents)}</span> : null}<span className="font-display text-2xl font-extrabold text-slate-900">{money(df.cents)}</span></p>
             </div>
-            <ul className="mt-2 space-y-1 text-sm text-slate-600">
-              <li className="flex gap-2"><ShieldCheck size={15} className="text-emerald-600 mt-0.5 shrink-0" /><span><b className="text-slate-800">Backed by our 3-year warranty</b></span></li>
-              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />UL 2158A listed, with zero flame spread</li>
-              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Crush-resistant 5-layer aluminum keeps the full 4-inch airflow</li>
-              <li className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />Replaces foil or vinyl hoses that kink behind the dryer, installed with airtight clamps</li>
-            </ul>
+            {dfPoints.length > 0 && (
+              <ul className="mt-2 space-y-1 text-sm text-slate-600">
+                {dfPoints.map((point, i) => i === 0
+                  ? <li key={i} className="flex gap-2"><ShieldCheck size={15} className="text-emerald-600 mt-0.5 shrink-0" /><span><b className="text-slate-800">{point}</b></span></li>
+                  : <li key={i} className="flex gap-2"><Check size={15} className="text-emerald-600 mt-0.5 shrink-0" />{point}</li>)}
+              </ul>
+            )}
           </Tile>
         )}
         {df?.learnMore && <a href={df.learnMore} target="_blank" rel="noopener noreferrer" className="block -mt-1 px-1 text-xs font-bold text-sky-700 hover:text-sky-900 underline underline-offset-2">Learn more about DryerFlex (manufacturer site)</a>}
         {fog && (
-          <Tile on={sel.fogging} onClick={() => flip('fogging')} label={`Sanitizing fog treatment, ${money(fog.cents)}`}>
+          <Tile on={sel.fogging} onClick={() => flip('fogging')} label={`${fogTitle}, ${money(fog.cents)}`}>
             <div className="flex items-start justify-between gap-3">
-              <p className="font-extrabold text-slate-900 flex items-center gap-1.5"><Sparkles size={17} className="text-sky-500 shrink-0" />Sanitizing fog treatment</p>
+              <p className="font-extrabold text-slate-900 flex items-center gap-1.5"><Sparkles size={17} className="text-sky-500 shrink-0" />{fogTitle}</p>
               <p className="shrink-0 font-display text-2xl font-extrabold text-slate-900 leading-none">{money(fog.cents)}</p>
             </div>
-            <p className="mt-1.5 text-sm text-slate-600">An antimicrobial fogging treatment inside the vent line. A good finishing step after pests, nests or musty smells.</p>
+            {fogText && <p className="mt-1.5 text-sm text-slate-600">{fogText}</p>}
           </Tile>
         )}
         {df && fog && upsell.bundleSavingsCents ? (
@@ -717,7 +743,7 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
         </div>
         <p className="text-sm text-slate-500 mb-4">{seconds > 0 ? 'This time is held for you for 5 minutes while you review.' : 'The hold ran out. Pick a time again.'}</p>
         <div className="rounded-2xl bg-slate-50 border border-slate-200 p-4 space-y-4">
-          <div className="flex items-start gap-3"><Calendar size={20} className="text-orange-500 mt-0.5" /><div><div className="font-black text-slate-900">{w.day}</div><div className="text-sm font-semibold text-slate-600">{w.time} · Arizona time</div></div></div>
+          <div className="flex items-start gap-3"><Calendar size={20} className="text-orange-500 mt-0.5" /><div><div className="font-black text-slate-900">{w.day}</div><StartTime w={w} suffix=" · Arizona time" /></div></div>
           <LineItems items={hold.quote.lineItems} total={hold.quote.totalCents} />
           {hold.quote.priceNote && <p className="text-xs text-slate-500">{hold.quote.priceNote}</p>}
           {hold.quote.route !== 'cleaning' && <p className="text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Repairs and parts are quoted separately.</p>}
@@ -733,7 +759,8 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
         {session?.upsell && seconds > 0 && <section aria-labelledby="bob-confirm-title" className="mt-6 pt-5 border-t-2 border-slate-200">
           <h4 id="bob-confirm-title" className="text-xs font-extrabold uppercase tracking-wide text-slate-500">You're booking</h4>
           <div className="mt-2 rounded-2xl bg-white border-2 border-slate-800 p-4">
-            <div className="font-black text-slate-900">{w.day} · {w.time}</div>
+            <div className="font-black text-slate-900">{w.day} · {w.start}</div>
+            <div className="text-xs font-semibold text-slate-500">Arrival window {w.window} · Arizona time</div>
             <ul className="mt-1.5 text-sm text-slate-700 space-y-0.5">
               {hold.quote.lineItems.map((l: any) => <li key={l.id || l.name} className="flex justify-between gap-4"><span>{l.name}</span><span className="font-bold">{money(l.cents)}</span></li>)}
             </ul>
@@ -790,8 +817,8 @@ function SlotPicker({ token, session, config, onBooked, onApproval, onRequest, o
                 : 'bg-white border-slate-100 hover:border-orange-300 hover:bg-orange-50/30 active:scale-[0.99] disabled:opacity-60'}`}>
               {isPicking && <span className="bob-fill absolute inset-0 bg-emerald-100" aria-hidden="true" />}
               <span className="relative">
-                <span className={`block font-extrabold ${isHeld ? 'text-white' : 'text-slate-800'}`}>{w.day}</span>
-                <span className={`block text-sm font-semibold ${isHeld ? 'text-emerald-50' : 'text-slate-500'}`}>{w.time}</span>
+                <span className={`block text-sm font-bold ${isHeld ? 'text-emerald-50' : 'text-slate-600'}`}>{w.day}</span>
+                <StartTime w={w} size="text-xl" tone={isHeld ? 'text-white' : 'text-slate-900'} sub={isHeld ? 'text-emerald-50' : 'text-slate-500'} />
                 <span className="flex flex-wrap gap-1.5 mt-1.5">
                   {slot.bestFit && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">Best fit for our route</span>}
                   {slot.nearby && !slot.bestFit && <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 flex items-center gap-1"><MapPin size={11} />We're nearby that day</span>}
@@ -967,7 +994,7 @@ function ApprovalWait({ token, initial, onBooked, onEnded, onCancelled }: { toke
   );
 }
 
-const AUTO_CLOSE_SECONDS = 20;
+const AUTO_CLOSE_SECONDS = 60;
 /** Where the standalone chat page goes back to (and returns to after a booking). */
 const SITE_URL = 'https://dryerventsquadaz.com';
 
@@ -985,7 +1012,7 @@ function Receipt({ receipt, pending, onRestart, business, autoClose, closeLabel,
   useEffect(() => { if (autoClose && left === 0) closeRef.current?.(); }, [autoClose, left]);
   const items = receipt.lineItems?.length ? receipt.lineItems : [{ name: receipt.service, cents: receipt.priceCents }];
   const text = () =>
-    [receipt.id, `${w.day}, ${w.time} (Arizona time)`, ...items.map((l: any) => `${l.name}: ${money(l.cents)}`), `Total: ${money(receipt.priceCents)}`, receipt.name, receipt.address, `${receipt.city}, AZ ${receipt.zip}`, receipt.route !== 'cleaning' ? 'Repairs and parts are quoted separately.' : '', '', receipt.preparation].join('\n');
+    [receipt.id, `${w.day}, ${w.time}, Arizona time`, ...items.map((l: any) => `${l.name}: ${money(l.cents)}`), `Total: ${money(receipt.priceCents)}`, receipt.name, receipt.address, `${receipt.city}, AZ ${receipt.zip}`, receipt.route !== 'cleaning' ? 'Repairs and parts are quoted separately.' : '', '', receipt.preparation].join('\n');
   // A designed image of the appointment. iPhones get the share sheet ("Save Image"); everything
   // else downloads the PNG. If drawing fails, the plain-text version is saved instead.
   const save = async () => {
@@ -993,7 +1020,7 @@ function Receipt({ receipt, pending, onRestart, business, autoClose, closeLabel,
     try {
       const blob = await renderAppointmentCard({
         businessName: business?.businessName || 'Dryer Vent Squad West Valley', phone: business?.phone, email: business?.email,
-        pending, reference: receipt.id, jobNumber: receipt.jobberJobNumber, day: w.day, time: w.time,
+        pending, reference: receipt.id, jobNumber: receipt.jobberJobNumber, day: w.day, time: w.start, window: w.window,
         lineItems: items, totalCents: receipt.priceCents, repairsNote: receipt.route !== 'cleaning' ? 'Repairs and parts are quoted separately.' : '',
         name: receipt.name, address: receipt.address, cityLine: `${receipt.city}, AZ ${receipt.zip}`, preparation: receipt.preparation,
       });
@@ -1018,7 +1045,7 @@ function Receipt({ receipt, pending, onRestart, business, autoClose, closeLabel,
         <p className={`text-sm font-medium ${pending ? 'text-amber-800' : 'text-emerald-800'}`}>Reference <b>{receipt.id}</b>{receipt.jobberJobNumber ? ` · Job #${receipt.jobberJobNumber}` : ''}</p>
       </div>
       <div className="bg-white/80 rounded-2xl p-4 space-y-3">
-        <div className="flex items-start gap-3"><Calendar size={20} className="text-orange-500 mt-0.5" /><div><div className="font-black text-slate-900">{w.day}</div><div className="text-sm font-semibold text-slate-600">{w.time} · Arizona time</div></div></div>
+        <div className="flex items-start gap-3"><Calendar size={20} className="text-orange-500 mt-0.5" /><div><div className="font-black text-slate-900">{w.day}</div><StartTime w={w} suffix=" · Arizona time" /></div></div>
         <LineItems items={receipt.lineItems?.length ? receipt.lineItems : [{ name: receipt.service, cents: receipt.priceCents }]} total={receipt.priceCents} />
         {receipt.route !== 'cleaning' && <p className="text-xs font-bold text-amber-800">Repairs and parts are quoted separately.</p>}
         <div className="flex items-start gap-3 text-sm text-slate-700"><MapPin size={18} className="text-slate-400 mt-0.5" /><div>{receipt.name}<br />{receipt.address}<br />{receipt.city}, AZ {receipt.zip}</div></div>

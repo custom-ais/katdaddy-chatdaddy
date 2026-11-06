@@ -68,7 +68,7 @@ test("the confirmation email offers the upgrades with working links", () => {
   const appt = { id: "DVS-T1", customerName: "Jane Doe", package: "Premium 1-2-3 See-It-Clean", packageId: "premium", route: "cleaning", lineItems: [{ id: "premium-1", name: "Premium 1-2-3 See-It-Clean", cents: 17900 }], price: 179, scheduledAt: "2026-11-10T17:00:00Z", address: "1 Main St", city: "Buckeye", zip: "85326", property: { hasDryer: "Yes", stories: "1-story" } };
   const { html, text } = confirmationEmail(appt, cfg);
   assert.deepEqual(emailUpsells(appt, cfg).map((u) => u.key), ["dryerflex", "fogging", "ultimate"]);
-  assert.match(text, /DryerFlex hose upgrade: \$99 → \$79\..*backed by our 3-year warranty\. Learn more: https:\/\/www\.dryerflex\.com/s);
+  assert.match(text, /DryerFlex hose upgrade: \$99 → \$79\. Backed by our 3-year warranty\..*airtight clamps\. Learn more: https:\/\/www\.dryerflex\.com/s);
   const links = [...html.matchAll(/href="([^"]+)"/g)].map((m) => m[1].replace(/&amp;/g, "&"));
   assert.ok(links.includes("https://www.dryerflex.com"));
   assert.ok(links.includes("tel:+16232941826"), "phone links dial on any phone");

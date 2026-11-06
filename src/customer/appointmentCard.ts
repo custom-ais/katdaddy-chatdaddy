@@ -9,7 +9,8 @@ export type AppointmentCardData = {
   reference: string;
   jobNumber?: string | number;
   day: string; // "Tuesday, Nov 10"
-  time: string; // "9:30–10:30 AM arrival"
+  time: string; // the visit's start, "10:00 AM"
+  window?: string; // its arrival window, "9:30–10:30 AM"
   lineItems: { name: string; cents: number }[];
   totalCents: number;
   repairsNote?: string;
@@ -123,13 +124,14 @@ function paint(ctx: CanvasRenderingContext2D, d: AppointmentCardData, logo: HTML
 
   // When.
   y = label('When', y) + 20;
-  if (draw) { fill(C.orange); roundRect(ctx, left, y, 8, 128, 4); ctx.fill(); }
   font(800, 64, DISPLAY); fill(C.ink);
   const dayLines = wrap(ctx, d.day, width - 36);
   let wy = y + 58;
   for (const l of dayLines) { text(l, left + 36, wy); wy += 70; }
-  font(600, 32); fill(C.text); text(`${d.time} · Arizona time`, left + 36, wy + 2);
-  y = Math.max(y + 128, wy + 14) + 48;
+  font(800, 48, DISPLAY); fill(C.ink); text(d.time, left + 36, wy + 8); wy += 50;
+  font(600, 28); fill(C.muted); text(d.window ? `Arrival window ${d.window} · Arizona time` : 'Arizona time', left + 36, wy + 2);
+  if (draw) { fill(C.orange); roundRect(ctx, left, y, 8, wy + 14 - y, 4); ctx.fill(); }
+  y = wy + 14 + 48;
   y = rule(y) + 48;
 
   // Service and price.
