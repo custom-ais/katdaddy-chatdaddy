@@ -56,24 +56,29 @@ export function cleanTimeOff(list, today = "") {
 }
 
 /**
- * Whether the tech is on shift for the whole visit: inside their hours for that weekday (when they
- * have a schedule) and clear of their time off. candidate: { date: "YYYY-MM-DD", start, end } (ms).
+ * Why the tech isn't on shift for the whole visit, or null when they are: outside their hours for
+ * that weekday (when they have a schedule), or on time off. candidate: { date, start, end } (ms).
  */
-export function onShift(tech, candidate) {
+export function offShiftReason(tech, candidate) {
   const { date, start, end } = candidate;
   const week = tech?.workWeek;
   if (Array.isArray(week) && week.length === 7) {
-    const day = week[new Date(`${date}T12:00:00-07:00`).getUTCDay()];
-    if (!day?.on) return false;
-    if (start < dateTime(date, day.start).getTime() || end > dateTime(date, day.end).getTime()) return false;
+    const index = new Date(`${date}T12:00:00-07:00`).getUTCDay();
+    const day = week[index];
+    if (!day?.on) return `day off in work schedule (${WEEKDAYS[index]})`;
+    if (start < dateTime(date, day.start).getTime() || end > dateTime(date, day.end).getTime()) return `outside work hours (${WEEKDAYS[index]} ${day.start}-${day.end})`;
   }
   for (const off of Array.isArray(tech?.timeOff) ? tech.timeOff : []) {
-    if (date < off.from || date > off.to) continue;
-    if (!off.start || !off.end) return false;
-    if (start < dateTime(date, off.end).getTime() && end > dateTime(date, off.start).getTime()) return false;
+    if (!(off.from <= date && date <= off.to)) continue;
+    const label = `time off ${off.from}${off.to !== off.from ? ` to ${off.to}` : ""}`;
+    if (!off.start || !off.end) return `${label}, all day`;
+    if (start < dateTime(date, off.end).getTime() && end > dateTime(date, off.start).getTime()) return `${label}, ${off.start}-${off.end}`;
   }
-  return true;
+  return null;
 }
+
+/** Whether the tech is on shift for the whole visit (see offShiftReason). */
+export const onShift = (tech, candidate) => offShiftReason(tech, candidate) === null;
 
 const clock = (t) => {
   const [h, m] = t.split(":").map(Number);

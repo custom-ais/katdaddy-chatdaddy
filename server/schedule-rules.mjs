@@ -7,7 +7,7 @@
 
 import { phoenixDate, dateTime } from "../shared/domain.mjs";
 import { bookingNoticeAllows, bookingNoticeHours } from "../shared/booking-notice.mjs";
-import { onShift } from "../shared/tech-schedule.mjs";
+import { onShift, offShiftReason, weekSummary } from "../shared/tech-schedule.mjs";
 import { emergencySameDayEligible } from "./activity.mjs";
 import { routeScore } from "./route-score.mjs";
 import { paceBonus } from "./revenue-pace.mjs";
@@ -192,6 +192,11 @@ export function explainDay({ config, technicians, blocks, drive, durationMins, n
   return {
     date, durationMins, candidates: candidates.length,
     dayFull: dayIsFull({ date, blocks, config }), maxJobsPerDay: config.maxJobsPerDay,
+    // Each technician as BOB has them saved: taking online bookings, weekly schedule, time off (dates only).
+    technicians: Object.fromEntries(technicians.map((t) => [t.id, {
+      online: config.activeTechnicianIds.includes(t.id), status: t.status || "", schedule: weekSummary(t.workWeek),
+      timeOff: (Array.isArray(t.timeOff) ? t.timeOff : []).map((o) => `${o.from}${o.to !== o.from ? ` to ${o.to}` : ""}${o.start ? ` ${o.start}-${o.end}` : " all day"}`),
+    }])),
     onCalendar: blocks.filter((b) => touchesDate(b, date)).map((b) => ({
       from: source(b), time: b.allDay ? "all day" : `${at(b.start)}-${at(b.end)}`, techs: b.techIds || "everyone",
       onMap: Boolean(b.location), drive: drive.get(b.id) || null,
@@ -201,7 +206,8 @@ export function explainDay({ config, technicians, blocks, drive, durationMins, n
       techs: Object.fromEntries(technicians.map((tech) => {
         if (!config.activeTechnicianIds.includes(tech.id)) return [tech.id, "not taking online bookings"];
         if (offToday(tech, c.date, now)) return [tech.id, "off duty today"];
-        if (!onShift(tech, c)) return [tech.id, "outside work schedule or time off"];
+        const offShift = offShiftReason(tech, c);
+        if (offShift) return [tech.id, offShift];
         const r = evaluateTech({ candidate: c, tech, blocks, drive, config, urgent });
         return [tech.id, r.ok ? "ok" : `${r.reason}${r.minutes != null ? ` (${r.minutes} min)` : ""}`];
       })),
