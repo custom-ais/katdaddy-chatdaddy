@@ -9,7 +9,7 @@ import {
 } from 'lucide-react';
 import { api, ApiError, saveBlob, saveText } from '../lib/api';
 import { renderAppointmentCard } from './appointmentCard';
-import { money, phoenixDate } from '../../shared/domain.mjs';
+import { money, phoenixDate, properName } from '../../shared/domain.mjs';
 import { CODE_DIGITS } from '../../shared/verification-code.mjs';
 
 const TZ = 'America/Phoenix';
@@ -1390,7 +1390,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       if (step === 'email' && value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) { say('user', value); say('model', "That email doesn't look right. Enter it again, or choose Skip."); return; }
       if (step === 'address' && !/^\d+\s+\S/.test(value)) { say('user', value); say('model', 'Please include the house number and street, like “15420 W Bell Rd”.'); return; }
       if (step === 'name' && value.length < 2) return;
-      d[step] = value;
+      d[step] = step === 'name' || step === 'city' ? properName(value) : value;
       say('user', value);
     }
     setDraft(d);

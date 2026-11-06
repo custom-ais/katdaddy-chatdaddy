@@ -30,7 +30,7 @@ import { distanceMiles, validPoint } from "../shared/coverage.mjs";
 import { randomBytes, createHash, scryptSync, timingSafeEqual, createHmac } from "node:crypto";
 import {
   DEFAULT_CONFIG, INITIAL_FAQS, bookingQuote, travelFeeFor, validateContact,
-  validateConfig, normalizePhone, isBookable, BUNDLE_PRICE_CENTS, phoenixDate, areaFor, drivingAreaFor, money,
+  validateConfig, normalizePhone, properName, isBookable, BUNDLE_PRICE_CENTS, phoenixDate, areaFor, drivingAreaFor, money,
 } from "../shared/domain.mjs";
 import { initialSession, WELCOME, detectSafety, turn } from "../shared/conversation.mjs";
 import { territoryFor, WEST_VALLEY_ZIPS } from "../shared/territory.mjs";
@@ -1070,8 +1070,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         if (!where.ok && where.reason === "not_found") fail(400, "We couldn't find that street address. Check the street number, street name, and ZIP code.");
         if (!where.ok) fail(409, "That address is outside our online booking area. The team can review it — send a callback request.", { code: "OUT_OF_AREA" });
         data.contact = {
-          name: body.name.trim(), phone: normalizePhone(body.phone), email: (body.email || "").trim(),
-          address: body.address.trim(), city: body.city.trim(), zip: body.zip,
+          // "jack frost" → "Jack Frost" everywhere it shows: receipt, emails, Jobber, the dashboard.
+          name: properName(body.name), phone: normalizePhone(body.phone), email: (body.email || "").trim(),
+          address: body.address.trim(), city: properName(body.city), zip: body.zip,
           notes: String(body.notes || "").trim(), smsConsent: body.smsConsent === true,
         };
         if (data.phoneVerified?.phone !== data.contact.phone) delete data.phoneVerified;
@@ -1424,7 +1425,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           return send(200, { request: existing.data });
         }
         const request = {
-          id: newId("REQ"), name: body.name.trim(), phone: normalizePhone(body.phone), email: body.email || "",
+          id: newId("REQ"), name: properName(body.name), phone: normalizePhone(body.phone), email: body.email || "",
           zip: body.zip || data.zip || "", message: body.message.trim(), preference: body.preference === "email" ? "email" : "phone",
           smsConsent: body.smsConsent === true, status: "new", createdAt: new Date(clock()).toISOString(),
           route: data.route, safety: data.safety, concerns: [...(data.concerns || []), ...(data.notes || [])], transcript: data.history,
@@ -1902,7 +1903,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
             const slot = await scheduler.check({ config: forced, technicians: techs, durationMins: q.durationMins, leadHours: 0, location: where.location, zip: b.zip, neighborhood: where.location.neighborhood, ticketCents: q.totalCents, now: clock(), iso: b.scheduledAt, preferTech: prefer, fresh: true });
             if (!slot) fail(409, "That appointment does not fit the schedule, drive-time, capacity, or hours rules.");
             const a = {
-              id: newId("DVS"), customerName: b.name, email: b.email || "", phone: normalizePhone(b.phone), address: b.address, city: b.city, zip: b.zip,
+              id: newId("DVS"), customerName: properName(b.name), email: b.email || "", phone: normalizePhone(b.phone), address: b.address, city: properName(b.city), zip: b.zip,
               location: where.location, territory: where.territory, package: q.name, packageId: q.package, serviceId: q.serviceId, lineItems: q.lineItems, addOns: office.addOns,
               property: office.property, price: q.totalCents / 100, servicePriceCents: q.priceCents, travelFeeCents: q.travelFeeCents,
               route: b.route, status: "confirmed", scheduledAt: slot.scheduledAt, durationMins: q.durationMins, technicianId: slot.technicianId,
