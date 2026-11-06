@@ -3,6 +3,7 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "regions": ["pdx1"],
   "functions": {
     "api/bob.mjs": { "maxDuration": 60 }
   },
