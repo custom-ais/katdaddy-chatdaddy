@@ -461,79 +461,31 @@ test("package, 2-story upstairs home, gas dryer and fogging flow through to the 
   assert.equal(h.jobber.jobs[0].end - h.jobber.jobs[0].start, 120 * 60_000, "the Jobber visit includes the difficulty time");
 });
 
-test("emergency clog relief is offered inside normal notice, but books only after a named approval", async (t) => {
-  const h = await harness(t, { config: { emergencyLeadHours: 1, leadHours: 24, approver: { name: "Seth", phone: "6235559999", email: "" } } });
-  const token = await h.prepare("emergency");
-  const [first] = await h.slots(token);
-  assert.ok(Date.parse(first.scheduledAt) - Date.parse("2026-09-21T20:00:00Z") < 24 * 3_600_000, "offered inside the normal 24h notice");
-  assert.equal(first.approval, true);
-  const held = await h.hold(token, first.scheduledAt);
-  assert.equal(held.data.hold.approvalRequired, true);
-  const direct = await h.confirm(token, held.data.hold);
-  assert.equal(direct.status, 409);
-  assert.equal(direct.data.code, "APPROVAL_REQUIRED");
-  const asked = await h.call("/api/approvals", { method: "POST", token, body: { holdId: held.data.hold.id, approved: true } });
-  assert.equal(asked.status, 201, JSON.stringify(asked.data));
-  assert.equal(asked.data.approval.status, "pending");
-  assert.equal(asked.data.approval.approverName, "Seth");
-  const text = h.twilio.calls.find((c) => c[0] === "sms");
-  assert.match(text[2], /BOB approval needed/);
-  assert.equal(await h.count("appointments"), 0, "nothing is booked while waiting");
-  const cookie = await h.login();
-  const nameless = await h.call(`/api/admin/approvals/${asked.data.approval.id}`, { method: "POST", cookie, body: { decision: "approve", approverName: "" } });
-  assert.equal(nameless.status, 400, "the approver must be named");
-  const ok = await h.call(`/api/admin/approvals/${asked.data.approval.id}`, { method: "POST", cookie, body: { decision: "approve", approverName: "Seth" } });
-  assert.equal(ok.status, 200, JSON.stringify(ok.data));
-  assert.equal(ok.data.result.status, "booked");
-  const [a] = await h.store.appointments();
-  assert.equal(a.approval.by, "Seth");
-  assert.equal(a.status, "confirmed");
-  const status = await h.call("/api/approvals/current", { token });
-  assert.equal(status.data.approval.status, "booked");
-  assert.equal(status.data.receipt.id, a.id);
-  assert.equal(h.jobber.jobs.length, 1);
-});
 
-test("after a smoke or fire alert, a customer who says everyone is safe can still book, and the team sees it was a fire", async (t) => {
-  const h = await harness(t, { config: { emergencyLeadHours: 1, leadHours: 24, approver: { name: "Seth", phone: "6235559999", email: "" } } });
+test("after a smoke or fire alert, a customer who says everyone is safe gets the office's number, and a cleaning booked afterwards shows it was a fire", async (t) => {
+  const h = await harness(t);
   const token = await h.fresh();
-  await h.chat(token, "Emergency Clog / Overheating");
+  await h.chat(token, "Emergency");
   const alert = await h.chat(token, "it caught fire and it's smoking now");
   assert.equal(alert.action, "emergency");
   assert.deepEqual(alert.options, ["Everyone is safe & fire/smoke is handled"]);
   assert.equal((await h.call("/api/contact", { method: "POST", token, body: contact })).status, 409, "no booking during the alert");
+  const safe = await h.chat(token, "Everyone is safe & fire/smoke is handled");
+  assert.equal(safe.action, "call_office");
+  assert.match(safe.reply, /call our office at \*\*\(623\) 294-1826\*\*/);
+  assert.equal((await h.call("/api/contact", { method: "POST", token, body: contact })).status, 409, "emergencies aren't booked online");
   let r;
-  for (const m of ["Everyone is safe & fire/smoke is handled", "Burning smell", "85326", "1-Story Home", "Electric Dryer", "Emergency Same-Day · $349", "Accept"]) r = await h.chat(token, m);
+  for (const m of ["Book a Cleaning", ...FLOWS.cleaning(contact.zip).slice(1)]) r = await h.chat(token, m);
   assert.equal(r.action, "contact", r.reply);
   await h.contactAndVerify(token);
   const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
   assert.equal(held.status, 201, JSON.stringify(held.data));
-  const asked = await h.call("/api/approvals", { method: "POST", token, body: { holdId: held.data.hold.id, approved: true } });
-  assert.equal(asked.status, 201, JSON.stringify(asked.data));
-  const a = await h.store.approval(asked.data.approval.id);
-  assert.ok(a.concerns.some((c) => /reported smoke or fire/.test(c)), "the approver sees it was a fire");
+  const booked = await h.confirm(token, held.data.hold);
+  assert.ok([200, 201].includes(booked.status), JSON.stringify(booked.data));
+  const [appt] = await h.store.appointments();
+  assert.ok(appt.concerns.some((c) => /reported smoke or fire/.test(c)), "the team sees it was a fire");
 });
 
-test("a declined or expired approval books nothing and frees the time", async (t) => {
-  const h = await harness(t, { config: { emergencyLeadHours: 1 } });
-  const ask = async () => {
-    const token = await h.prepare("emergency");
-    const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
-    const r = await h.call("/api/approvals", { method: "POST", token, body: { holdId: held.data.hold.id, approved: true } });
-    return { token, id: r.data.approval.id };
-  };
-  const cookie = await h.login();
-  const first = await ask();
-  await h.call(`/api/admin/approvals/${first.id}`, { method: "POST", cookie, body: { decision: "decline", approverName: "Seth" } });
-  assert.equal((await h.call("/api/approvals/current", { token: first.token })).data.approval.status, "declined");
-  assert.equal(await h.count("holds"), 0);
-  const second = await ask();
-  h.advance(31 * 60_000);
-  assert.equal((await h.call("/api/approvals/current", { token: second.token })).data.approval.status, "expired");
-  const late = await h.call(`/api/admin/approvals/${second.id}`, { method: "POST", cookie, body: { decision: "approve", approverName: "Seth" } });
-  assert.equal(late.status, 409);
-  assert.equal(await h.count("appointments"), 0);
-});
 
 // ---- geo rules -------------------------------------------------------------------
 
@@ -893,44 +845,4 @@ test("stale approval for an ordinary slot cannot execute even when its old appro
   assert.equal(await h.count("holds"), 0);
 });
 
-test("a customer can cancel a waiting same-day request and book a regular package instead", async (t) => {
-  const h = await harness(t, { config: { emergencyLeadHours: 1, leadHours: 24, approver: { name: "Seth", phone: "6235559999", email: "" } } });
-  const token = await h.prepare("emergency");
-  const [first] = await h.slots(token);
-  const held = await h.hold(token, first.scheduledAt);
-  const asked = await h.call("/api/approvals", { method: "POST", token, body: { holdId: held.data.hold.id, approved: true } });
-  assert.equal(asked.status, 201, JSON.stringify(asked.data));
-  assert.equal((await h.call("/api/chat", { method: "POST", token, body: { message: "hello" } })).status, 409, "the chat waits while the request is open");
-  const cancelled = await h.call("/api/approvals/current/cancel", { method: "POST", token, body: {} });
-  assert.equal(cancelled.status, 200, JSON.stringify(cancelled.data));
-  assert.equal(cancelled.data.session.stage, "offer");
-  assert.equal(cancelled.data.session.package, null);
-  assert.match(cancelled.data.reply, /^No problem, that package is canceled\./);
-  assert.deepEqual(cancelled.data.card.picks.map((p) => p.family), ["ultimate", "premium"], "back to the emergency choices");
-  const [saved] = await h.store.approvals();
-  assert.equal(saved.status, "cancelled");
-  assert.equal(await h.store.countActiveHolds(), 0, "the held time is freed");
-  const cookie = await h.login();
-  const late = await h.call(`/api/admin/approvals/${asked.data.approval.id}`, { method: "POST", cookie, body: { decision: "approve", approverName: "Seth" } });
-  assert.equal(late.status, 409, "a cancelled request can't be approved");
-  assert.match(late.data.error, /cancelled/);
-  assert.equal(await h.count("appointments"), 0);
-  let r;
-  for (const m of ["Premium 1-2-3 · $179", "Standard Floor Setup", "Accept"]) r = await h.chat(token, m);
-  assert.equal(r.session.package, "premium");
-  assert.equal(r.action, "contact", r.reply);
-});
 
-test("when the team declines same-day, the customer is offered the regular packages", async (t) => {
-  const h = await harness(t, { config: { emergencyLeadHours: 1, leadHours: 24, approver: { name: "Seth", phone: "6235559999", email: "" } } });
-  const token = await h.prepare("emergency");
-  const held = await h.hold(token, (await h.slots(token))[0].scheduledAt);
-  const asked = await h.call("/api/approvals", { method: "POST", token, body: { holdId: held.data.hold.id, approved: true } });
-  const cookie = await h.login();
-  assert.equal((await h.call(`/api/admin/approvals/${asked.data.approval.id}`, { method: "POST", cookie, body: { decision: "decline", approverName: "Seth" } })).status, 200);
-  const r = await h.call("/api/approvals/current/cancel", { method: "POST", token, body: {} });
-  assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.match(r.data.reply, /^We couldn't get a technician to you today\./);
-  assert.deepEqual(r.data.card.picks.map((p) => p.family), ["premium", "ultimate"]);
-  assert.equal((await h.store.approvals())[0].status, "declined", "the office's decision stays on record");
-});

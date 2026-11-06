@@ -88,6 +88,17 @@ function BobFace({ size }: { size: number }) {
   );
 }
 
+/** Emergencies are handled by phone: a big tap-to-call button for the office (Settings → phone). */
+function CallOffice({ phone }: { phone?: string }) {
+  const given = String(phone || '').replace(/\D/g, '').slice(-10);
+  const digits = given.length === 10 ? given : '6232941826';
+  return (
+    <a href={`tel:+1${digits}`} className="flex items-center justify-center gap-2.5 w-full rounded-2xl bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-extrabold py-4 text-base shadow-lg shadow-orange-500/30">
+      <Phone size={20} />Call the office · ({digits.slice(0, 3)}) {digits.slice(3, 6)}-{digits.slice(6)}
+    </a>
+  );
+}
+
 function Rich({ text }: { text: string }) {
   return (
     <>
@@ -338,12 +349,12 @@ function iconFor(label: string) {
 }
 
 /** The website nudge's topics, each starting the matching menu path. */
-const NUDGE_STARTS: Record<string, string> = { cleaning: 'Book a Cleaning', repair: 'Repairs, Reroutes & Upgrades', emergency: 'Emergency Clog / Overheating', pest: 'Pest / Nest Removal' };
+const NUDGE_STARTS: Record<string, string> = { cleaning: 'Book a Cleaning', repair: 'Repairs, Reroutes & Upgrades', emergency: 'Emergency', pest: 'Pest / Nest Removal' };
 
 const WELCOME_CARDS: [string, React.ReactElement][] = [
   ['Book a Cleaning', <Wind strokeWidth={2} size={26} />],
   ['Repairs, Reroutes & Upgrades', <Wrench strokeWidth={2} size={26} />],
-  ['Emergency Clog / Overheating', <Flame strokeWidth={2} size={26} />],
+  ['Emergency', <Flame strokeWidth={2} size={26} />],
   ['Pest / Nest Removal', <Bird strokeWidth={2} size={26} />],
   ['Something Else', <MessageCircle strokeWidth={2} size={26} />],
 ];
@@ -1097,6 +1108,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       else if (s.stage === 'approval' && s.approvalId) {
         try { const a = await api('/api/approvals/current', { token: r.token }); if (a.receipt) { setReceipt(a.receipt); setPending(Boolean(a.pending)); } else if (a.approval.status === 'pending') { setApproval(a.approval); setAction('approval'); } else if (a.approval.kind === 'after_hours') { const back = await api('/api/approvals/current/cancel', { method: 'POST', token: r.token, body: {} }); setSession(back.session); setMessages((m) => [...m, { role: 'model', text: back.reply }]); setAction('slots'); } else setAction('request'); } catch {}
       } else if (s.stage === 'slots') setAction('slots');
+      else if (s.stage === 'call_office') setAction('call_office');
       else if (s.stage === 'verify') {
         setAction('verify');
         if (r.config?.verificationChannels?.includes('email')) {
@@ -1195,6 +1207,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       if (r.action === 'contact') { setAction('contact'); startContact(r.session); }
       else if (r.action === 'request') setAction('request');
       else if (r.action === 'emergency') setAction('emergency');
+      else if (r.action === 'call_office') setAction('call_office');
       else if (!['contact', 'verify', 'slots'].includes(r.session.stage)) setAction('');
     } catch (err) {
       undo.current.pop(); setUndoCount(undo.current.length); // nothing changed on the server
@@ -1399,7 +1412,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   };
   const toggle = (label: string) => setPicked((p) => (p.includes(label) ? p.filter((x) => x !== label) : [...p, label]));
   const last = messages[messages.length - 1];
-  const canGoBack = undoCount > 0 && ready && !receipt && !requestId && !['verify', 'slots', 'approval', 'emergency'].includes(action);
+  const canGoBack = undoCount > 0 && ready && !receipt && !requestId && !['verify', 'slots', 'approval', 'emergency', 'call_office'].includes(action);
   const inputHints = contactStep ? INPUT_FOR[contactStep] : session?.pending === 'serviceAddress' ? ADDRESS_INPUT : session?.pending === 'zip' ? ZIP_INPUT : undefined;
   const showOptions = !busy && !receipt && !requestId && options.length > 0 && (last?.role === 'model' || !!contactStep);
   const started = messages.length > 0;
@@ -1542,6 +1555,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
               {!receipt && !requestId && action === 'slots' && session?.afterHours && <AfterHoursSend token={token} onSent={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRegular={() => void send('Keep regular times')} />}
               {!receipt && !requestId && action === 'slots' && !session?.afterHours && <SlotPicker token={token} session={session} config={config} onSooner={() => void send('Do you have anything sooner?')} onBooked={(r, p) => { setReceipt(r); setPending(p); setAction(''); setOptions([]); setAutoClose(!p && !preview); }} onApproval={(a) => { setApproval(a); setAction('approval'); setOptions([]); }} onRequest={() => setAction('request')} onEdit={editDetails} />}
               {!receipt && !requestId && action === 'approval' && approval && <ApprovalWait token={token} initial={approval} onBooked={onApprovalBooked} onEnded={onApprovalEnded} onCancelled={onApprovalCancelled} />}
+              {!receipt && !requestId && action === 'call_office' && <CallOffice phone={config?.phone} />}
               {!receipt && !requestId && action === 'request' && <RequestForm token={token} session={session} onDone={(id) => { setRequestId(id); setAction(''); setOptions([]); }} />}
               {requestId && (
                 <Card>

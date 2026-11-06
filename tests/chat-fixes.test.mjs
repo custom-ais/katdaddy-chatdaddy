@@ -217,35 +217,12 @@ test("a setup fee comes up only when the customer has that setup", async () => {
   assert.match(system, /Bring up a gas, pedestal or stacked fee only when the customer has said they have that setup/);
 });
 
-test("emergency path: a regular package can be picked, asks only the dryer setup, and can be canceled", async () => {
-  const { EMERGENCY_PENDING } = await import("../shared/conversation.mjs");
-  const offer = run(["My dryer vent is completely clogged, I need help asap", "No, it's turned off now", "Possible nest or blockage", "85326", "1-Story Home", "Electric Dryer"]);
-  assert.deepEqual(offer.card.picks.map((p) => p.family), ["ultimate", "premium"]);
-  let r = chat("Premium 1-2-3 · $179", offer.session);
-  assert.equal(r.session.pending, "mount", "the setup decides the price");
-  r = chat("Stacked Washer/Dryer", r.session);
-  assert.match(r.reply, /^Got it, a stacked setup\. The \$45 stacked setup fee covers/, "the fee is said when it applies");
-  assert.equal(r.session.stage, "details");
-  assert.deepEqual(r.options, ["Accept", "Cancel package", "Ask a question"]);
-  r = chat("Cancel package", r.session);
-  assert.equal(r.session.package, null);
-  assert.equal(r.session.stage, "offer");
-  assert.match(r.reply, /^No problem, that package is canceled\.\n\n/);
-  assert.deepEqual(r.card.picks.map((p) => p.family), ["ultimate", "premium"], "back to the emergency choices");
-  r = chat("Emergency Same-Day · $349", r.session);
-  assert.ok(r.reply.includes(EMERGENCY_PENDING), "the summary says same-day depends on availability");
+test("a picked package can be canceled back to the offer", () => {
   const cleaning = run(["Dryer Vent Cleaning", "85326", "Have Dryer", "No", "1-Story Home", "Electric Dryer", "Standard Floor Setup", "Dries in one normal cycle", "No signs", "Premium 1-2-3 · $179"]);
   assert.deepEqual(cleaning.options, ["Accept", "Compare Packages", "Cancel package", "Ask a question"]);
   assert.equal(chat("Cancel package", cleaning.session).session.stage, "offer");
 });
 
-test("after same-day falls through, only the regular packages are offered", () => {
-  const s = run(["My dryer vent is completely clogged, I need help asap", "No, it's turned off now", "Possible nest or blockage", "85326", "1-Story Home", "Electric Dryer", "Emergency Same-Day · $349"]).session;
-  const r = turn("Back to packages", { ...s, sameDayUnavailable: true }, config, INITIAL_FAQS);
-  assert.match(r.reply, /^We couldn't get a technician to you today\./);
-  assert.deepEqual(r.card.picks.map((p) => p.family), ["premium", "ultimate"]);
-  assert.ok(r.options.includes("Request a callback"));
-});
 
 test("an answer the AI already recorded moves on instead of looping on 'Sorry, I didn't catch that'", async () => {
   const { chatTurn } = await import("../server/chat.mjs");

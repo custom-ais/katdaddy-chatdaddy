@@ -122,43 +122,7 @@ for (const rest of [false, true]) {
   });
 }
 
-test('owner-only scope keeps emergency approver email while suppressing approver SMS', async t => {
-  const sendgrid = { configured: true, calls: [], async sendEmail(to, message) {
-    this.calls.push({ to, ...message }); return { status: 'accepted', messageId: 'synthetic-email' };
-  } };
-  const h = await harness(t, { sendgrid, env: { ...scopedEnv, BOOKING_EMAIL_PROVIDER: 'sendgrid' },
-    config: { emergencyLeadHours: 1, approver: { name: 'Synthetic Office', phone: '6235550199', email: 'office@example.test' } } });
-  const { token, hold } = await heldBooking(h, 'emergency');
-  assert.equal(hold.approvalRequired, true);
-  const requested = await h.call('/api/approvals', { method: 'POST', token, body: { holdId: hold.id, approved: true } });
-  assert.equal(requested.status, 201, JSON.stringify(requested.data));
-  const approval = await h.store.approval(requested.data.approval.id);
-  assert.equal(approval.notified.sms, 'skipped');
-  assert.equal(approval.notified.smsReason, 'sms_scope_owner_alerts_only');
-  assert.equal(approval.notified.email, 'accepted');
-  assert.equal(sendgrid.calls.length, 1);
-  assert.equal(sendgrid.calls[0].to, 'office@example.test');
-  assert.match(sendgrid.calls[0].subject + sendgrid.calls[0].text, /approval/i);
-  assert.deepEqual(smsCalls(h), []);
-  assert.equal(await h.count('appointments'), 0);
-  assert.deepEqual(h.lc.calls, []);
-});
 
-test('owner-only scope prevents early staff availability SMS without interrupting emergency triage', async t => {
-  const h = await harness(t, { env: scopedEnv, config: { approver: { name: 'Synthetic Office', phone: '6235550199', email: '' } } });
-  const token = await h.fresh();
-  const first = await h.chat(token, 'Emergency Clog / Overheating');
-  assert.equal(first.session.pending, 'safetyCheck');
-  assert.doesNotMatch(first.reply, /availability request|could not be sent|contact the office/, "the customer isn't told about an internal text that couldn't go out");
-  assert.match(first.reply, /^🚨 Got it/, "straight to the emergency safety question");
-  await h.chat(token, 'Can a tech come today at 5pm?');
-  await h.chat(token, 'Can a tech come today at 5pm?');
-  const requests = await h.store.requests();
-  assert.ok(requests.length);
-  assert.ok(requests.every(request => request.notification.status !== 'accepted'));
-  assert.deepEqual(smsCalls(h), []);
-  assert.equal(h.jobber.jobs.length, 0);
-});
 
 test('owner-only scope leaves SMS Verify and code replay protection operational', async t => {
   const h = await harness(t, { env: scopedEnv });
@@ -229,21 +193,6 @@ for (const failure of ['timeout', 'job']) {
     assert.deepEqual(await errorClaims(h), []);
   });
 
-  test(`emergency approval ${failure} does not generate the customer-chat owner error alert`, async t => {
-    const h = await harness(t, { env: scopedEnv, config: { ...ownerConfig, emergencyLeadHours: 1 } });
-    await grant(h);
-    const { token, hold } = await heldBooking(h, 'emergency');
-    const requested = await h.call('/api/approvals', { method: 'POST', token, body: { holdId: hold.id, approved: true } });
-    assert.equal(requested.status, 201, JSON.stringify(requested.data));
-    const cookie = await h.login();
-    h.jobber.failNext = failure;
-    const result = await h.call(`/api/admin/approvals/${requested.data.approval.id}`, { method: 'POST', cookie,
-      body: { decision: 'approve', approverName: 'Synthetic Office' } });
-    assert.equal(result.status, 200, JSON.stringify(result.data));
-    assert.equal(result.data.result.status, failure === 'timeout' ? 'action_needed' : 'failed');
-    assert.deepEqual(smsCalls(h), []);
-    assert.deepEqual(await errorClaims(h), []);
-  });
 }
 
 test('legacy shared-password HTTP session cannot enable or disable owner error alerts', async t => {

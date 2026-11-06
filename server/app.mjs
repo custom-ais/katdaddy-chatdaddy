@@ -27,7 +27,6 @@ import { waitForRequestLock } from "./request-lock.mjs";
 import { approvalPolicy } from "./approval-policy.mjs";
 import { isIP } from "node:net";
 import { distanceMiles, validPoint } from "../shared/coverage.mjs";
-import { captureAvailabilityRequest } from "./availability-request.mjs";
 import { randomBytes, createHash, scryptSync, timingSafeEqual, createHmac } from "node:crypto";
 import {
   DEFAULT_CONFIG, INITIAL_FAQS, bookingQuote, travelFeeFor, validateContact,
@@ -972,12 +971,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         const place = data.pending === "serviceAddress" || data.stage === "out_of_area" ? await lookupPlace(body.message, c) : null;
         await record(req, "conversation.message", { role: "user", text: /^\s*\d{4,8}\s*$/.test(body.message) ? "[verification code omitted]" : body.message, stage: data.stage });
         const result = await chatTurn({ message: body.message, session: data, config: c, faqs: await store.get("faqs"), assistant: aiReady(c) ? selectedAssistant(c) : null, place });
-        const note = await captureAvailabilityRequest({ store, sendStaffSms: useTwilioSms && !ownerAlertsOnly ? async ({ phone, text }) => sendSms(null, phone, text) : null, config: c, data: result.session, message: body.message, session: token, now: clock(), origin: publicOrigin, log: (kind, details, level) => record(req, kind, details, level) });
-        if (note) {
-          result.reply = `${note}\n\n${result.reply}`;
-          const last = result.session.history.at(-1);
-          if (last?.role === "assistant") last.text = result.reply;
-        }
+        // Same-day emergency availability checks are gone: emergencies go to the office by phone.
         await store.saveSession(token, result.session);
         await record(req, "conversation.message", { role: "assistant", text: result.reply, stage: result.session.stage, via: result.via, availabilityRequestId: result.session.availabilityRequestId || "" });
         // Questions BOB couldn't answer from approved knowledge, and AI answers the safety filter blocked,

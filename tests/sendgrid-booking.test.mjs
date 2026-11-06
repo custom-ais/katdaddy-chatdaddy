@@ -110,23 +110,6 @@ test('uncertain Jobber creates no final email; verified office resolution sends 
   assert.equal(sendgrid.calls[0].to, who.email);
 });
 
-test('emergency same-day approval emails office without a phone; customer waits for approval', async t => {
-  const { h, sendgrid } = await setup(t, { config: { emergencyLeadHours: 1, approver: { name: 'Office', phone: '', email: 'office@example.test' } } });
-  const { token, hold } = await heldBooking(h, 'emergency');
-  assert.equal(hold.approvalRequired, true);
-  const requested = await h.call('/api/approvals', { method: 'POST', token, body: { holdId: hold.id, approved: true } });
-  assert.equal(requested.status, 201, JSON.stringify(requested.data));
-  assert.equal(sendgrid.calls.length, 1);
-  assert.equal(sendgrid.calls[0].to, 'office@example.test');
-  assert.match(sendgrid.calls[0].subject + sendgrid.calls[0].text, /approval/i);
-  assert.equal(await h.count('appointments'), 0);
-  const cookie = await h.login();
-  const ok = await h.call(`/api/admin/approvals/${requested.data.approval.id}`, { method: 'POST', cookie, body: { decision: 'approve', approverName: 'Office' } });
-  assert.equal(ok.status, 200, JSON.stringify(ok.data));
-  assert.equal(sendgrid.calls.length, 2);
-  assert.equal(sendgrid.calls[1].to, who.email);
-  assert.deepEqual(h.lc.calls, []);
-});
 
 test('regular bookings send no approval email even with office email configured', async t => {
   const { h, sendgrid } = await setup(t, { config: { approver: { name: 'Office', phone: '', email: 'office@example.test' } } });

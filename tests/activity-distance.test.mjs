@@ -67,49 +67,38 @@ test("a Google refusal on drive distance says why and what to change, and shows 
   assert.match(noKey.message, /GOOGLE_MAPS_API_KEY isn't set/);
 });
 
-test("availability text is requested before triage and deduplicated, even when customer texts are off", async (t) => {
+test("an emergency never sends a same-day availability text or creates a request, before or after 2 p.m.", async (t) => {
   const h = await harness(t, { config: { smsConfirmations: false, approver: { name: "Ryan", phone: "6235550100", email: "" } } });
-  h.advance(40 * 86_400_000); // October 31, 1 PM Arizona
-  const token = await h.fresh();
-  const first = await h.chat(token, "Emergency Clog / Overheating");
-  assert.equal(first.session.pending, "safetyCheck");
-  assert.ok(h.twilio.calls.some((c) => c[0] === "sms" && /availability check/.test(c[2])));
-  await h.chat(token, "Can a tech come today at 5pm?");
-  const sent = h.twilio.calls.filter((c) => c[0] === "sms").length;
-  await h.chat(token, "Can a tech come today at 5pm?");
-  assert.equal(h.twilio.calls.filter((c) => c[0] === "sms").length, sent);
-  const requests = await h.store.requests();
-  const requested = requests.find((r) => r.requestedVisit?.time === "17:00");
-  assert.equal(requested.requestedVisit.date, "2026-10-31");
-  assert.equal(requested.notification.status, "accepted");
-  assert.equal(h.jobber.jobs.length, 0, "availability inquiries do not book an appointment");
+  const tokens = [];
+  for (const advance of [40 * 86_400_000, 3_600_000]) { // October 31, 1 PM Arizona; then 2 PM
+    h.advance(advance);
+    const token = await h.fresh();
+    tokens.push(token);
+    const first = await h.chat(token, "Emergency");
+    assert.equal(first.session.pending, "safeNow", "safety first");
+    assert.doesNotMatch(first.reply, /cutoff|same-day|on-call/i);
+    await h.chat(token, "Can a tech come today at 5pm?");
+  }
+  assert.ok(!h.twilio.calls.some((c) => c[0] === "sms"), "no staff availability texts");
+  assert.deepEqual(await h.store.requests(), [], "no availability requests");
+  assert.equal(h.jobber.jobs.length, 0);
   const cookie = await h.login();
   assert.equal((await h.call("/api/admin/activity")).status, 401);
   const log = await h.call("/api/admin/activity", { cookie });
-  assert.ok(log.data.items.some((e) => e.kind === "notification.accepted"));
-  assert.ok(!JSON.stringify(log.data).includes(token), "raw conversation credentials are not logged");
+  assert.ok(log.data.items.some((e) => e.kind === "conversation.message"));
+  assert.ok(tokens.every((tk) => !JSON.stringify(log.data).includes(tk)), "raw conversation credentials are not logged");
 });
 
-test("after the cutoff the safety flow continues, but no same-day emergency text is sent", async (t) => {
-  const h = await harness(t, { config: { approver: { name: "Ryan", phone: "6235550100", email: "" } } });
-  h.advance(3_600_000); // 2 PM Arizona, exactly
-  const r = await h.chat(await h.fresh(), "Emergency Clog / Overheating");
-  assert.match(r.reply, /past our 2 p\.m\. cutoff for same-day visits, but we do have an on-call technician/);
-  assert.equal(r.session.pending, "safetyCheck");
-  assert.ok(!h.twilio.calls.some((c) => c[0] === "sms"));
-});
 
-test("failed staff messages are saved and activity survives session cleanup and store reconstruction", async (t) => {
-  const h = await harness(t, { config: { approver: { name: "Ryan", phone: "6235550100", email: "" } } });
-  h.twilio.failSms = true;
+test("activity survives session cleanup and store reconstruction", async (t) => {
+  const h = await harness(t);
   const token = await h.fresh();
-  const r = await h.chat(token, "Emergency Clog / Overheating");
-  assert.doesNotMatch(r.reply, /could not be sent|contact the office/, "the customer isn't told about an internal text that failed");
-  assert.equal((await h.store.requests())[0].notification.status, "failed");
+  await h.chat(token, "Emergency");
   h.advance(2 * 86_400_000); await h.store.cleanup();
   const reopened = createStore(h.db, { clock: () => baseTime + 2 * 86_400_000 });
   const events = await reopened.activity({ sessionId: createHash("sha256").update(token).digest("hex").slice(0, 16) });
-  assert.ok(events.items.some((e) => e.kind === "notification.failed" && /sms down/.test(e.details.error)));
+  assert.ok(events.items.some((e) => e.kind === "conversation.message" && e.details.text === "Emergency"));
+  assert.ok(!JSON.stringify(events).includes(token), "raw conversation credentials are not logged");
   assert.ok(!JSON.stringify(await h.store.recentEvents()).includes("activity."));
   assert.deepEqual(safeDetails({ password: "hidden", accessToken: "hidden", verificationCode: "123456", messageId: "safe" }), { messageId: "safe" });
 });

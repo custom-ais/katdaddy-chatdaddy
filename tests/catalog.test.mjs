@@ -70,20 +70,20 @@ test("birds or a nest offer Nest Removal and Full System Restoration", () => {
   assert.equal(picked.session.package, "restoration");
 });
 
-test("an urgent clog leads with Ultimate, offers Premium, and offers the on-call tech for $199 more", () => {
-  const r = say(["My dryer vent is completely clogged, I need help asap", "No, it's turned off now", "Possible nest or blockage", "85326", "1-Story Home", "Electric Dryer"]);
-  assert.deepEqual(r.options, ["Ultimate Protection · $299", "Premium 1-2-3 · $179", "Check after-hours availability", "Ask a question"]);
-  assert.match(r.reply, /I recommend \*\*Ultimate Protection\*\*, our most comprehensive package/);
-  assert.match(r.reply, /\$50 off that removal/);
-  assert.match(r.reply, /on-call technician who may be available after hours\. The after-hours service premium is \$199 in addition to the regular charges\. Would you like me to check our after-hours availability\?/);
+test("an urgent clog goes to the safety check, then the office by phone; a regular cleaning stays one tap away", () => {
+  const r = say(["My dryer vent is completely clogged, I need help asap", "Yes, everyone is safe", "No, it's turned off now"]);
+  assert.equal(r.action, "call_office");
+  assert.deepEqual(r.options, ["Book a Cleaning"]);
+  assert.match(r.reply, /Please call our office at \*\*\(623\) 294-1826\*\*/);
+  assert.doesNotMatch(r.reply, /after-hours|on-call|same-day|\$199|\$349/i, "no same-day or on-call offer");
   const regular = turn("Schedule regular cleaning", r.session, config, INITIAL_FAQS);
   assert.equal(regular.session.intent, "cleaning");
-  assert.equal(regular.session.pending, "recentService", "answers already given are kept (\"my dryer\" means one is installed)");
+  assert.equal(regular.session.pending, "serviceAddress");
 });
 
-test("More services lists the Safety Inspection, Express, Post-Service, Nest, Restoration and Emergency", () => {
+test("More services lists the Safety Inspection, Express, Post-Service, Nest and Restoration (no same-day emergency)", () => {
   const r = say(["Dryer Vent Cleaning", "More services"]);
-  assert.deepEqual(r.options, ["Safety Inspection · $119+", "Express · $149+", "Post-Service · $159+", "Nest Removal + Cleaning · $389", "Full System Restoration · $599", "Emergency Same-Day · $349", "Back to packages"]);
+  assert.deepEqual(r.options, ["Safety Inspection · $119+", "Express · $149+", "Post-Service · $159+", "Nest Removal + Cleaning · $389", "Full System Restoration · $599", "Back to packages"]);
 });
 
 test("unreviewed prices are not shown in the package menu", () => {
