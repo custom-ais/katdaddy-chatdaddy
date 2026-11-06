@@ -998,7 +998,7 @@ const AUTO_CLOSE_SECONDS = 60;
 /** Where the standalone chat page goes back to (and returns to after a booking). */
 const SITE_URL = 'https://dryerventsquadaz.com';
 
-function Receipt({ receipt, pending, onRestart, business, autoClose, closeLabel, onAutoClose, onStay }: { receipt: any; pending: boolean; onRestart: () => void; business?: { businessName?: string; phone?: string; email?: string }; autoClose?: boolean; closeLabel?: string; onAutoClose?: () => void; onStay?: () => void }) {
+function Receipt({ receipt, pending, business, autoClose, closeLabel, onAutoClose, onStay }: { receipt: any; pending: boolean; business?: { businessName?: string; phone?: string; email?: string }; autoClose?: boolean; closeLabel?: string; onAutoClose?: () => void; onStay?: () => void }) {
   const w = windowParts(receipt.scheduledAt);
   const [saving, setSaving] = useState(false);
   // After a confirmed booking the chat closes itself shortly; it pauses while the card is saved.
@@ -1054,7 +1054,6 @@ function Receipt({ receipt, pending, onRestart, business, autoClose, closeLabel,
       <p className="text-xs text-slate-500">{receipt.notification}</p>
       <div className="flex flex-wrap gap-2 justify-center">
         <button className="px-4 py-2.5 bg-white border border-slate-200 text-slate-700 font-extrabold text-sm rounded-xl flex items-center gap-2 disabled:opacity-60" onClick={() => void save()} disabled={saving}>{saving ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}Save confirmation</button>
-        <button className="px-4 py-2.5 text-slate-500 font-extrabold text-sm rounded-xl" onClick={onRestart}>Start over</button>
       </div>
       {autoClose && !pending && (
         <div className="rounded-2xl bg-white/80 border border-emerald-200 px-4 py-3">
@@ -1591,7 +1590,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
                   <button className="mt-4 px-4 py-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl font-extrabold text-sm text-slate-700" onClick={restart}>Start a new conversation</button>
                 </Card>
               )}
-              {receipt && <Receipt receipt={receipt} pending={pending} onRestart={restart} business={config} autoClose={autoClose} closeLabel={embedded ? 'This chat will close' : 'Returning to dryerventsquadaz.com'} onStay={() => setAutoClose(false)} onAutoClose={() => { setAutoClose(false); if (embedded) changeMinimized(true); else window.location.assign(SITE_URL); }} />}
+              {receipt && <Receipt receipt={receipt} pending={pending} business={config} autoClose={autoClose} closeLabel={embedded ? 'This chat will close' : 'Returning to dryerventsquadaz.com'} onStay={() => setAutoClose(false)} onAutoClose={() => { setAutoClose(false); if (embedded) changeMinimized(true); else window.location.assign(SITE_URL); }} />}
             </div>
           </>
         )}
