@@ -155,7 +155,7 @@ export const FACT_VALUES = {
   exit: ["Roof", "Wall", "Not sure"],
   animals: ["Yes", "No", "Not sure"],
 };
-export const SYMPTOMS = ["normal", "two", "three", "overheat", "error"];
+export const SYMPTOMS = ["normal", "two", "three", "overheat", "error", "not_working"];
 
 const normalize = (t) => String(t || "").toLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, " ").trim();
 
@@ -221,19 +221,64 @@ const PICKS = [
 
 // Heat building up in the dryer: overheating, shutting off mid-cycle, running hot, a burning smell.
 // "Not heating" is the opposite (an appliance problem), so a negated "heating up" doesn't count.
-const HEAT = /\b(?:overheat\w*|shutting (?:itself )?off|shuts (?:itself )?off(?: mid)?|shut(?:ting|s)? down mid|hot to (?:the )?touch|(?<!not |n't |no )heating up|gets? (?:really |very |too |super |way too )?hot|getting (?:really |very |too |super )?hot|running hot|runs hot|too hot|burning smell|smell(?:s|ing)? (?:like )?(?:something(?: is)? |it'?s |it is )?burn(?:ing|t)|smells? hot|hot smell)\b/;
+const HEAT_SOURCE_PATTERNS = {
+  heat: /\b(?:overheat\w*|hot to (?:the )?touch|(?<!not |n't |no )heating up|gets? (?:really |very |too |super |way too )?hot|getting (?:really |very |too |super )?hot|running hot|runs hot|too hot)\b/,
+  shutoff: /\b(?:shutting (?:itself )?off|shuts (?:itself )?off(?: mid)?|shut(?:ting|s)? down mid)\b/,
+  burning: /\b(?:burning smell|smell(?:s|ing)? (?:like )?(?:something(?: is)? |it'?s |it is )?burn(?:ing|t)|smells? hot|hot smell)\b/,
+};
+const HEAT = new RegExp(Object.values(HEAT_SOURCE_PATTERNS).map((pattern) => pattern.source).join("|"));
+
+// A resolved past problem is distinct from the current performance question's answer.
+const PERFORMANCE_SUBJECT = String.raw`(?:(?:it|my dryer|the dryer)(?:'s| is)? )?`;
+const NORMAL_PERFORMANCE = String.raw`(?:works? normally|working normally|dries normally)`;
+const NORMAL_NOW = new RegExp(String.raw`^(?:now ${PERFORMANCE_SUBJECT}${NORMAL_PERFORMANCE}|${PERFORMANCE_SUBJECT}(?:now ${NORMAL_PERFORMANCE}|${NORMAL_PERFORMANCE} now))\b`);
+const PAST_PERFORMANCE = /\b(?:used to|was|were|previously|last (?:night|week|month|year)|had been)\b/;
+const CURRENT_PROBLEM = /\b(?:still|currently|keeps?|is|are|has|have|shows|overheats|shuts)\b/;
+function currentPerformanceText(text) {
+  // Keep the entire current clause and anything after it, including a new problem.
+  const transitions = [...text.matchAll(/\b(?:but|and) /g)];
+  for (const transition of transitions.reverse()) {
+    const current = text.slice(transition.index + transition[0].length);
+    const earlier = text.slice(0, transition.index);
+    const activeHeatClause = earlier.split(/,|\band\b/).some((clause) => HEAT.test(clause) && !PAST_PERFORMANCE.test(clause));
+    // Normal drying can coexist with an active error or shutoff. Only discard an
+    // explicitly historical description, never a current/still-active problem.
+    if (NORMAL_NOW.test(current) && PAST_PERFORMANCE.test(earlier) && !CURRENT_PROBLEM.test(earlier) && !activeHeatClause) return current;
+  }
+  return text;
+}
+const URGENT_SYMPTOM_PHRASE = String.raw`(?:overheat\w*|shut(?:ting|s)? (?:itself )?off|(?:airflow )?error codes?|airflow error|d80|d90|d95)`;
+const SYMPTOM_NEGATION = String.raw`(?:no longer|no|not|without|isn't|doesn't|don't|never)(?: (?:showing|displaying|having|have|show|display))?(?: any| an?| the)?`;
+// "No error codes and overheating" still reports heat; only an "or" list shares negation.
+const NEGATED_SYMPTOMS = new RegExp(String.raw`\b${SYMPTOM_NEGATION} ${URGENT_SYMPTOM_PHRASE}(?: or ${URGENT_SYMPTOM_PHRASE})*`, "g");
+const NEGATED_BURNING = /\b(?:no|not|without)(?: a| any)? (?:burning smell|hot smell)\b|\b(?:do not|don't|cannot|can't) smell(?: like)? burn(?:ing|t)\b/g;
+const withoutNegatedSymptoms = (text) => currentPerformanceText(text).replace(NEGATED_SYMPTOMS, "").replace(NEGATED_BURNING, "");
+const heatSourcesIn = (text) => Object.entries(HEAT_SOURCE_PATTERNS).filter(([, pattern]) => pattern.test(text)).map(([source]) => source);
+const reportedHeatSources = (session) => {
+  const known = (Array.isArray(session.heatSources) ? session.heatSources : []).filter((source) => source === "unknown" || Object.hasOwn(HEAT_SOURCE_PATTERNS, source));
+  if (known.length) return known;
+  if (session.property.triage?.includes("Overheating or shutting off")) return ["heat", "shutoff"];
+  // Old conversations recorded only a coarse "overheat" fact, without its source.
+  return session.heatSign || session.property.symptoms?.includes("overheat") ? ["unknown"] : [];
+};
+function rememberHeatSources(session, text) {
+  const actual = text.replace(NEGATED_SYMPTOMS, "").replace(NEGATED_BURNING, "");
+  session.heatSources = [...new Set([...reportedHeatSources(session), ...heatSourcesIn(actual)])];
+}
 
 export function detectSafety(text) {
   const t = normalize(text);
   if (/^(?:what|how|can|does|is|do|why)\b/.test(t) && /\b(?:prevent|risk|cause|what if|what should|what do|mean)\b/.test(t) && !/(?:my|our|there is|i smell)/.test(t)) return null;
-  const clauses = t.split(/[.;]|\bbut\b/).filter((c) => !/^\s*(?:there is |there's |i have |we have )?(?:no |not |without |isn't |aren't |don't smell |do not smell )/.test(c));
+  // Remove only the negated symptoms before filtering negative clauses, retaining
+  // a positive problem later in the same clause ("I have no error codes and overheating").
+  const clauses = t.replace(NEGATED_SYMPTOMS, "").split(/[.;]|\bbut\b/).filter((c) => !/^\s*(?:there is |there's |i have |we have )?(?:no |not |without |isn't |aren't |don't smell |do not smell )/.test(c));
   const actual = clauses
     .join(" ")
     .replace(/\b(?:i |we )?(?:do not|don't|cannot|can't) (?:smell|see) (?:any )?(?:gas|smoke|flames)\b/g, "")
     .replace(/\b(?:no|not|without) (?:a |any )?(?:gas (?:smell|odor|odour|leak)|smoke|flames|burning smell|overheating)\b/g, "");
   if (/\b(gas (?:smell|odor|odour|leak)|smell(?:ing)? (?:natural )?gas|smells like (?:natural )?gas|rotten eggs)\b/.test(actual)) return "gas";
   if (/\b(smell(?:ing)? smoke|smoke (?:in|from|around)|full of smoke|smoke (?:coming|is coming)|(?:see|seeing|there is|there's) smoke|smoking|on fire|flames|fire (?:in|coming|behind)|dryer (?:has |is )?smoke)\b/.test(actual)) return "fire";
-  if (HEAT.test(actual)) return "stop";
+  if (HEAT.test(withoutNegatedSymptoms(actual))) return "stop";
   return null;
 }
 
@@ -316,12 +361,16 @@ function parseField(key, t) {
 }
 
 export function parseSymptoms(t) {
+  t = currentPerformanceText(t);
   const out = [];
-  if (/\b(?:one normal cycle|normal cycle|dries (?:fine|normally|in one)|working normal(?:ly)?|no problems?|just moved in|preventa?tive)\b/.test(t) || /(?<!than )\b(?:one|1) (?:normal )?cycle\b/.test(t)) out.push("normal");
+  // Negated current problems must not grant urgent routing to routine maintenance.
+  const actual = withoutNegatedSymptoms(t);
+  if (/\b(?:one normal cycle|normal cycle|dries (?:fine|normally|in one)|(?:works?|working) normal(?:ly)?|no problems?|just moved in|preventa?tive)\b/.test(t) || /(?<!than )\b(?:one|1) (?:normal )?cycle\b/.test(t)) out.push("normal");
   if (/\b(?:about 2 cycles|2 cycles|2\+ cycles|two cycles|more than one(?: cycle| time| load| try)?|takes (?:a )?(?:bit )?longer)\b/.test(t)) out.push("two");
   if (/\b(?:3 or more|three or more|3 cycles|three cycles|3\+|multiple cycles|forever|still damp)\b/.test(t)) out.push("three");
-  if (HEAT.test(t)) out.push("overheat");
-  if (/\b(?:error code|airflow error|d80|d90|d95|check vent)\b/.test(t)) out.push("error");
+  if (HEAT.test(actual)) out.push("overheat");
+  if (/\b(?:error codes?|airflow error|d80|d90|d95|check vent)\b/.test(actual)) out.push("error");
+  if (/\b(?:not working|stopped working|no longer (?:works|working)|does(?:n't| not) work|won't work)\b(?! (?:normally|normal|well|properly))/.test(t) && !/\b(?:not|never|hasn't|haven't) (?:stopped working|not working)\b/.test(t)) out.push("not_working");
   return out;
 }
 
@@ -330,11 +379,48 @@ export function cycleConflict(found) {
   return found.filter((x) => ["normal", "two", "three"].includes(x)).length > 1;
 }
 
+const URGENT_SYMPTOMS = new Set(["not_working", "overheat", "error"]);
+const keepReportedProblems = (previous, next) => [...new Set([...next, ...(Array.isArray(previous) ? previous : []).filter((symptom) => URGENT_SYMPTOMS.has(symptom))])];
+const ERROR_SYMPTOM = /\b(?:error codes?|airflow error|d80|d90|d95|check vent)\b/;
+const STOPPED_WORKING = /\b(?:not working|stopped working|no longer (?:works|working)|does(?:n't| not) work|won't work)\b/;
+// A full affirmative clause is required: "never works normally" is not a recovery.
+const WORKING_NORMALLY = /^(?:(?:correction|actually)[:,]? )?(?:now )?(?:(?:it|my dryer|the dryer)(?:'s| is)? )?(?:now )?(?:works|working) normal(?:ly)?(?: now| again)?[.!]*$/;
+const statesWorkingNormally = (text) => text.split(/[.;,]|\b(?:but|and)\b/).some((clause) => WORKING_NORMALLY.test(clause.trim()));
+const TRIAGE_SYMPTOMS = { "Overheating or shutting off": "overheat", "Showing an error code (D80 / D90 / D95)": "error" };
+
+/** Correct only the problems explicitly denied/resolved, across their intake mirrors. */
+export function correctReportedProblems(text, session) {
+  text = normalize(text);
+  if (QUESTION.test(text) || /\b(?:what if|if i|if we|would it|suppose)\b/.test(text)) return;
+  if (!["evaluating", "offer", "details", "bundle_offer", "contact", "verify", "slots", "approval"].includes(session.stage)) return;
+  const current = currentPerformanceText(text);
+  const positive = new Set(parseSymptoms(text));
+  const denied = [...text.matchAll(NEGATED_SYMPTOMS), ...text.matchAll(NEGATED_BURNING)].map((match) => match[0]).join(" ");
+  const resolved = current !== text ? text.slice(0, text.length - current.length) : "";
+  const clear = new Set();
+  const activeHeat = new Set(heatSourcesIn(withoutNegatedSymptoms(current).replace(NEGATED_BURNING, "")));
+  const resolvedHeat = new Set(heatSourcesIn(denied + " " + resolved).filter((source) => !activeHeat.has(source)));
+  const knownHeat = reportedHeatSources(session);
+  const remainingHeat = knownHeat.filter((source) => source === "unknown" ? !Object.keys(HEAT_SOURCE_PATTERNS).every((kind) => resolvedHeat.has(kind)) : !resolvedHeat.has(source));
+  if (remainingHeat.length < knownHeat.length) {
+    session.heatSources = remainingHeat;
+    if (!remainingHeat.length && !activeHeat.size) clear.add("overheat");
+  }
+  if (ERROR_SYMPTOM.test(denied + " " + resolved) && !positive.has("error")) clear.add("error");
+  if ((STOPPED_WORKING.test(resolved) || statesWorkingNormally(current)) && !positive.has("not_working")) clear.add("not_working");
+  if (!clear.size) return;
+  const property = session.property;
+  if (clear.has("overheat")) session.heatSign = false;
+  if (clear.has("not_working") && property.dryerWorking === "Not working") property.dryerWorking = "Working normally";
+  if (Array.isArray(property.symptoms)) property.symptoms = property.symptoms.filter((symptom) => !clear.has(symptom));
+  if (Array.isArray(property.triage)) property.triage = property.triage.filter((answer) => !clear.has(TRIAGE_SYMPTOMS[answer]));
+}
+
 function learnSymptoms(t, s, clarifying) {
   const found = [...new Set(parseSymptoms(t))];
   const tries = s.symptomConflict?.tries || 1;
   const settle = (list) => {
-    s.property.symptoms = list;
+    s.property.symptoms = keepReportedProblems(s.property.symptoms, list);
     s.symptomConflict = null;
   };
   // Contradictory answers are never guessed at: BOB asks for the answer in the customer's own words.
@@ -358,6 +444,7 @@ function learn(text, s) {
   // A real question or a hypothetical teaches nothing; a tentative answer with a trailing "?"
   // ("maybe 3 years ago?", "gas?") is still an answer.
   const hypothetical = QUESTION.test(t) || /\b(?:what if|if i|if we|would it|suppose)\b/.test(t);
+  if (!hypothetical) correctReportedProblems(t, s);
   if (s.pending && QUESTIONS[s.pending] && !hypothetical) {
     const key = s.pending;
     // "Other" on any question: note it, then ask for a short description in the next message.
@@ -376,6 +463,10 @@ function learn(text, s) {
     } else if (key === "otherDetail") {
       if (t.length >= 2 && !UNKNOWN.test(t)) {
         const note = String(text).trim().slice(0, 500);
+        if (["symptoms", "triage"].includes(s.otherFor)) {
+          const found = parseSymptoms(t);
+          if (found.length) p.symptoms = [...new Set([...(p.symptoms || []), ...found])];
+        }
         if (s.otherFor === "repairScope") {
           s.concerns.push(note);
           s.concernDescribed = true;
@@ -472,7 +563,7 @@ export function applyFacts(session, facts = {}) {
       session.symptomConflict = { tries: 1 };
       session.pending = "symptomClarify";
     } else if (list.length) {
-      p.symptoms = list;
+      p.symptoms = keepReportedProblems(p.symptoms, list);
       session.symptomConflict = null;
     }
   }
@@ -662,6 +753,7 @@ export function airflowFactors(p = {}) {
   else if (sym.includes("normal")) f.push("Dries in one normal cycle");
   if (sym.includes("overheat")) f.push("Overheating or shutting off");
   if (sym.includes("error")) f.push("Airflow error code");
+  if (sym.includes("not_working")) f.push("Dryer is not working");
   if (p.recentService === "Yes") f.push("Dryer new or serviced in the last 90 days");
   if (p.hasDryer === "No") f.push("No dryer connected now");
   if (p.mount === "Stacked") f.push("Stacked setup: transition hose often crushed");
@@ -1292,6 +1384,7 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     return respond(FIRE_ALERT, [FIRE_SAFE], { action: "emergency" });
   }
   if (s.stage === "emergency") return respond(`Do not resume using the dryer. Emergency responders or a qualified professional must confirm the immediate danger is resolved. Once everyone is safe, call our office at **${officePhone(config)}** and the team will help you.`, [], { action: "call_office", phone: officePhone(config) });
+  if (safety === "stop") rememberHeatSources(s, t);
   // Help Me Choose: "Overheating / Error Code" moves to the emergency path, which starts with the safety check.
   if (safety === "stop" && s.help && s.pending === "symptoms" && s.intent === "cleaning") {
     const found = parseSymptoms(t);

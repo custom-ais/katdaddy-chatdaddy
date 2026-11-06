@@ -40,7 +40,7 @@ export function bookingTotals(appointments, appt, { commissionCents = COMMISSION
   return out;
 }
 
-const SYMPTOM_LABELS = { normal: "Dries in one cycle", two: "Takes about 2 cycles", three: "Takes 3+ cycles", overheat: "Overheating or shutting off", error: "Airflow error code" };
+const SYMPTOM_LABELS = { normal: "Dries in one cycle", two: "Takes about 2 cycles", three: "Takes 3+ cycles", overheat: "Overheating or shutting off", error: "Airflow error code", not_working: "Dryer is not working" };
 const phone = (v = "") => { const d = String(v).replace(/\D/g, "").replace(/^1(?=\d{10}$)/, ""); return d.length === 10 ? `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}` : String(v); };
 const PROPERTY_LABELS = { hasDryer: "Dryer installed", recentService: "New/serviced in 90 days", stories: "Stories", laundryFloor: "Laundry floor", power: "Gas or electric", mount: "Setup", exit: "Vent exit", animals: "Signs of animals", dryerWorking: "Dryer working", symptoms: "Symptoms" };
 

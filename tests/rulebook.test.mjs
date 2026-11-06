@@ -156,13 +156,14 @@ test("same-day and 5 PM lanes are off by default", () => {
   assert.ok(!starts.some((s) => s.sameDay || s.overflow));
 });
 
-test("same-day: only before the cutoff, with short notice, next to a booked job", async (t) => {
-  const h = await harness(t, { config: { sameDay: { enabled: true, cutoffHour: 15, minNoticeHours: 2, requireNearby: true } } });
-  h.advance(Date.parse("2026-09-22T15:00:00Z") - Date.parse("2026-09-21T20:00:00Z")); // Tue 8 AM Arizona
+test("same-day: only before the cutoff, with at least twelve hours notice, next to a booked job", async (t) => {
+  const h = await harness(t, { config: { leadHours: 24, sameDay: { enabled: true, cutoffHour: 15, minNoticeHours: 2, requireNearby: true } } });
+  h.advance(Date.parse("2026-09-22T07:00:00Z") - Date.parse("2026-09-21T20:00:00Z")); // Tue midnight Arizona
   h.jobber.visits.push({ id: "V-today", start: Date.parse("2026-09-22T16:00:00Z"), end: Date.parse("2026-09-22T17:00:00Z"), allDay: false, jobberUserIds: [], address: "200 Near Rd, Buckeye, AZ 85326" });
   const token = await h.prepare();
   const today = await h.slots(token, "?date=2026-09-22");
   assert.ok(today.length > 0 && today.every((s) => s.sameDay));
+  assert.ok(today.every(s => Date.parse(s.scheduledAt) >= Date.parse("2026-09-22T19:00:00Z")), "same-day still needs twelve hours notice");
   const far = await h.prepare("cleaning", { ...contact, name: "Far Away", phone: "6235550002", address: "50 Edge Blvd" });
   assert.deepEqual(await h.slots(far, "?date=2026-09-22"), [], "not next to the booked job, so no same-day");
 });

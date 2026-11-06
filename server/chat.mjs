@@ -1,6 +1,6 @@
 // One chat turn: rules engine first for anything exact, Gemini for free-typed messages.
 
-import { turn, detectSafety, applyFacts, answeredUnsure, asksForSooner, WELCOME, START_LABELS, UNANSWERED, NOTED } from "../shared/conversation.mjs";
+import { turn, detectSafety, applyFacts, correctReportedProblems, answeredUnsure, asksForSooner, WELCOME, START_LABELS, UNANSWERED, NOTED } from "../shared/conversation.mjs";
 
 const DIRECT = /^(?:continue(?: booking)?|start over|restart|reset|accept(?: & continue)?|compare packages|more services|back to (?:packages|options)|book this service|book assessment|include assessment|cleaning (?:\+|and) assessment|cleaning only|just (?:the )?cleaning|cancel package|check after-hours availability|keep regular times|skip|not sure|i don't know|yes|no|ask a question(?: \(faqs\))?|request a callback|\d{5})$/i;
 const PICK_LABEL = /^(?:select )?(?:premium 1-2-3|ultimate protection|safety inspection|essential|performance|total system|express|post-service|nest removal \+ cleaning|full system restoration|emergency same-day)(?: ⭐)?(?: · \$[\d,.]+\+?| \(\$[\d,.]+\+?\))?$/i;
@@ -113,14 +113,17 @@ async function decide({ message, session, config, faqs, assistant, place = null 
 
   const working = structuredClone(session);
   const canChangeFacts = !working.serviceAccepted && ["welcome", "evaluating", "offer", "details", "bundle_offer"].includes(working.stage);
-  const before = JSON.stringify([working.property, working.zip, working.concerns]);
+  const before = JSON.stringify([working.property, working.zip, working.concerns, working.heatSign]);
   if (canChangeFacts) {
     const facts = { ...ai.facts };
     // The concern is recorded by the command that needs it (bundle offer / repair start).
     delete facts.concern;
     applyFacts(working, facts);
   }
-  const factsChanged = JSON.stringify([working.property, working.zip, working.concerns]) !== before;
+  // AI commands/fact updates can replace the raw message with "continue" below.
+  // Apply explicit performance corrections before that original wording is lost.
+  correctReportedProblems(message, working);
+  const factsChanged = JSON.stringify([working.property, working.zip, working.concerns, working.heatSign]) !== before;
 
   let result;
   if (ai.command) {

@@ -6,19 +6,22 @@
 // techIds null = blocks every technician (e.g. an unassigned Jobber visit).
 
 import { phoenixDate, dateTime } from "../shared/domain.mjs";
+import { bookingNoticeAllows, bookingNoticeHours } from "../shared/booking-notice.mjs";
 import { onShift } from "../shared/tech-schedule.mjs";
 import { emergencySameDayEligible } from "./activity.mjs";
 import { routeScore } from "./route-score.mjs";
 import { paceBonus } from "./revenue-pace.mjs";
 
 const MIN = 60_000;
+// Only route proximity changes for urgent problems; measured travel and buffers still apply.
+export const URGENT_ROUTE_EXTRA_MINUTES = 5;
 
 const phoenixHour = (ms) => Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/Phoenix", hour: "numeric", hourCycle: "h23" }).format(new Date(ms)));
 
 /**
  * Candidate start times, applying BOB's hours, Sundays, closing time, notice and horizon.
  * Two optional lanes from the scheduling workbook, both off unless switched on:
- *   sameDay  — today, before the cutoff hour, with shorter notice (must sit next to a booked job)
+ *   sameDay  — today, before the cutoff hour, with at least 12 hours' notice (must sit next to a booked job)
  *   overflow — a weekday 5 PM start for short, nearby, higher-ticket visits (needs approval)
  */
 export function candidateStarts({ config, durationMins, now, date = "", ticketCents = 0 }) {
@@ -29,6 +32,7 @@ export function candidateStarts({ config, durationMins, now, date = "", ticketCe
   for (let offset = 0; offset <= config.horizonDays; offset++) {
     const d = phoenixDate(new Date(now + offset * 86_400_000));
     if (date && d !== date) continue;
+    if (d === today && sd.enabled !== true) continue;
     if (d === today && Number.isFinite(config.emergencyRequestedAt) && !emergencySameDayEligible(config.emergencyRequestedAt, d)) continue;
     if (config.blockedDates.includes(d)) continue;
     const weekday = new Date(`${d}T12:00:00-07:00`).getUTCDay();
@@ -39,14 +43,15 @@ export function candidateStarts({ config, durationMins, now, date = "", ticketCe
     for (const time of times) {
       const start = dateTime(d, time).getTime();
       const end = start + durationMins * MIN;
+      if (!bookingNoticeAllows(config, start, now)) continue;
       if (start > now + config.horizonDays * 86_400_000) continue;
       if (end > close) continue;
-      if (start >= now + config.leadHours * 3_600_000) out.push({ date: d, start, end });
-      else if (sameDayOpen && start >= now + sd.minNoticeHours * 3_600_000) out.push({ date: d, start, end, sameDay: true });
+      if (start >= now + bookingNoticeHours(config.leadHours) * 3_600_000) out.push({ date: d, start, end });
+      else if (sameDayOpen && start >= now + bookingNoticeHours(sd.minNoticeHours) * 3_600_000) out.push({ date: d, start, end, sameDay: true });
     }
     if (ov.enabled && weekday !== 6 && durationMins <= ov.maxDurationMins && ticketCents >= ov.minTicketCents) {
       const start = dateTime(d, ov.start).getTime();
-      if (start >= close && start >= now + config.leadHours * 3_600_000 && start <= now + config.horizonDays * 86_400_000) {
+      if (bookingNoticeAllows(config, start, now, config.leadHours) && start >= close && start <= now + config.horizonDays * 86_400_000) {
         out.push({ date: d, start, end: start + durationMins * MIN, overflow: true });
       }
     }
@@ -73,8 +78,9 @@ function touchesDate(block, date) {
  * Evaluate one technician for one candidate.
  * drive: Map blockId -> { toNew, fromNew } in minutes (null = unknown).
  */
-export function evaluateTech({ candidate, tech, blocks, drive, config }) {
-  const cap = config.maxDriveBetweenJobsMin;
+export function evaluateTech({ candidate, tech, blocks, drive, config, urgent = false }) {
+  const baselineCap = config.maxDriveBetweenJobsMin;
+  const cap = baselineCap + (urgent === true && Number.isFinite(baselineCap) && baselineCap > 0 ? URGENT_ROUTE_EXTRA_MINUTES : 0);
   const buffer = config.bufferMinutes;
   const mine = blocks.filter((b) => blockBelongsTo(b, tech) && touchesDate(b, candidate.date));
   const timed = mine.filter((b) => !b.allDay);
@@ -131,7 +137,7 @@ export function dayIsFull({ date, blocks, config }) {
  */
 export const offToday = (tech, date, now) => tech.status === "off_duty" && date === phoenixDate(new Date(now));
 
-export function openSlots({ config, technicians, blocks, drive, durationMins, now, date = "", place = null, ticketCents = 0 }) {
+export function openSlots({ config, technicians, blocks, drive, durationMins, now, date = "", place = null, ticketCents = 0, urgent = false }) {
   const techs = technicians.filter((t) => config.activeTechnicianIds.includes(t.id));
   const slots = [];
   for (const candidate of candidateStarts({ config, durationMins, now, date, ticketCents })) {
@@ -143,7 +149,7 @@ export function openSlots({ config, technicians, blocks, drive, durationMins, no
       if (offToday(tech, candidate.date, now)) continue;
       // Their work schedule and time off in Settings: the whole visit has to fall on shift.
       if (!onShift(tech, candidate)) continue;
-      const result = evaluateTech({ candidate, tech, blocks, drive, config });
+      const result = evaluateTech({ candidate, tech, blocks, drive, config, urgent });
       if (!result.ok) continue;
       const needsNearby = (candidate.sameDay && config.sameDay?.requireNearby) || (candidate.overflow && config.overflow?.requireNearby);
       if (needsNearby && !result.nearby) continue;
@@ -181,7 +187,9 @@ export function openSlots({ config, technicians, blocks, drive, durationMins, no
  * pace (revenue pacing, see revenue-pace.mjs) adds points for weeks under the office's minimum and
  * takes them from far-out stops in weeks that already reached it.
  */
-export function orderSlots(slots, { now, nearbyFirst, routeScoring = false, pace = null }) {
+export function orderSlots(slots, { now, nearbyFirst, routeScoring = false, pace = null, urgent = false }) {
+  // Present urgent customers with the earliest feasible opening; routine ranking stays intact.
+  if (urgent === true) return [...slots].sort((a, b) => a.start - b.start);
   const soon = now + 14 * 86_400_000;
   if (routeScoring || pace) {
     const score = (s) => (routeScoring ? s.routeScore ?? 0 : s.nearby ? 6 : 0) + paceBonus(s, pace);
