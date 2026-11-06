@@ -1,7 +1,7 @@
 // Live availability: Jobber's calendar + BOB's holds/bookings + drive-time rules.
 
 import { phoenixDate } from "../shared/domain.mjs";
-import { openSlots, orderSlots, offToday } from "./schedule-rules.mjs";
+import { openSlots, orderSlots, offToday, explainDay } from "./schedule-rules.mjs";
 import { zipOf } from "./route-score.mjs";
 import { pacingOn, revenuePace, weekStartOf, PACE_WEEKS } from "./revenue-pace.mjs";
 
@@ -120,7 +120,14 @@ export function createScheduler({ store, jobber, geo }) {
     const drive = await driveMap(list, location, fresh);
     const place = { location, zip, neighborhood };
     const found = openSlots({ config, technicians, blocks: list, drive, durationMins, now, date, place, ticketCents, urgent });
-    if (date) return found;
+    if (date) {
+      // A day with nothing open says why in the server log, so the office's question can be answered.
+      if (!found.length) {
+        try { console.log(`[slots] no openings ${date} ${JSON.stringify(explainDay({ config, technicians, blocks: list, drive, durationMins, now, date, ticketCents, urgent }))}`); }
+        catch (error) { console.warn("[slots] could not explain an empty day:", error.message); }
+      }
+      return found;
+    }
     return orderSlots(found, { now, nearbyFirst: config.nearbyFirst, routeScoring: config.routeScoring !== false, pace: urgent ? null : await pace({ config, now, fresh }), urgent });
   }
 
