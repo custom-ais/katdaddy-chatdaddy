@@ -99,11 +99,19 @@ const INFO: Record<string, () => React.ReactElement> = {
   ),
 };
 
-/** BOB's own picture, as in the original chat. */
-function BobFace({ size }: { size: number }) {
+/**
+ * BOB's picture on a soft white-to-blue circle: his head and shoulders at small sizes (so his face
+ * reads next to a message), the whole robot at his laptop when there's room. status adds the
+ * online / offline dot on the corner.
+ */
+function BobFace({ size, full = size >= 96, status }: { size: number; full?: boolean; status?: 'online' | 'offline' }) {
+  const dot = Math.max(10, Math.round(size * 0.24));
   return (
-    <span className="block rounded-full bg-white border border-sky-100 overflow-hidden shrink-0 shadow-sm" style={{ width: size, height: size }}>
-      <img src="/bob-avatar.png" alt="" width={size} height={size} decoding="async" className="w-full h-full object-cover" />
+    <span className="relative block shrink-0" style={{ width: size, height: size }}>
+      <span className="block w-full h-full rounded-full overflow-hidden bg-gradient-to-b from-white to-sky-100 ring-1 ring-sky-200/90 shadow-md shadow-sky-950/15">
+        <img src={full ? '/bob-full.webp' : '/bob-face.webp'} alt="" width={size} height={size} decoding="async" className={`w-full h-full ${full ? 'object-contain p-[7%]' : 'object-cover'}`} />
+      </span>
+      {status && <span aria-hidden="true" className={`absolute bottom-0 right-0 rounded-full ring-2 ring-slate-800 ${status === 'online' ? 'bg-emerald-400' : 'bg-slate-500'}`} style={{ width: dot, height: dot }} />}
     </span>
   );
 }
@@ -1448,21 +1456,22 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   return (
     <div className={`bg-slate-900 border border-slate-800 shadow-2xl overflow-hidden flex flex-col relative text-white ${minimized ? 'bob-minimized' : ''} ${shell}`}>
       <div className="bg-slate-800/90 backdrop-blur-md px-4 py-3 border-b border-slate-700/60 flex items-center justify-between z-20">
-        <div className="flex items-center gap-3">
-          <BobFace size={52} />
-          <div>
-            <h1 className="font-extrabold text-base text-white tracking-tight leading-none">Dryer Vent Squad West Valley</h1>
-            <p className="text-[11px] font-semibold text-orange-400 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-              <span className={`w-1.5 h-1.5 rounded-full ${ready ? 'bg-emerald-400' : 'bg-slate-500'}`} />
-              <span className="whitespace-nowrap">{ready ? (config?.smartChat ? 'BOB · AI booking assistant' : 'BOB · Booking assistant') : error ? 'Not connected yet' : 'Connecting…'}</span>
-              {ready && <span className="whitespace-nowrap text-slate-300 font-medium">· {config?.bookingEnabled ? 'Live schedule' : 'Requests'}</span>}
-            </p>
+        <div className="flex items-center gap-3 min-w-0">
+          <BobFace size={46} status={ready ? 'online' : 'offline'} />
+          <div className="min-w-0" title={config?.smartChat ? 'BOB, AI booking assistant' : 'BOB, booking assistant'}>
+            <h1 className="flex items-center gap-2 leading-none">
+              <span className="font-display font-extrabold text-lg text-white tracking-tight">BOB</span>
+              <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ${ready ? 'bg-emerald-400/15 text-emerald-300' : error ? 'bg-rose-400/15 text-rose-300' : 'bg-slate-600/60 text-slate-300'}`}>
+                {ready ? (config?.bookingEnabled ? 'Live schedule' : 'Requests') : error ? 'Not connected yet' : 'Connecting…'}
+              </span>
+            </h1>
+            <p className="mt-1 truncate text-xs font-semibold text-slate-300">{config?.businessName || 'Dryer Vent Squad West Valley'}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <button ref={expandRef} type="button" onClick={() => changeMinimized(!minimized)} className="text-xs font-bold text-slate-300 hover:text-white p-2 rounded-xl bg-slate-700/50 hover:bg-slate-700" aria-expanded={!minimized} aria-label={minimized ? 'Expand BOB' : 'Minimize BOB'} title={minimized ? 'Expand BOB' : 'Minimize BOB'}>{minimized ? <Plus size={17} /> : <Minus size={17} />}</button>
           <button onClick={() => setFaqOpen(!faqOpen)} aria-expanded={faqOpen} className={`text-xs font-bold px-3 py-1.5 rounded-xl border flex items-center gap-1.5 ${faqOpen ? 'bg-orange-500 text-white border-orange-500' : 'text-slate-300 hover:text-white bg-slate-700/50 hover:bg-slate-700 border-slate-600'}`}>
-            <HelpCircle size={14} className={faqOpen ? 'text-white' : 'text-orange-400'} /><span>FAQs</span>
+            <HelpCircle size={14} className={faqOpen ? 'text-white' : 'text-orange-400'} /><span className="sr-only sm:not-sr-only">FAQs</span>
           </button>
           <button onClick={restart} className="text-xs font-bold text-slate-300 hover:text-white px-3 py-1.5 rounded-xl bg-slate-700/50 hover:bg-slate-700 flex items-center gap-1.5" aria-label="Start over"><RotateCcw size={13} /><span className="hidden sm:inline">Reset</span></button>
         </div>

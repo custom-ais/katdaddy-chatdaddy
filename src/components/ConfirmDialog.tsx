@@ -43,7 +43,7 @@ function ConfirmDialog({ title, message, confirmLabel = 'OK', cancelLabel = 'Can
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-900/50 backdrop-blur-[2px] p-4 animate-in" onClick={(e) => { if (e.target === e.currentTarget) onDone(false); }}>
       <div role="alertdialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={message ? messageId : undefined} className="w-full max-w-sm rounded-3xl bg-white shadow-2xl border border-slate-200 p-6 text-left">
-        {brand === 'chat' && <img src="/bob-avatar.png" alt="" width={56} height={56} className="size-14 rounded-full border border-sky-100 bg-white mb-3" />}
+        {brand === 'chat' && <img src="/bob-face.webp" alt="" width={56} height={56} className="size-14 rounded-full bg-gradient-to-b from-white to-sky-100 ring-1 ring-sky-200 shadow-md shadow-sky-950/15 object-cover mb-3" />}
         <h2 id={titleId} className="font-extrabold text-slate-900 text-lg leading-snug">{title}</h2>
         {message && <p id={messageId} className="mt-1.5 text-sm text-slate-600 leading-relaxed">{message}</p>}
         <div className="mt-5 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
