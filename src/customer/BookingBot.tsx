@@ -1099,6 +1099,8 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   };
   useEffect(() => {
     if (!embedded) return;
+    // Tell the website's widget the chat is running, so a chat window that failed to load gets reloaded when it's reopened.
+    if (window.parent !== window) { let parentOrigin = '*'; try { parentOrigin = new URL(document.referrer).origin; } catch {} window.parent.postMessage({ type: 'bob:ready' }, parentOrigin); }
     const receive = (event: MessageEvent) => {
       let parentOrigin = ''; try { parentOrigin = new URL(document.referrer).origin; } catch {}
       if (event.source === window.parent && parentOrigin && event.origin === parentOrigin && event.data?.type === 'bob:restore') { setMinimized(false); try { sessionStorage.removeItem(preview ? 'bob.preview.minimized' : 'bob.minimized'); } catch {} }
