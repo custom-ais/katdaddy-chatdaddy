@@ -5,7 +5,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_CONFIG, serviceQuote } from "../shared/domain.mjs";
 import { openSlots } from "../server/schedule-rules.mjs";
-import { onShift, businessWeek, weekSummary, validWorkWeek, validTimeOff, cleanTimeOff, timeOffLabel } from "../shared/tech-schedule.mjs";
+import { onShift, businessWeek, weekSummary, validWorkWeek, validTimeOff, cleanTimeOff, timeOffLabel, scheduleGaps, worksOn } from "../shared/tech-schedule.mjs";
 import { harness, contact } from "./helpers.mjs";
 
 const NOW = Date.parse("2026-09-21T20:00:00Z"); // Mon Sep 21, 1:00 PM Arizona
@@ -110,4 +110,29 @@ test("the office saves a tech's schedule in Settings, and the next customer only
   const first = all[0];
   h.jobber.visits.push({ id: "V-NEW", title: "Booked in Jobber", start: Date.parse(first.scheduledAt), end: Date.parse(first.scheduledAt) + 3600_000, allDay: false, jobberUserIds: ["J-RYAN"], address: "" });
   assert.equal((await h.hold(token, first.scheduledAt)).status, 409);
+});
+
+test("Settings warns about days customers would see as empty because of who's scheduled", () => {
+  const cfg = { ...DEFAULT_CONFIG, activeTechnicianIds: ["tech-ryan", "tech-andrew"], blockedDates: ["2026-11-27"] };
+  const gaps = (technicians, extra = {}) => scheduleGaps({ technicians, config: { ...cfg, ...extra }, today: "2026-11-16", days: 14 });
+  // Business hours for both: nothing to warn about.
+  assert.deepEqual(gaps([RYAN, ANDREW]), { noOnline: false, idle: [], weekdays: [], dates: [] });
+  // Nobody takes online bookings.
+  assert.equal(gaps([RYAN, ANDREW], { activeTechnicianIds: [] }).noOnline, true);
+  // A tech who takes online bookings with no working days, and the weekdays nobody covers.
+  const none = { ...RYAN, workWeek: week({}) };
+  const thuSat = { ...ANDREW, workWeek: week({ 4: ["09:00", "17:00"], 5: ["09:00", "17:00"], 6: ["09:00", "13:00"] }) };
+  const g = gaps([none, thuSat]);
+  assert.deepEqual(g.idle, ["tech-ryan"]);
+  assert.deepEqual(g.weekdays, [1, 2, 3], "Mon–Wed: nobody online works");
+  assert.deepEqual(g.dates, [], "weekday gaps aren't repeated date by date");
+  // Upcoming dates when everyone online is off: one on vacation, the other's day off.
+  const away = { ...RYAN, timeOff: [{ id: "off-1", from: "2026-11-18", to: "2026-11-20", start: "", end: "", note: "" }] };
+  const tueFri = { ...ANDREW, workWeek: week({ 2: ["09:00", "17:00"], 5: ["09:00", "17:00"] }) };
+  assert.deepEqual(gaps([away, tueFri]).dates, ["2026-11-18", "2026-11-19"], "Wed and Thu; Fri Andrew works");
+  // Closed dates, Sundays and techs not taking online bookings don't count.
+  assert.ok(!gaps([away, tueFri]).dates.includes("2026-11-22"));
+  assert.deepEqual(gaps([away, { ...ANDREW, timeOff: [{ id: "off-2", from: "2026-11-27", to: "2026-11-27", start: "", end: "", note: "" }] }]).dates, []);
+  // Partial-day time off still leaves the tech working that day.
+  assert.equal(worksOn({ ...RYAN, timeOff: [{ id: "x", from: "2026-11-18", to: "2026-11-18", start: "12:00", end: "14:00", note: "" }] }, "2026-11-18"), true);
 });

@@ -32,7 +32,16 @@ test("schedules, time off and the daily cap show up as reasons too", () => {
   const durationMins = serviceQuote("cleaning", config).durationMins;
   const off = { ...RYAN, timeOff: [{ id: "off-1", from: "2026-09-22", to: "2026-09-22", start: "", end: "", note: "" }] };
   const why = explainDay({ config, technicians: [off], blocks: [], drive: new Map(), durationMins, now: NOW, date: "2026-09-22" });
-  assert.ok(why.times.every((t) => t.techs["tech-ryan"] === "outside work schedule or time off"));
+  assert.ok(why.times.every((t) => t.techs["tech-ryan"] === "time off 2026-09-22, all day"));
+  assert.deepEqual(why.technicians["tech-ryan"], { online: true, status: "available", schedule: "Business hours", timeOff: ["2026-09-22 all day"] });
+  const week = (on, start = "09:00", end = "17:00") => [0, 1, 2, 3, 4, 5, 6].map((i) => ({ on: on.includes(i), start, end }));
+  const thuSat = { ...RYAN, workWeek: week([4, 5, 6]) };
+  const wed = explainDay({ config, technicians: [thuSat], blocks: [], drive: new Map(), durationMins, now: NOW, date: "2026-09-23" });
+  assert.ok(wed.times.every((t) => t.techs["tech-ryan"] === "day off in work schedule (Wednesday)"));
+  assert.equal(wed.technicians["tech-ryan"].schedule, "Thu–Sat 9am–5pm");
+  const early = { ...RYAN, workWeek: week([1, 2, 3, 4, 5], "08:00", "12:00") };
+  const tue = explainDay({ config, technicians: [early], blocks: [], drive: new Map(), durationMins, now: NOW, date: "2026-09-22" });
+  assert.deepEqual(tue.times.map((t) => t.techs["tech-ryan"]), ["ok", "outside work hours (Tuesday 08:00-12:00)", "outside work hours (Tuesday 08:00-12:00)", "outside work hours (Tuesday 08:00-12:00)"]);
   const full = explainDay({ config: { ...config, maxJobsPerDay: 1 }, technicians: [RYAN], blocks: [{ id: "a:1", kind: "appointment", start: at("2026-09-22T16:00:00Z"), end: at("2026-09-22T17:30:00Z"), allDay: false, techIds: ["tech-ryan"], location: { lat: 1, lng: 1 } }], drive: new Map(), durationMins, now: NOW, date: "2026-09-22" });
   assert.equal(full.dayFull, true);
   assert.equal(full.onCalendar[0].from, "BOB booking record");
@@ -52,4 +61,10 @@ test("a customer's empty day writes one [slots] line to the server log", async (
   assert.match(lines[0], /^\[slots\] no openings 2026-09-23 \{"date":"2026-09-23",.*"candidates":0/);
   assert.ok((await h.slots(token, "?date=2026-09-22")).length > 0);
   assert.equal(lines.length, 1, "days with openings log nothing");
+});
+
+test("a time-off entry missing its dates never blocks every day", () => {
+  const durationMins = serviceQuote("cleaning", config).durationMins;
+  const broken = { ...RYAN, timeOff: [{ id: "off-x", start: "", end: "" }] };
+  assert.equal(openSlots({ config, technicians: [broken], blocks: [], drive: new Map(), durationMins, now: NOW, date: "2026-09-22" }).length, 4);
 });

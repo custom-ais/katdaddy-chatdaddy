@@ -91,6 +91,10 @@ test('each technician has an Edit schedule dialog that saves their days and hour
   await dialog.getByRole('button', { name: 'Save' }).click();
   await dialog.waitFor({ state: 'detached', timeout: 10_000 });
   assert.equal(await card.locator('[data-schedule-summary]').textContent(), 'Mon–Fri 8am–4pm');
+  // Ryan is the only tech taking online bookings, and now nobody works Saturdays: Settings says so.
+  const gaps = page.locator('[data-schedule-gaps]');
+  await gaps.waitFor({ timeout: 5_000 });
+  assert.match(await gaps.textContent(), /Nobody who takes online bookings works Saturdays/);
   const saved = await page.request.get(`${bob.origin}/api/admin/data`).then((r) => r.json());
   const ryan = saved.technicians.find((x) => x.id === 'tech-ryan');
   assert.deepEqual(ryan.workWeek.map((d) => d.on), [false, true, true, true, true, true, false]);
@@ -104,6 +108,12 @@ test('each technician has an Edit schedule dialog that saves their days and hour
   await dialog.getByRole('button', { name: 'Use business hours' }).click();
   await dialog.waitFor({ state: 'detached', timeout: 10_000 });
   assert.match(await card.locator('[data-schedule-summary]').textContent(), /Business hours/);
+  assert.equal(await page.locator('[data-schedule-gaps]').count(), 0, "covered again: no warning");
+  // Turning everyone off for online bookings warns right away, before saving.
+  const ryanOnline = page.getByRole('checkbox', { name: 'Ryan Boucher' }).first();
+  await ryanOnline.uncheck({ force: true });
+  assert.match(await page.locator('[data-schedule-gaps]').textContent(), /No technician takes online bookings/);
+  await ryanOnline.check({ force: true });
   const reset = await page.request.get(`${bob.origin}/api/admin/data`).then((r) => r.json());
   assert.equal(reset.technicians.find((x) => x.id === 'tech-ryan').workWeek, null);
 });

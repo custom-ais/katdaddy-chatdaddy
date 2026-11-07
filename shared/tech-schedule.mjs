@@ -56,24 +56,29 @@ export function cleanTimeOff(list, today = "") {
 }
 
 /**
- * Whether the tech is on shift for the whole visit: inside their hours for that weekday (when they
- * have a schedule) and clear of their time off. candidate: { date: "YYYY-MM-DD", start, end } (ms).
+ * Why the tech isn't on shift for the whole visit, or null when they are: outside their hours for
+ * that weekday (when they have a schedule), or on time off. candidate: { date, start, end } (ms).
  */
-export function onShift(tech, candidate) {
+export function offShiftReason(tech, candidate) {
   const { date, start, end } = candidate;
   const week = tech?.workWeek;
   if (Array.isArray(week) && week.length === 7) {
-    const day = week[new Date(`${date}T12:00:00-07:00`).getUTCDay()];
-    if (!day?.on) return false;
-    if (start < dateTime(date, day.start).getTime() || end > dateTime(date, day.end).getTime()) return false;
+    const index = new Date(`${date}T12:00:00-07:00`).getUTCDay();
+    const day = week[index];
+    if (!day?.on) return `day off in work schedule (${WEEKDAYS[index]})`;
+    if (start < dateTime(date, day.start).getTime() || end > dateTime(date, day.end).getTime()) return `outside work hours (${WEEKDAYS[index]} ${day.start}-${day.end})`;
   }
   for (const off of Array.isArray(tech?.timeOff) ? tech.timeOff : []) {
-    if (date < off.from || date > off.to) continue;
-    if (!off.start || !off.end) return false;
-    if (start < dateTime(date, off.end).getTime() && end > dateTime(date, off.start).getTime()) return false;
+    if (!(off.from <= date && date <= off.to)) continue;
+    const label = `time off ${off.from}${off.to !== off.from ? ` to ${off.to}` : ""}`;
+    if (!off.start || !off.end) return `${label}, all day`;
+    if (start < dateTime(date, off.end).getTime() && end > dateTime(date, off.start).getTime()) return `${label}, ${off.start}-${off.end}`;
   }
-  return true;
+  return null;
 }
+
+/** Whether the tech is on shift for the whole visit (see offShiftReason). */
+export const onShift = (tech, candidate) => offShiftReason(tech, candidate) === null;
 
 const clock = (t) => {
   const [h, m] = t.split(":").map(Number);
@@ -101,3 +106,44 @@ export const timeOffLabel = (t) => {
   const days = t.from === t.to ? fmt(t.from) : `${fmt(t.from)} – ${fmt(t.to)}`;
   return t.start ? `${days}, ${clock(t.start)}–${clock(t.end)}` : `${days}, all day`;
 };
+
+const weekdayOf = (date) => new Date(`${date}T12:00:00-07:00`).getUTCDay();
+const addDays = (date, n) => new Date(Date.parse(`${date}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+
+/** The weekdays the business is open for online booking (0 = Sunday): Mon–Fri and Saturday by their start times. */
+export const openWeekdays = (config) => [
+  ...((config?.weekdayStarts || []).length ? [1, 2, 3, 4, 5] : []),
+  ...((config?.saturdayStarts || []).length ? [6] : []),
+];
+
+/** Whether the tech works at all that day: their weekly schedule (business hours when none) and no all-day time off. */
+export function worksOn(tech, date) {
+  const week = tech?.workWeek;
+  if (Array.isArray(week) && week.length === 7 && !week[weekdayOf(date)]?.on) return false;
+  return !(Array.isArray(tech?.timeOff) ? tech.timeOff : []).some((o) => o.from <= date && date <= o.to && !o.start);
+}
+
+/**
+ * What customers would see as "no openings" because of who's scheduled, for Settings to warn about:
+ * nobody takes online bookings; a tech who does has no working days; an open weekday nobody online
+ * works; and upcoming open dates when everyone online is on all-day time off (or off that weekday).
+ * Partial days are left to the booking check, which also weighs the calendar and drive times.
+ * @param {{ technicians?: any[], config?: any, today?: string, days?: number }} options
+ * @returns {{ noOnline: boolean, idle: string[], weekdays: number[], dates: string[] }}
+ */
+export function scheduleGaps({ technicians = [], config = {}, today, days = 45 }) {
+  const online = technicians.filter((t) => (config.activeTechnicianIds || []).includes(t.id));
+  const open = openWeekdays(config);
+  const hasWeek = (t) => Array.isArray(t.workWeek) && t.workWeek.length === 7;
+  const idle = online.filter((t) => hasWeek(t) && !t.workWeek.some((d) => d?.on)).map((t) => t.id);
+  const weekdays = online.length ? open.filter((i) => !online.some((t) => !hasWeek(t) || t.workWeek[i]?.on)) : [];
+  const dates = [];
+  if (online.length && today) {
+    for (let k = 0; k < days; k++) {
+      const date = addDays(today, k), i = weekdayOf(date);
+      if (!open.includes(i) || weekdays.includes(i) || (config.blockedDates || []).includes(date)) continue;
+      if (!online.some((t) => worksOn(t, date))) dates.push(date);
+    }
+  }
+  return { noOnline: online.length === 0, idle, weekdays, dates };
+}
