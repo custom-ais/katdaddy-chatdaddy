@@ -7,14 +7,14 @@ import { PhoneInput } from '../components/PhoneInput';
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Technician } from './DashboardContext';
-import { BookOpen, Building2, CalendarClock, Check, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, Mail, MapPin, MessageSquare, Plus, RotateCcw, Route, Save, ShieldCheck, Sparkles, Tag, Target, Trash2, Users, X } from 'lucide-react';
+import { BookOpen, Building2, CalendarClock, Check, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, Mail, MapPin, MessageSquare, Plus, RotateCcw, Route, Save, ShieldCheck, Sparkles, Tag, Target, Trash2, Users, X, AlertTriangle } from 'lucide-react';
 import { api, saveText } from '../lib/api';
 import { askConfirm } from '../components/ConfirmDialog';
 import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Modal, Section, Toggle, inputClass, primaryButton, secondaryButton, subtleButton } from './ui';
 import { money } from '../../shared/domain.mjs';
 import { DEFAULT_UPSELLS, PACKAGES } from '../../shared/catalog.mjs';
-import { WEEKDAYS, businessWeek, weekSummary, timeOffLabel, validTimeOffEntry } from '../../shared/tech-schedule.mjs';
+import { WEEKDAYS, businessWeek, weekSummary, timeOffLabel, validTimeOffEntry, scheduleGaps } from '../../shared/tech-schedule.mjs';
 import { COVERAGE_IN, COVERAGE_TRAVEL } from '../../shared/coverage.mjs';
 
 const ServiceAreaMap = lazy(() => import('./ServiceAreaMap').then((m) => ({ default: m.ServiceAreaMap })));
@@ -284,10 +284,35 @@ function ScheduleEditor({ name, initial, config, onCancel, onSave }: { name: str
 }
 
 /**
+ * Warns before a customer sees "no openings" because of who's scheduled: nobody takes online
+ * bookings, a tech who does has no working days, an open weekday nobody online works, or upcoming
+ * dates when everyone online is off. Uses the edits on the page, saved or not.
+ */
+function ScheduleGaps({ techs, config }: { techs: Technician[]; config: any }) {
+  const gaps = scheduleGaps({ technicians: techs, config, today: phoenixToday(), days: Math.min(60, Math.max(1, Number(config?.horizonDays) || 45)) });
+  const name = (id: string) => techs.find((t) => t.id === id)?.name || 'A technician';
+  const and = (list: string[]) => (list.length < 2 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list.at(-1)}`);
+  const day = (d: string) => new Date(`${d}T12:00:00-07:00`).toLocaleDateString('en-US', { timeZone: 'America/Phoenix', weekday: 'short', month: 'short', day: 'numeric' });
+  const items: string[] = [];
+  if (gaps.noOnline) items.push('No technician takes online bookings, so customers see no openings. Turn someone on under "Technicians taking online bookings" above.');
+  for (const id of gaps.idle) items.push(`${name(id)} takes online bookings but has no working days in their schedule, so BOB never offers them.`);
+  if (gaps.weekdays.length) items.push(`Nobody who takes online bookings works ${and(gaps.weekdays.map((i: number) => `${WEEKDAYS[i]}s`))}, so customers see no times on those days.`);
+  if (gaps.dates.length) items.push(`Everyone who takes online bookings is off on ${and(gaps.dates.slice(0, 6).map(day))}${gaps.dates.length > 6 ? ` and ${gaps.dates.length - 6} more day${gaps.dates.length - 6 === 1 ? '' : 's'}` : ''}, so customers see no times then.`);
+  if (!items.length) return null;
+  return (
+    <div role="alert" data-schedule-gaps className="rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <p className="font-extrabold flex items-center gap-2"><AlertTriangle size={16} className="shrink-0" />Customers won't see some days</p>
+      <ul className="mt-1.5 list-disc pl-6 space-y-1">{items.map((item) => <li key={item}>{item}</li>)}</ul>
+      <p className="mt-1.5 text-xs text-amber-800">Fix it with Edit schedule or Time off on the cards below, or by changing who takes online bookings.</p>
+    </div>
+  );
+}
+
+/**
  * One technician's work schedule and time off. BOB only offers this tech for a visit that fits in
  * their hours that day and doesn't touch their time off; Jobber is still checked before booking.
  */
-function TechSchedule({ tech, onChange, onSaveSchedule }: { tech: Technician; onChange: (patch: Partial<Technician>) => void; onSaveSchedule: (week: Technician['workWeek']) => Promise<void> }) {
+function TechSchedule({ tech, online, onChange, onSaveSchedule }: { tech: Technician; online: boolean; onChange: (patch: Partial<Technician>) => void; onSaveSchedule: (week: Technician['workWeek']) => Promise<void> }) {
   const { data } = useDashboard();
   const week = Array.isArray(tech.workWeek) && tech.workWeek.length === 7 ? tech.workWeek : null;
   const today = phoenixToday();
@@ -309,6 +334,7 @@ function TechSchedule({ tech, onChange, onSaveSchedule }: { tech: Technician; on
         <div className="min-w-0">
           <p className="text-sm font-bold text-slate-800">Work schedule</p>
           <p className="text-xs font-semibold text-slate-500" data-schedule-summary>{week ? weekSummary(week) : 'Business hours (whenever the business is open)'}</p>
+          {online && week && !week.some((d) => d.on) && <p className="mt-1 text-xs font-bold text-amber-800 flex items-center gap-1.5" data-no-working-days><AlertTriangle size={13} className="shrink-0" />Takes online bookings but has no working days, so BOB never offers them.</p>}
         </div>
         <button type="button" className={`${secondaryButton} shrink-0`} onClick={() => setEditing(true)}><CalendarClock size={14} />Edit schedule</button>
       </div>
@@ -349,7 +375,7 @@ function TechSchedule({ tech, onChange, onSaveSchedule }: { tech: Technician; on
   );
 }
 
-function Technicians({ techs, onChange, onSaveSchedule }: { techs: Technician[]; onChange: (next: Technician[]) => void; onSaveSchedule: (id: string, week: Technician['workWeek']) => Promise<void> }) {
+function Technicians({ techs, config, onChange, onSaveSchedule }: { techs: Technician[]; config: any; onChange: (next: Technician[]) => void; onSaveSchedule: (id: string, week: Technician['workWeek']) => Promise<void> }) {
   const { data, can } = useDashboard();
   const [users, setUsers] = useState<any[] | null>(null);
   useEffect(() => {
@@ -364,6 +390,7 @@ function Technicians({ techs, onChange, onSaveSchedule }: { techs: Technician[];
   return (
     <Section icon={<Users size={18} />} title="Technicians" description="Set each tech's work schedule and time off here: BOB only offers a tech when the whole visit falls on their shift. Link each tech to their Jobber user so BOB also checks their Jobber calendar, fresh, before every booking and assigns the visit to them. Visits for a Jobber user no tech is linked to (or no one) block every tech."
       action={<button className={secondaryButton} onClick={() => onChange([...techs, { id: `tech-${crypto.randomUUID().slice(0, 8)}`, name: '', phone: '', zone: 'West Valley', status: 'off_duty', color: '#3b82f6', jobberUserId: '', vehicle: '', bio: '' } as Technician])}><Plus size={15} />Add technician</button>}>
+      <ScheduleGaps techs={techs} config={config} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {techs.map((t, i) => (
           <div key={t.id} className="rounded-2xl border border-slate-200 p-4 space-y-3 bg-slate-50/50">
@@ -387,7 +414,7 @@ function Technicians({ techs, onChange, onSaveSchedule }: { techs: Technician[];
                 {(users || []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
               </select>
             </Field>
-            <TechSchedule tech={t} onChange={(patch) => edit(i, patch)} onSaveSchedule={(week) => onSaveSchedule(t.id, week)} />
+            <TechSchedule tech={t} online={(config?.activeTechnicianIds || []).includes(t.id)} onChange={(patch) => edit(i, patch)} onSaveSchedule={(week) => onSaveSchedule(t.id, week)} />
             <Field label="Short bio for the office" hint={!can('finance.view') ? 'Restricted: viewing and editing office bios requires financial and unrestricted notes access.' : undefined}><textarea rows={2} className={inputClass} disabled={!can('finance.view')} placeholder={!can('finance.view') ? 'Restricted' : undefined} value={can('finance.view') ? t.bio || '' : ''} onChange={(e) => edit(i, { bio: e.target.value })} /></Field>
             {techs.length > 1 && !data.appointments.some((a) => a.technicianId === t.id) && (
               <button className={`${subtleButton} text-rose-700`} disabled={recipientProtected(t)} title={recipientProtected(t) ? 'Master Admin controls this SMS recipient.' : undefined} onClick={() => { if (!recipientProtected(t)) onChange(techs.filter((_, j) => j !== i)); }}><Trash2 size={14} />Remove</button>
@@ -965,7 +992,7 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
         <Field label="Closed dates" hint="YYYY-MM-DD, comma separated"><textarea rows={2} className={inputClass} value={text.blocked} onChange={(e) => { setText({ ...text, blocked: e.target.value }); update('blockedDates', list(e.target.value)); }} /></Field>
       </Section>
 
-            <Technicians techs={techs} onChange={(next) => { setTechs(next); setTechDirty(true); }} onSaveSchedule={saveSchedule} />
+            <Technicians techs={techs} config={c} onChange={(next) => { setTechs(next); setTechDirty(true); }} onSaveSchedule={saveSchedule} />
             {can('integrations.manage') && <AlsoAssign value={c.alsoAssignJobberUserIds || []} techs={techs} disabled={!editable('alsoAssignJobberUserIds')} onChange={(next) => update('alsoAssignJobberUserIds', next)} />}
       </fieldset></div>}
 

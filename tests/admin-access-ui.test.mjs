@@ -141,8 +141,8 @@ test('non-master technician editing cannot change or remove the reserved SMS rec
  const changes=[];
  const techs=[{id:'tech-ryan',name:'Synthetic reserved technician',phone:'+16235550100',color:'#123456',status:'available'},{id:'tech-other',name:'Synthetic other technician',phone:'+16235550101',color:'#654321',status:'available'}];
  const PhoneInput=()=>null;const icon=()=>null;const out={};
- const deps={react:{...React,useState:()=>[null,()=>{}],useEffect:()=>{}},fixture:{useDashboard:()=>({data:{integrations:{},appointments:[]},can:()=>false}),PhoneInput,TechSchedule:()=>null,Section:ui.Section,Field:ui.Field,Users:icon,Plus:icon,Trash2:icon,api:()=>{throw Error('Unexpected request');}}};
- const prelude="const {useState,useEffect}=require('react');const {useDashboard,PhoneInput,TechSchedule,Section,Field,Users,Plus,Trash2,api}=require('fixture');const inputClass='',secondaryButton='',subtleButton='';";
+ const deps={react:{...React,useState:()=>[null,()=>{}],useEffect:()=>{}},fixture:{useDashboard:()=>({data:{integrations:{},appointments:[]},can:()=>false}),PhoneInput,TechSchedule:()=>null,ScheduleGaps:()=>null,Section:ui.Section,Field:ui.Field,Users:icon,Plus:icon,Trash2:icon,api:()=>{throw Error('Unexpected request');}}};
+ const prelude="const {useState,useEffect}=require('react');const {useDashboard,PhoneInput,TechSchedule,ScheduleGaps,Section,Field,Users,Plus,Trash2,api}=require('fixture');const inputClass='',secondaryButton='',subtleButton='';";
  new Function('require','exports',compile(prelude+'export '+part))(id=>deps[id]||require(id),out);
  const tree=out.Technicians({techs,onChange:value=>changes.push(value)});
  const all=[];function walk(node){if(!node||typeof node!=='object')return;all.push(node);for(const child of React.Children.toArray(node.props?.children))walk(child);}walk(tree);
