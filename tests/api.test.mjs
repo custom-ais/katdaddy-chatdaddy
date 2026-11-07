@@ -342,6 +342,9 @@ test("security response headers are present", async (t) => {
   const csp = (src) => vercel.headers.find((x) => x.source === src).headers.find((x) => x.key === "Content-Security-Policy").value;
   assert.match(csp("/(.*)"), /object-src 'none'/);
   assert.match(csp("/admin(.*)"), /frame-ancestors 'none'/);
+  // The chat can be shown on the website and its GoDaddy staging copy, and nowhere else.
+  const framers = csp("/(.*)").split(";").map((p) => p.trim()).find((p) => p.startsWith("frame-ancestors")).split(/\s+/).slice(1);
+  assert.deepEqual(framers, ["'self'", "https://dryerventsquadaz.com", "https://www.dryerventsquadaz.com", "https://444390.us12.myftpupload.com"]);
 });
 test("office can enter an existing commitment while public booking stays disabled", async (t) => {
   const h = await harness(t);
