@@ -43,7 +43,7 @@ import { withTiming, step, timingSummary, serverTimingHeader } from "./timing.mj
 // Booking-flow endpoints report where their time went (header, log line, BOB activity).
 const TIMED_PATHS = new Set(["/api/availability", "/api/holds", "/api/holds/extras", "/api/bookings", "/api/approvals", "/api/contact", "/api/verify/check"]);
 import { chatTurn } from "./chat.mjs";
-import { accountMatch, inOtherAccount } from "./jobber-account.mjs";
+import { accountMatch, inOtherAccount, accountSwitchedAt, inboxInOtherAccount } from "./jobber-account.mjs";
 import { confirmationEmail, confirmationSms, approvalRequestText, afterHoursRequestSms, afterHoursRequestEmail } from "./messages.mjs";
 
 /** Whether an optional add-on that doubles as a checkout upsell is switched on in Settings. */
@@ -419,6 +419,12 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     const account = await currentJobberAccount();
     const all = await store.appointments();
     const appointments = all.filter((a) => !inOtherAccount(a, account));
+    // The Inbox too: requests and approval requests from the connected account's time.
+    const scope = { account, switchedAt: account ? accountSwitchedAt({ appointments: all, account, connections: await store.auditTimes("jobber.connected") }) : null };
+    const allRequests = await store.requests();
+    const requests = allRequests.filter((r) => !inboxInOtherAccount(r, r.createdAt, scope));
+    const allApprovals = maintain ? await sweepApprovals(await store.approvals()) : await store.approvals();
+    const approvals = allApprovals.filter((a) => !inboxInOtherAccount(a, a.requestedAt, scope));
     return {
       config: await store.config(),
       bookingEnabled: await bookingOpen(await store.config()),
@@ -426,8 +432,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       technicians: await store.technicians(),
       appointments,
       appointmentsOtherAccount: all.length - appointments.length,
-      requests: await store.requests(),
-      approvals: maintain ? await sweepApprovals(await store.approvals()) : await store.approvals(),
+      requests,
+      approvals,
+      inboxOtherAccount: allRequests.length - requests.length + allApprovals.length - approvals.length,
       heldLocksCount: await store.countActiveHolds(),
       conversations: await store.countSessions(),
       notifications: await store.recentEvents(),
@@ -1327,6 +1334,8 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           concerns: [...(data.concerns || []), ...(data.notes || [])], property: data.property || {}, notes: data.contact.notes || "",
           requestedAt: clock(), expiresAt, decision: null, notified: null,
         };
+        const approvalAccount = await currentJobberAccount();
+        if (approvalAccount) a.jobberAccountId = approvalAccount.id;
         await store.extendHold(hold.id, expiresAt);
         await store.insertApproval(a);
         data.approvalId = a.id;
@@ -1371,6 +1380,8 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           concerns: [...(data.concerns || []), ...(data.notes || [])], property: data.property || {}, notes: data.contact.notes || "",
           requestedAt: clock(), expiresAt: clock() + APPROVAL_WINDOW, decision: null, notified: null,
         };
+        const approvalAccount = await currentJobberAccount();
+        if (approvalAccount) a.jobberAccountId = approvalAccount.id;
         await store.insertApproval(a);
         data.approvalId = a.id;
         data.stage = "approval";
@@ -1482,6 +1493,8 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           smsConsent: body.smsConsent === true, status: "new", createdAt: new Date(clock()).toISOString(),
           route: data.route, safety: data.safety, concerns: [...(data.concerns || []), ...(data.notes || [])], transcript: data.history,
         };
+        const requestAccount = await currentJobberAccount();
+        if (requestAccount) request.jobberAccountId = requestAccount.id; // the Inbox shows it while this Jobber account is connected
         const c = await store.config();
         if (data.afterHours) {
           // An on-call (after-hours) request: what they want, the regular price, and the premium.

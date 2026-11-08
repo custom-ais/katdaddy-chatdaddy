@@ -33,6 +33,8 @@ export interface Snapshot {
   analyticsAppointments?: Appointment[];
   /** Appointments booked into a different Jobber account than the one connected now (not shown). */
   appointmentsOtherAccount?: number;
+  /** Inbox requests and approval requests from a different Jobber account (not shown). */
+  inboxOtherAccount?: number;
   bookingEnabled?: boolean;
   config: any; faqs: any[]; technicians: Technician[]; appointments: Appointment[]; requests: any[]; approvals: any[];
   heldLocksCount: number; conversations: number; notifications: any[]; integrations: any; westValleyZips: string[]; now: number;

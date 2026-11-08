@@ -327,5 +327,5 @@ export async function harness(t, { ready = true, config = {}, jobber: jobberOpts
     return r.cookie;
   };
   const count = async (table) => Number((await db.query(`select count(*)::int as n from bob.${table}`))[0].n);
-  return { db, store, jobber, lc, twilio, sendgrid, geo, origin, call, fresh, chat, accept, contactAndVerify, lastCode, prepare, slots, hold, confirm, book, login, count, advance: (ms) => (now += ms) };
+  return { db, store, jobber, lc, twilio, sendgrid, geo, origin, call, fresh, chat, accept, contactAndVerify, lastCode, prepare, slots, hold, confirm, book, login, count, advance: (ms) => (now += ms), now: () => now };
 }

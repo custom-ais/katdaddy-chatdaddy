@@ -302,6 +302,7 @@ export function projectSnapshot(snapshot,principal) {
     appointments:appointments ? list(source.appointments).map(row => projectAppointment(row,principal)) : [],
     analyticsAppointments:analytics ? list(source.appointments).map(row => projectAppointment(row,principal,{analytics:true})) : [],
     appointmentsOtherAccount:(appointments || analytics) && Number.isInteger(source.appointmentsOtherAccount) ? source.appointmentsOtherAccount : 0,
+    inboxOtherAccount:inbox && Number.isInteger(source.inboxOtherAccount) ? source.inboxOtherAccount : 0,
     requests:inbox ? list(source.requests).map(row => projectRequest(row,principal)) : [],
     approvals:inbox ? list(source.approvals).map(row => projectApproval(row,principal)) : [],
     technicians:technicians ? list(source.technicians).map(row => projectTechnician(row,principal)) : [],

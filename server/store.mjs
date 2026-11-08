@@ -241,6 +241,10 @@ export function createStore(db, { clock = Date.now } = {}) {
     async audit(action, target) {
       await q("insert into bob.audit(id,created,action,target) values($1,$2,$3,$4)", [randomUUID(), clock(), action, String(target)]);
     },
+    /** When each audit entry of one kind was recorded (e.g. every "jobber.connected"), oldest first. */
+    async auditTimes(action) {
+      return (await q("select created from bob.audit where action=$1 order by created", [action])).map((r) => num(r.created));
+    },
 
     // Reuse the durable events store; recorded activity is never dispatched as a webhook.
     async log(kind, details = {}, { sessionId = "", level = "info", requestId = "" } = {}) {
