@@ -1647,7 +1647,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
             placeholder={receipt ? 'Your visit is booked.' : inputHints?.placeholder || 'Type your message or answer…'}
             className="neon-field w-full bg-slate-950 rounded-full pl-5 pr-14 py-3.5 text-sm font-semibold text-white outline-none disabled:opacity-60"
           />
-          <button type="submit" aria-label="Send" disabled={!ready || busy || !text.trim() || !!receipt || !!requestId} className="neon-send absolute right-1.5 p-2.5 rounded-full"><Send size={18} /></button>
+          <button type="submit" aria-label="Send" disabled={!ready || busy || !text.trim() || !!receipt || !!requestId} className="neon-send absolute right-1.5 p-2.5 rounded-full"><Send size={18} strokeWidth={2.5} /></button>
         </form>
         </div>
         <div className="mt-2 flex items-center justify-between max-w-3xl mx-auto text-[11px] text-slate-300">
