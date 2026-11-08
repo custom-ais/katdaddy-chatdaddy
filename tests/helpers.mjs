@@ -65,8 +65,23 @@ export function fakeJobber({ connected = true } = {}) {
     jobs: [],
     clients: [],
     failNext: null, // 'job' | 'visit'
+    // The connected Jobber company. accountHas finds jobs and clients created in this fake (plus
+    // `owned` ids); `accountAnswer` forces an answer (null = Jobber couldn't say).
+    account: { id: "ACCOUNT-A", name: "Test Vent Co" },
+    owned: new Set(),
+    accountAnswer: undefined,
+    accountChecks: 0,
     async connected() {
       return j.isConnected;
+    },
+    async connectedAccount() {
+      return j.isConnected && j.account ? { ...j.account } : null;
+    },
+    async accountHas({ jobId, clientId } = {}) {
+      j.accountChecks++;
+      if (j.accountAnswer !== undefined) return j.accountAnswer;
+      const mine = (id) => id && (j.owned.has(id) || j.jobs.some((x) => x.job.id === id) || /^C\d+$/.test(id) && Number(id.slice(1)) <= j.clients.length);
+      return mine(jobId) || mine(clientId);
     },
     async readVisits(from, to) {
       if (!j.isConnected) throw new JobberNotConnected();

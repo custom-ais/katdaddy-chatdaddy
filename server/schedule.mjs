@@ -3,6 +3,7 @@
 import { phoenixDate } from "../shared/domain.mjs";
 import { openSlots, orderSlots, offToday, explainDay } from "./schedule-rules.mjs";
 import { zipOf } from "./route-score.mjs";
+import { inOtherAccount } from "./jobber-account.mjs";
 import { pacingOn, revenuePace, weekStartOf, PACE_WEEKS } from "./revenue-pace.mjs";
 
 async function pool(items, limit, fn) {
@@ -39,7 +40,10 @@ export function createScheduler({ store, jobber, geo }) {
       }
     }
     const alsoTechs = new Set(technicians.filter((t) => t.jobberUserId && (config.alsoAssignJobberUserIds || []).includes(t.jobberUserId)).map((t) => t.id));
+    // A booking known to be in a different Jobber account than the one connected isn't on this calendar.
+    const account = await (async () => { try { return (await jobber.connectedAccount?.()) || null; } catch { return null; } })();
     for (const a of await store.activeAppointments(from, to, ignoreAppointmentId)) {
+      if (inOtherAccount(a, account)) continue;
       // Only a verified confirmed appointment observed on the current Jobber board
       // can replace its local reservation. Uncertain/readback-mismatched visits
       // must continue protecting the intended technician and interval.
@@ -100,7 +104,8 @@ export function createScheduler({ store, jobber, geo }) {
     try {
       const from = weekStartOf(now), to = from + PACE_WEEKS * 7 * 86_400_000;
       const visits = config.scheduleSource === "Jobber" ? await jobber.readVisits(from, to, { fresh }) : [];
-      return revenuePace({ appointments: await store.appointments(), visits, pacing: config.revenuePacing, now });
+      const account = await (async () => { try { return (await jobber.connectedAccount?.()) || null; } catch { return null; } })();
+      return revenuePace({ appointments: (await store.appointments()).filter((a) => !inOtherAccount(a, account)), visits, pacing: config.revenuePacing, now });
     } catch (error) {
       console.warn("[schedule] revenue pacing unavailable:", error.message);
       return null;
