@@ -970,8 +970,8 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         await session(req);
         const body = await readBody(req);
         if (!["widget.minimized", "widget.expanded", "widget.nudge_opened", "client.error"].includes(body.kind)) fail(400, "Unknown activity event.");
-        // widget.nudge_opened: the customer tapped the website nudge (topic = the page's offer).
-        const topic = ["cleaning", "repair", "emergency", "pest"].includes(body.topic) ? body.topic : "general";
+        // widget.nudge_opened: the customer tapped the website nudge (topic = the page's offer, or "question" for Ask a question).
+        const topic = ["cleaning", "repair", "emergency", "pest", "question"].includes(body.topic) ? body.topic : "general";
         const saved = await record(req, body.kind, { source: "customer_widget", ...(body.kind === "client.error" ? { message: String(body.message || "").slice(0, 500) } : {}), ...(body.kind === "widget.nudge_opened" ? { topic } : {}) }, body.kind === "client.error" ? "error" : "info");
         if (!saved) fail(503, "Activity could not be saved. Please try again.");
         return send(201, { recorded: true });
