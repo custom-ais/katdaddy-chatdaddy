@@ -77,7 +77,7 @@ async function settings(principal,search){
  const component=await load('SettingsPage.tsx',{
   react:{...React,lazy:()=>()=>null},
   '../../shared/admin-permissions.mjs':permissions,'./access':access,'./DashboardContext':{useDashboard:()=>context},'./ui':ui,
-  '../../shared/domain.mjs':domain,'../../shared/catalog.mjs':catalog,'../../shared/coverage.mjs':coverage,'../../shared/tech-schedule.mjs':techSchedule,
+  '../../shared/domain.mjs':domain,'../../shared/catalog.mjs':catalog,'../../shared/coverage.mjs':coverage,'../../shared/tech-schedule.mjs':techSchedule,'../customer/appointmentCard':{displayPhone:value=>value},
   '../lib/api':{api(){throw new Error('Unexpected request');}},'../components/PhoneInput':{PhoneInput:({onValueChange,...props})=>React.createElement('input',{...props,readOnly:true})},'../components/ConfirmDialog':{askConfirm:async()=>false},
   './OwnerSmsConsent':{OwnerSmsConsent:()=>{mounted.push('owner');return React.createElement('p',null,'OWNER-CONSENT-CONTENT');}},
   './ClientHubSettings':{ClientHubSettings:()=>{mounted.push('client-hub');return null;}},
@@ -137,24 +137,38 @@ test('owner alert controls use the exact consent-dependent copy and service-erro
 
 test('non-master technician editing cannot change or remove the reserved SMS recipient',async()=>{
  const source=await readFile(new URL('../src/admin/SettingsPage.tsx',import.meta.url),'utf8');
- const part=source.slice(source.indexOf('function Technicians('),source.indexOf('\nfunction Answers('));
- const changes=[];
+ // The technician cards and their Edit dialog (TECH_STATUS, TechEditor, Technicians).
+ const part=source.slice(source.indexOf('const TECH_STATUS'),source.indexOf('\nfunction Answers('));
  const techs=[{id:'tech-ryan',name:'Synthetic reserved technician',phone:'+16235550100',color:'#123456',status:'available'},{id:'tech-other',name:'Synthetic other technician',phone:'+16235550101',color:'#654321',status:'available'}];
- const PhoneInput=()=>null;const icon=()=>null;const out={};
- const deps={react:{...React,useState:()=>[null,()=>{}],useEffect:()=>{}},fixture:{useDashboard:()=>({data:{integrations:{},appointments:[]},can:()=>false}),PhoneInput,TechSchedule:()=>null,ScheduleGaps:()=>null,Section:ui.Section,Field:ui.Field,Users:icon,Plus:icon,Trash2:icon,api:()=>{throw Error('Unexpected request');}}};
- const prelude="const {useState,useEffect}=require('react');const {useDashboard,PhoneInput,TechSchedule,ScheduleGaps,Section,Field,Users,Plus,Trash2,api}=require('fixture');const inputClass='',secondaryButton='',subtleButton='';";
- new Function('require','exports',compile(prelude+'export '+part))(id=>deps[id]||require(id),out);
- const tree=out.Technicians({techs,onChange:value=>changes.push(value)});
- const all=[];function walk(node){if(!node||typeof node!=='object')return;all.push(node);for(const child of React.Children.toArray(node.props?.children))walk(child);}walk(tree);
- const phones=all.filter(node=>node.type===PhoneInput);
- assert.equal(phones[0].props.disabled,true);assert.equal(phones[1].props.disabled,false);
- phones[0].props.onValueChange('+16235550199');assert.equal(changes.length,0);
- const removals=all.filter(node=>node.type==='button'&&React.Children.toArray(node.props.children).includes('Remove'));
- assert.equal(removals[0].props.disabled,true);removals[0].props.onClick();assert.equal(changes.length,0);
- const bios=all.filter(node=>node.type==='textarea');
- assert.equal(bios.length,2);assert.ok(bios.every(node=>node.props.disabled&&node.props.placeholder==='Restricted'));
- bios[0].props.onChange({target:{value:'Unpermitted bio edit'}});assert.equal(changes.length,0);
- phones[1].props.onValueChange('+16235550198');assert.equal(changes[0][1].phone,'+16235550198');
- tree.props.action.props.onClick();assert.ok(changes.at(-1).at(-1).id.startsWith('tech-'));assert.notEqual(changes.at(-1).at(-1).id,'tech-ryan');
- assert.ok(all.some(node=>node.props?.hint==='Master Admin controls this SMS recipient number.'));
+ const PhoneInput=()=>null;const icon=()=>null;const out={};const confirms=[];const removed=[];const saved=[];
+ const Modal=({children})=>React.createElement('div',null,children);
+ const state=[];const useState=init=>{const value=typeof init==='function'?init():init;const slot=[value,next=>state.push(next)];return slot;};
+ const deps={react:{...React,useState,useEffect:()=>{}},fixture:{useDashboard:()=>({data:{integrations:{},appointments:[]},can:()=>false,showToast(){}}),PhoneInput,TechSchedule:()=>null,ScheduleGaps:()=>null,Section:ui.Section,Field:ui.Field,ErrorNote:ui.ErrorNote,Modal,Users:icon,Plus:icon,Trash2:icon,Pencil:icon,Save:icon,Loader2:icon,askConfirm:async(o)=>{confirms.push(o);return true;},displayPhone:v=>v,api:()=>{throw Error('Unexpected request');}}};
+ const prelude="const {useState,useEffect}=require('react');const {useDashboard,PhoneInput,TechSchedule,ScheduleGaps,Section,Field,ErrorNote,Modal,Users,Plus,Trash2,Pencil,Save,Loader2,askConfirm,displayPhone,api}=require('fixture');const inputClass='',secondaryButton='',subtleButton='',primaryButton='';";
+ new Function('require','exports',compile(prelude+part+'\nexports.Technicians=Technicians;exports.TechEditor=TechEditor;'))(id=>deps[id]||require(id),out);
+ const walkAll=tree=>{const all=[];(function walk(node){if(!node||typeof node!=='object')return;all.push(node);for(const child of React.Children.toArray(node.props?.children))walk(child);})(tree);return all;};
+
+ // The cards: the reserved recipient can't be removed; another tech can.
+ const cards=walkAll(out.Technicians({techs,config:{},onChange(){},onSaveSchedule:async()=>{},onSaveTech:async t=>saved.push(t),onRemoveTech:async id=>removed.push(id)}));
+ const removals=cards.filter(node=>node.type==='button'&&React.Children.toArray(node.props.children).includes('Remove'));
+ assert.equal(removals.length,2);
+ assert.equal(removals[0].props.disabled,true);await removals[0].props.onClick();assert.equal(confirms.length,0);assert.deepEqual(removed,[]);
+ assert.equal(removals[1].props.disabled,false);await removals[1].props.onClick();await new Promise(r=>setTimeout(r,0));
+ assert.equal(confirms.length,1);assert.deepEqual(removed,['tech-other']);
+ const edits=cards.filter(node=>node.type==='button'&&React.Children.toArray(node.props.children).includes('Edit'));
+ assert.equal(edits.length,2,'every tech has an Edit button');
+
+ // The Edit dialog for the reserved recipient: phone locked with the reason, bio restricted.
+ state.length=0;
+ const dialog=walkAll(out.TechEditor({tech:techs[0],isNew:false,users:null,taken:{},onCancel(){},onSave:async t=>saved.push(t)}));
+ const phone=dialog.find(node=>node.type===PhoneInput);
+ assert.equal(phone.props.disabled,true);
+ phone.props.onValueChange('+16235550199');assert.equal(state.length,0,'the number is not changed');
+ assert.ok(dialog.some(node=>node.props?.hint==='Master Admin controls this SMS recipient number.'));
+ const bio=dialog.find(node=>node.type==='textarea');
+ assert.ok(bio.props.disabled&&bio.props.placeholder==='Restricted');
+ bio.props.onChange({target:{value:'Unpermitted bio edit'}});assert.equal(state.length,0);
+ // Another tech's number can be changed.
+ const other=walkAll(out.TechEditor({tech:techs[1],isNew:false,users:null,taken:{},onCancel(){},onSave:async()=>{}})).find(node=>node.type===PhoneInput);
+ assert.equal(other.props.disabled,false);other.props.onValueChange('+16235550198');assert.equal(state.length,1);
 });

@@ -7,14 +7,15 @@ import { PhoneInput } from '../components/PhoneInput';
 import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { Technician } from './DashboardContext';
-import { BookOpen, Building2, CalendarClock, Check, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, Mail, MapPin, MessageSquare, Plus, RotateCcw, Route, Save, ShieldCheck, Sparkles, Tag, Target, Trash2, Users, X, AlertTriangle } from 'lucide-react';
+import { BookOpen, Building2, CalendarClock, Check, CheckCircle2, Code, Download, KeyRound, Loader2, Link2, Mail, MapPin, MessageSquare, Pencil, Plus, RotateCcw, Route, Save, ShieldCheck, Sparkles, Tag, Target, Trash2, Users, X, AlertTriangle } from 'lucide-react';
 import { api, saveText } from '../lib/api';
 import { askConfirm } from '../components/ConfirmDialog';
 import { useDashboard } from './DashboardContext';
 import { ErrorNote, Field, Modal, Section, Toggle, inputClass, primaryButton, secondaryButton, subtleButton } from './ui';
 import { money } from '../../shared/domain.mjs';
 import { DEFAULT_UPSELLS, PACKAGES } from '../../shared/catalog.mjs';
-import { WEEKDAYS, businessWeek, weekSummary, timeOffLabel, validTimeOffEntry, scheduleGaps } from '../../shared/tech-schedule.mjs';
+import { WEEKDAYS, businessWeek, weekSummary, timeOffLabel, validTimeOffEntry, scheduleGaps, dayHours, toOpenWeek, arrivalSpacing, ARRIVAL_SPACINGS, hasOwnHours, startTimesSummary } from '../../shared/tech-schedule.mjs';
+import { displayPhone } from '../customer/appointmentCard';
 import { COVERAGE_IN, COVERAGE_TRAVEL } from '../../shared/coverage.mjs';
 
 const ServiceAreaMap = lazy(() => import('./ServiceAreaMap').then((m) => ({ default: m.ServiceAreaMap })));
@@ -47,7 +48,8 @@ function sameDayExample(c: any) {
   const minNoticeHours = Math.max(12, c.sameDay.minNoticeHours);
   const bookedAt = Math.min(8, cutoffHour - 1);
   const earliest = bookedAt + minNoticeHours;
-  const first = (c.weekdayStarts as string[]).find((t) => Number(t.split(':')[0]) + Number(t.split(':')[1] || 0) / 60 >= earliest);
+  const weekdayStarts = [1, 2, 3, 4, 5].map((i) => dayHours(c, i).starts).find((list) => list.length) || [];
+  const first = weekdayStarts.find((t) => Number(t.split(':')[0]) + Number(t.split(':')[1] || 0) / 60 >= earliest);
   const offer = first ? `the first same-day time they can get is ${clock(first)}` : 'no start times are left today';
   return `Example: a customer booking at ${clock(bookedAt)} on a weekday — ${offer}. From ${clock(cutoffHour)} on, same-day times stop showing.`;
 }
@@ -234,6 +236,78 @@ function TimeBox({ label, value, onChange, disabled, invalid }: { label: string;
   );
 }
 
+/** One day in a weekly hours dialog: an on/off switch, then its two times (greyed out, still shown, when off). */
+function DayRow({ index, day, busy, switchLabel, startLabel, endLabel, badText, onChange, note }: { index: number; day: { on: boolean; start: string; end: string }; busy: boolean; switchLabel: string; startLabel: string; endLabel: string; badText: string; onChange: (patch: any) => void; note?: React.ReactNode }) {
+  const bad = day.on && (!day.start || !day.end || day.start >= day.end);
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-[9.5rem_1fr] gap-2 sm:items-center">
+      <div className="flex items-center justify-between sm:justify-start gap-3">
+        <span className="w-24 text-sm font-bold text-slate-800">{WEEKDAYS[index]}</span>
+        <Switch checked={day.on} onChange={(v) => onChange({ on: v })} label={switchLabel} disabled={busy} />
+      </div>
+      <div>
+        <div className="grid grid-cols-2 gap-2" data-day={WEEKDAYS[index]}>
+          <TimeBox label={startLabel} value={day.start} disabled={!day.on || busy} invalid={bad} onChange={(v) => onChange({ start: v })} />
+          <TimeBox label={endLabel} value={day.end} disabled={!day.on || busy} invalid={bad} onChange={(v) => onChange({ end: v })} />
+        </div>
+        {bad && <p role="alert" className="mt-1 text-xs font-semibold text-rose-700">{badText}</p>}
+        {note}
+      </div>
+    </div>
+  );
+}
+
+const spacingLabel = (mins: number) => (mins < 60 ? `${mins} minutes` : mins === 60 ? '1 hour' : mins === 90 ? '1½ hours' : `${mins / 60} hours`);
+
+/**
+ * The company's "Business hours" dialog, laid out like a technician's schedule: each day open or
+ * closed with its opening and closing time, and how often BOB offers a start time from opening.
+ * Save writes it straight away.
+ */
+function BusinessHoursEditor({ config, onCancel, onSave }: { config: any; onCancel: () => void; onSave: (patch: { openWeek: string[]; arrivalEveryMins: number }) => Promise<void> }) {
+  const [week, setWeek] = useState(() => businessWeek(config).map((d: any) => ({ ...d })));
+  const [every, setEvery] = useState<number>(() => arrivalSpacing(config));
+  const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const set = (i: number, patch: any) => setWeek((w) => w.map((d, j) => (j === i ? { ...d, ...patch } : d)));
+  const bad = (d: any) => d.on && (!d.start || !d.end || d.start >= d.end);
+  const noneOpen = !week.some((d) => d.on);
+  const preview = { ...config, openWeek: toOpenWeek(week.map((d) => (bad(d) ? { ...d, on: false } : d))), arrivalEveryMins: every };
+  const replacesLists = !hasOwnHours(config) && WEEKDAYS.some((_, i) => dayHours(preview, i).starts.join() !== dayHours(config, i).starts.join());
+  const save = async () => {
+    setBusy(true); setError('');
+    try { await onSave({ openWeek: toOpenWeek(week), arrivalEveryMins: every }); } catch (e) { setError((e as Error).message); setBusy(false); }
+  };
+  return (
+    <Modal title="Business hours" subtitle="Arizona time" onClose={busy ? () => {} : onCancel}
+      footer={
+        <div className="flex justify-end gap-2 w-full">
+          <button type="button" className={secondaryButton} disabled={busy} onClick={onCancel}>Cancel</button>
+          <button type="button" className={primaryButton} disabled={busy || noneOpen || week.some(bad)} onClick={() => void save()}>{busy ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}Save</button>
+        </div>
+      }>
+      <div className="space-y-3" data-business-hours-editor>
+        <p className="text-xs text-slate-500 -mt-1">When BOB offers visits. Technicians on business hours follow these too.</p>
+        {week.map((d, i) => (
+          <DayRow key={i} index={i} day={d} busy={busy} switchLabel={`Open ${WEEKDAYS[i]}`} startLabel="Opens" endLabel="Closes"
+            badText="Closing time needs to be after opening time." onChange={(patch) => set(i, patch)}
+            note={d.on && !bad(d) ? <p className="mt-1 text-[11px] font-semibold text-slate-500" data-start-times={WEEKDAYS[i]}>Start times: {dayHours(preview, i).starts.map(clock).join(', ')}</p> : null} />
+        ))}
+        <div className="max-w-xs">
+          <Field label="Offer a start time every">
+            <select className={inputClass} value={every} disabled={busy} onChange={(e) => setEvery(Number(e.target.value))}>
+              {ARRIVAL_SPACINGS.map((m) => <option key={m} value={m}>{spacingLabel(m)}</option>)}
+            </select>
+          </Field>
+        </div>
+        {noneOpen && <p role="alert" className="text-xs font-semibold text-rose-700">Keep at least one day open. To stop online booking for a while, turn it off under Online booking.</p>}
+        {replacesLists && <p className="text-xs font-semibold text-amber-800">Saving replaces your typed-in start times with the ones shown here.</p>}
+        <p className="text-xs text-slate-500 leading-snug">BOB offers a start time only when the whole visit fits before closing: a 2-hour visit at 3 PM needs you open until 5 PM. Closed dates, each tech's schedule and Jobber still apply.</p>
+        {error && <ErrorNote>{error}</ErrorNote>}
+      </div>
+    </Modal>
+  );
+}
+
 /**
  * The "Edit schedule" dialog: every day of the week with an on/off switch and its start and end
  * times. Save writes it straight away; "Use business hours" goes back to the default.
@@ -262,19 +336,8 @@ function ScheduleEditor({ name, initial, config, onCancel, onSave }: { name: str
           {Array.isArray(initial) && <button type="button" className={subtleButton} disabled={busy} onClick={() => void save(null)}><RotateCcw size={14} />Use business hours</button>}
         </div>
         {week.map((d, i) => (
-          <div key={i} className="grid grid-cols-1 sm:grid-cols-[9.5rem_1fr] gap-2 sm:items-center">
-            <div className="flex items-center justify-between sm:justify-start gap-3">
-              <span className="w-24 text-sm font-bold text-slate-800">{WEEKDAYS[i]}</span>
-              <Switch checked={d.on} onChange={(v) => set(i, { on: v })} label={`${name || 'Technician'} works ${WEEKDAYS[i]}`} disabled={busy} />
-            </div>
-            <div>
-              <div className="grid grid-cols-2 gap-2" data-day={WEEKDAYS[i]}>
-                <TimeBox label="Start time" value={d.start} disabled={!d.on || busy} invalid={bad(d)} onChange={(v) => set(i, { start: v })} />
-                <TimeBox label="End time" value={d.end} disabled={!d.on || busy} invalid={bad(d)} onChange={(v) => set(i, { end: v })} />
-              </div>
-              {bad(d) && <p role="alert" className="mt-1 text-xs font-semibold text-rose-700">End time needs to be after the start time.</p>}
-            </div>
-          </div>
+          <DayRow key={i} index={i} day={d} busy={busy} switchLabel={`${name || 'Technician'} works ${WEEKDAYS[i]}`} startLabel="Start time" endLabel="End time"
+            badText="End time needs to be after the start time." onChange={(patch) => set(i, patch)} />
         ))}
         <p className="text-xs text-slate-500 leading-snug">BOB only offers {name || 'this tech'} when the whole visit fits: a 90-minute visit at 3 PM needs them until 4:30 PM. Jobber is still checked before every booking.</p>
         {error && <ErrorNote>{error}</ErrorNote>}
@@ -375,53 +438,110 @@ function TechSchedule({ tech, online, onChange, onSaveSchedule }: { tech: Techni
   );
 }
 
-function Technicians({ techs, config, onChange, onSaveSchedule }: { techs: Technician[]; config: any; onChange: (next: Technician[]) => void; onSaveSchedule: (id: string, week: Technician['workWeek']) => Promise<void> }) {
-  const { data, can } = useDashboard();
+const TECH_STATUS: Record<string, string> = { available: 'Available', on_route: 'On the way', on_job: 'On a job', off_duty: 'Off duty' };
+
+/** Add or edit one technician's details. Save writes it straight away. */
+function TechEditor({ tech, isNew, users, taken, onCancel, onSave }: { tech: Technician; isNew: boolean; users: any[] | null; taken: Record<string, string>; onCancel: () => void; onSave: (tech: Technician) => Promise<void> }) {
+  const { can } = useDashboard();
+  const [t, setT] = useState<Technician>(() => ({ ...tech }));
+  const [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const phoneProtected = tech.id === 'tech-ryan' && !can('integrations.manage');
+  const set = (patch: Partial<Technician>) => {
+    if (phoneProtected && 'phone' in patch) return;
+    if (!can('finance.view') && 'bio' in patch) return;
+    setT((x) => ({ ...x, ...patch }));
+  };
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!t.name.trim()) { setError('Add their name.'); return; }
+    setBusy(true); setError('');
+    try { await onSave({ ...t, name: t.name.trim() }); } catch (err) { setError((err as Error).message); setBusy(false); }
+  };
+  return (
+    <Modal title={isNew ? 'Add technician' : 'Edit technician'} subtitle={isNew ? undefined : tech.name} onClose={busy ? () => {} : onCancel}>
+      <form className="space-y-3" onSubmit={save} data-tech-editor>
+        <div className="grid grid-cols-[1fr_auto] gap-3 items-end">
+          <Field label="Name"><input className={inputClass} maxLength={100} value={t.name} disabled={busy} onChange={(e) => set({ name: e.target.value })} /></Field>
+          <Field label="Color"><input type="color" className="h-[42px] w-14 rounded-xl border border-slate-200 bg-white p-1" value={t.color} disabled={busy} onChange={(e) => set({ color: e.target.value })} /></Field>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Field label="Phone" hint={phoneProtected ? 'Master Admin controls this SMS recipient number.' : undefined}><PhoneInput className={inputClass} type="tel" value={t.phone} disabled={phoneProtected || busy} onValueChange={(value) => set({ phone: value })} /></Field>
+          <Field label="Truck or van"><input className={inputClass} value={t.vehicle || ''} disabled={busy} onChange={(e) => set({ vehicle: e.target.value })} placeholder="Van 2" /></Field>
+          <Field label="Home area"><input className={inputClass} value={t.zone} disabled={busy} onChange={(e) => set({ zone: e.target.value })} /></Field>
+          <Field label="Status today" hint="Off duty only keeps them off today's openings. Other days follow their work schedule and their Jobber calendar.">
+            <select className={inputClass} value={t.status} disabled={busy} onChange={(e) => set({ status: e.target.value as Technician['status'] })}>
+              {Object.entries(TECH_STATUS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </Field>
+        </div>
+        <Field label="Jobber user" hint={users ? 'BOB checks this person\'s Jobber calendar before booking and assigns the visit to them.' : 'Connect Jobber to link technicians.'}>
+          <select className={inputClass} value={t.jobberUserId || ''} disabled={!users || busy} onChange={(e) => set({ jobberUserId: e.target.value })}>
+            <option value="">Not linked (uses the whole crew calendar)</option>
+            {(users || []).map((u) => <option key={u.id} value={u.id} disabled={!!taken[u.id]}>{u.name}{taken[u.id] ? ` (linked to ${taken[u.id]})` : ''}</option>)}
+          </select>
+        </Field>
+        <Field label="Short bio for the office" hint={!can('finance.view') ? 'Restricted: viewing and editing office bios requires financial and unrestricted notes access.' : undefined}><textarea rows={2} className={inputClass} disabled={!can('finance.view') || busy} placeholder={!can('finance.view') ? 'Restricted' : undefined} value={can('finance.view') ? t.bio || '' : ''} onChange={(e) => set({ bio: e.target.value })} /></Field>
+        {error && <ErrorNote>{error}</ErrorNote>}
+        <div className="flex justify-end gap-2.5">
+          <button type="button" className={secondaryButton} disabled={busy} onClick={onCancel}>Cancel</button>
+          <button className={primaryButton} disabled={busy}>{busy ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}{isNew ? 'Add technician' : 'Save'}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+function Technicians({ techs, config, onChange, onSaveSchedule, onSaveTech, onRemoveTech }: { techs: Technician[]; config: any; onChange: (next: Technician[]) => void; onSaveSchedule: (id: string, week: Technician['workWeek']) => Promise<void>; onSaveTech: (tech: Technician) => Promise<void>; onRemoveTech: (id: string) => Promise<void> }) {
+  const { data, can, showToast } = useDashboard();
   const [users, setUsers] = useState<any[] | null>(null);
+  const [editing, setEditing] = useState<{ tech: Technician; isNew: boolean } | null>(null);
   useEffect(() => {
     if (can('integrations.manage') && data.integrations?.jobber?.connected) api('/api/admin/jobber/users').then((r) => setUsers(r.users)).catch(() => setUsers([]));
   }, [data.integrations?.jobber?.connected, can]);
   const recipientProtected = (tech: Technician) => tech.id === 'tech-ryan' && !can('integrations.manage');
-  const edit = (i: number, patch: any) => {
-    if (recipientProtected(techs[i]) && 'phone' in patch) return;
-    if (!can('finance.view') && 'bio' in patch) return;
-    onChange(techs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  // Time off is still edited on the card and saved with the page.
+  const edit = (i: number, patch: any) => onChange(techs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const jobberName = (t: Technician) => (!t.jobberUserId ? 'Not linked to Jobber' : `Jobber: ${users?.find((u) => u.id === t.jobberUserId)?.name || 'linked'}`);
+  const upcoming = (t: Technician) => (data.appointments || []).filter((a: any) => a.technicianId === t.id && !['cancelled', 'failed'].includes(a.status) && Date.parse(a.scheduledAt) > Date.now()).length;
+  const remove = async (t: Technician) => {
+    if (recipientProtected(t) || techs.length < 2) return;
+    const name = t.name || 'this technician', n = upcoming(t);
+    const message = n
+      ? `${name} has ${n} upcoming visit${n === 1 ? '' : 's'} booked through BOB. ${n === 1 ? 'It stays' : 'They stay'} booked in Jobber, so reassign ${n === 1 ? 'it' : 'them'} there. Past visits keep their name.`
+      : 'BOB stops offering them right away. Past visits keep their name.';
+    if (!(await askConfirm({ danger: true, title: `Remove ${name}?`, message, confirmLabel: 'Remove' }))) return;
+    try { await onRemoveTech(t.id); } catch (e) { showToast({ type: 'error', title: "Couldn't remove", description: (e as Error).message }); }
   };
+  const taken = (id: string) => Object.fromEntries(techs.filter((x) => x.id !== id && x.jobberUserId).map((x) => [x.jobberUserId, x.name]));
   return (
     <Section icon={<Users size={18} />} title="Technicians" description="Set each tech's work schedule and time off here: BOB only offers a tech when the whole visit falls on their shift. Link each tech to their Jobber user so BOB also checks their Jobber calendar, fresh, before every booking and assigns the visit to them. Visits for a Jobber user no tech is linked to (or no one) block every tech."
-      action={<button className={secondaryButton} onClick={() => onChange([...techs, { id: `tech-${crypto.randomUUID().slice(0, 8)}`, name: '', phone: '', zone: 'West Valley', status: 'off_duty', color: '#3b82f6', jobberUserId: '', vehicle: '', bio: '' } as Technician])}><Plus size={15} />Add technician</button>}>
+      action={<button className={secondaryButton} onClick={() => setEditing({ tech: { id: `tech-${crypto.randomUUID().slice(0, 8)}`, name: '', phone: '', zone: 'West Valley', status: 'off_duty', color: '#3b82f6', jobberUserId: '', vehicle: '', bio: '', workWeek: null, timeOff: [] } as Technician, isNew: true })}><Plus size={15} />Add technician</button>}>
       <ScheduleGaps techs={techs} config={config} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {techs.map((t, i) => (
-          <div key={t.id} className="rounded-2xl border border-slate-200 p-4 space-y-3 bg-slate-50/50">
-            <div className="grid grid-cols-[1fr_auto] gap-3 items-end">
-              <Field label="Name"><input className={inputClass} value={t.name} onChange={(e) => edit(i, { name: e.target.value })} /></Field>
-              <Field label="Color"><input type="color" className="h-[42px] w-14 rounded-xl border border-slate-200 bg-white p-1" value={t.color} onChange={(e) => edit(i, { color: e.target.value })} /></Field>
+          <div key={t.id} className="rounded-2xl border border-slate-200 p-4 space-y-3 bg-slate-50/50" data-tech={t.id}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span aria-hidden="true" className="size-3 rounded-full shrink-0 ring-2 ring-white shadow" style={{ background: t.color }} />
+                  <h4 className="text-base font-extrabold text-slate-900 truncate">{t.name || 'Unnamed technician'}</h4>
+                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full border ${t.status === 'off_duty' ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-emerald-50 text-emerald-800 border-emerald-200'}`}>{TECH_STATUS[t.status] || t.status}</span>
+                </div>
+                <p className="text-xs text-slate-600 mt-1" data-tech-details>{[t.phone ? displayPhone(t.phone) : '', t.vehicle, t.zone].filter(Boolean).join(' · ') || 'No phone or truck yet'}</p>
+                <p className="text-xs text-slate-500">{jobberName(t)} · {(config?.activeTechnicianIds || []).includes(t.id) ? 'Takes online bookings' : 'Not taking online bookings'}</p>
+              </div>
+              <div className="flex flex-wrap justify-end gap-1.5 shrink-0">
+                <button type="button" className={secondaryButton} aria-label={`Edit ${t.name || 'technician'}`} onClick={() => setEditing({ tech: t, isNew: false })}><Pencil size={14} />Edit</button>
+                {techs.length > 1 && (
+                  <button type="button" className={`${subtleButton} text-rose-700`} aria-label={`Remove ${t.name || 'technician'}`} disabled={recipientProtected(t)} title={recipientProtected(t) ? 'Master Admin controls this SMS recipient.' : undefined} onClick={() => void remove(t)}><Trash2 size={14} />Remove</button>
+                )}
+              </div>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <Field label="Phone" hint={recipientProtected(t) ? 'Master Admin controls this SMS recipient number.' : undefined}><PhoneInput className={inputClass} type="tel" value={t.phone} disabled={recipientProtected(t)} onValueChange={(value) => edit(i, { phone: value })} /></Field>
-              <Field label="Truck or van"><input className={inputClass} value={t.vehicle || ''} onChange={(e) => edit(i, { vehicle: e.target.value })} placeholder="Van 2" /></Field>
-              <Field label="Home area"><input className={inputClass} value={t.zone} onChange={(e) => edit(i, { zone: e.target.value })} /></Field>
-              <Field label="Status today" hint="Off duty only keeps them off today's openings. Other days follow their work schedule below and their Jobber calendar.">
-                <select className={inputClass} value={t.status} onChange={(e) => edit(i, { status: e.target.value })}>
-                  <option value="available">Available</option><option value="on_route">On the way</option><option value="on_job">On a job</option><option value="off_duty">Off duty</option>
-                </select>
-              </Field>
-            </div>
-            <Field label="Jobber user" hint={users ? undefined : 'Connect Jobber to link technicians.'}>
-              <select className={inputClass} value={t.jobberUserId || ''} disabled={!users} onChange={(e) => edit(i, { jobberUserId: e.target.value })}>
-                <option value="">Not linked (uses the whole crew calendar)</option>
-                {(users || []).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-              </select>
-            </Field>
             <TechSchedule tech={t} online={(config?.activeTechnicianIds || []).includes(t.id)} onChange={(patch) => edit(i, patch)} onSaveSchedule={(week) => onSaveSchedule(t.id, week)} />
-            <Field label="Short bio for the office" hint={!can('finance.view') ? 'Restricted: viewing and editing office bios requires financial and unrestricted notes access.' : undefined}><textarea rows={2} className={inputClass} disabled={!can('finance.view')} placeholder={!can('finance.view') ? 'Restricted' : undefined} value={can('finance.view') ? t.bio || '' : ''} onChange={(e) => edit(i, { bio: e.target.value })} /></Field>
-            {techs.length > 1 && !data.appointments.some((a) => a.technicianId === t.id) && (
-              <button className={`${subtleButton} text-rose-700`} disabled={recipientProtected(t)} title={recipientProtected(t) ? 'Master Admin controls this SMS recipient.' : undefined} onClick={() => { if (!recipientProtected(t)) onChange(techs.filter((_, j) => j !== i)); }}><Trash2 size={14} />Remove</button>
-            )}
           </div>
         ))}
       </div>
+      {editing && <TechEditor tech={editing.tech} isNew={editing.isNew} users={users} taken={taken(editing.tech.id)} onCancel={() => setEditing(null)} onSave={async (tech) => { await onSaveTech(tech); setEditing(null); }} />}
     </Section>
   );
 }
@@ -785,8 +905,9 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
   const savedConfig = React.useRef(structuredClone(data.config));
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
-  const [text, setText] = useState(() => ({ zips: data.config.serviceZips.join(', '), travel: (data.config.travelZips || []).join(', '), blocked: data.config.blockedDates.join(', '), weekday: data.config.weekdayStarts.join(', '), saturday: data.config.saturdayStarts.join(', ') }));
+  const [text, setText] = useState(() => ({ zips: data.config.serviceZips.join(', '), travel: (data.config.travelZips || []).join(', '), blocked: data.config.blockedDates.join(', ') }));
   const [address, setAddress] = useState(''), [check, setCheck] = useState<any>(null);
+  const [hoursOpen, setHoursOpen] = useState(false);
   const [techs, setTechs] = useState<Technician[]>(data.technicians), [techDirty, setTechDirty] = useState(false);
   useEffect(() => {
     if (!dirty && !techDirty) return;
@@ -800,7 +921,7 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
     if (dirty) return;
     savedConfig.current = structuredClone(data.config);
     setC(structuredClone(data.config));
-    setText({ zips: data.config.serviceZips.join(', '), travel: (data.config.travelZips || []).join(', '), blocked: data.config.blockedDates.join(', '), weekday: data.config.weekdayStarts.join(', '), saturday: data.config.saturdayStarts.join(', ') });
+    setText({ zips: data.config.serviceZips.join(', '), travel: (data.config.travelZips || []).join(', '), blocked: data.config.blockedDates.join(', ') });
   }, [data.config, dirty]);
 
   const editable = (path: string) => { const permission = (CONFIG_FIELD_PERMISSIONS as Record<string, string>)[path]; return !!permission && can(permission); };
@@ -831,13 +952,36 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
       if (dirty) { const patch = changedConfig(savedConfig.current, c); if (Object.keys(patch).length) await mutate('/api/admin/config', { version: c.version, ...patch }, 'PATCH', done); setDirty(false); }
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
+  const stripTech = (tech: Technician) => { const next: any = { ...tech }; if (!can('integrations.manage')) delete next.jobberUserId; if (!can('finance.view')) delete next.bio; return next; };
   /** The schedule dialog saves one tech's hours straight away, leaving other unsaved edits as they are. */
   const saveSchedule = async (id: string, workWeek: Technician['workWeek']) => {
     const apply = (list: Technician[]) => list.map((t) => (t.id === id ? { ...t, workWeek } : t));
     if (!data.technicians.some((t) => t.id === id)) { setTechs(apply); setTechDirty(true); return; } // a new tech: saved with the page
-    const strip = (tech: Technician) => { const next: any = { ...tech }; if (!can('integrations.manage')) delete next.jobberUserId; if (!can('finance.view')) delete next.bio; return next; };
-    await mutate('/api/admin/technicians', { technicians: apply(data.technicians).map(strip) }, 'POST', `${techs.find((t) => t.id === id)?.name || 'Technician'}'s schedule saved`);
+    await mutate('/api/admin/technicians', { technicians: apply(data.technicians).map(stripTech) }, 'POST', `${techs.find((t) => t.id === id)?.name || 'Technician'}'s schedule saved`);
     setTechs(apply);
+  };
+  /** The technician dialog adds or updates one tech straight away; other unsaved edits (time off) stay as they are. */
+  const saveTech = async (tech: Technician) => {
+    const exists = data.technicians.some((t) => t.id === tech.id);
+    const details = { name: tech.name, color: tech.color, phone: tech.phone, vehicle: tech.vehicle, zone: tech.zone, status: tech.status, jobberUserId: tech.jobberUserId, bio: tech.bio };
+    const apply = (list: Technician[]) => (list.some((t) => t.id === tech.id) ? list.map((t) => (t.id === tech.id ? { ...t, ...details } : t)) : [...list, tech]);
+    await mutate('/api/admin/technicians', { technicians: apply(data.technicians).map(stripTech) }, 'POST', exists ? `${tech.name} saved` : `${tech.name} added`);
+    setTechs(apply);
+  };
+  const removeTech = async (id: string) => {
+    const name = techs.find((t) => t.id === id)?.name || 'Technician';
+    await mutate('/api/admin/technicians', { technicians: data.technicians.filter((t) => t.id !== id).map(stripTech) }, 'POST', `${name} removed`);
+    setTechs((list) => list.filter((t) => t.id !== id));
+    // Also off the "taking online bookings" list (the server drops them on the next save too).
+    savedConfig.current = { ...savedConfig.current, activeTechnicianIds: (savedConfig.current.activeTechnicianIds || []).filter((x: string) => x !== id) };
+    setC((cur: any) => ({ ...cur, activeTechnicianIds: (cur.activeTechnicianIds || []).filter((x: string) => x !== id) }));
+  };
+  /** The Business hours dialog saves straight away; other unsaved settings on the page stay as they are. */
+  const saveHours = async (patch: { openWeek: string[]; arrivalEveryMins: number }) => {
+    const r = await mutate('/api/admin/config', { version: savedConfig.current.version, ...patch }, 'PATCH', 'Business hours saved');
+    const version = r?.config?.version ?? savedConfig.current.version + 1;
+    savedConfig.current = { ...savedConfig.current, ...patch, version };
+    setC((cur: any) => ({ ...cur, ...patch, version }));
   };
   const discard = () => { setDirty(false); setTechDirty(false); setError(''); };
   const checkAddress = async () => {
@@ -971,12 +1115,15 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
       <RevenuePacing value={c.revenuePacing} onChange={(patch) => nested('revenuePacing', patch)} />
 
             <Section icon={<CalendarClock size={18} />} title="Hours and capacity" description="Arizona time. Jobber's calendar still decides which of these times are actually open.">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Mon–Fri start times" hint="24-hour, comma separated"><input className={inputClass} value={text.weekday} onChange={(e) => { setText({ ...text, weekday: e.target.value }); update('weekdayStarts', list(e.target.value)); }} /></Field>
-          <Field label="Mon–Fri close"><input className={inputClass} type="time" value={c.weekdayClose} onChange={(e) => update('weekdayClose', e.target.value)} /></Field>
-          <Field label="Saturday start times"><input className={inputClass} value={text.saturday} onChange={(e) => { setText({ ...text, saturday: e.target.value }); update('saturdayStarts', list(e.target.value)); }} /></Field>
-          <Field label="Saturday close"><input className={inputClass} type="time" value={c.saturdayClose} onChange={(e) => update('saturdayClose', e.target.value)} /></Field>
+        <div className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 flex flex-wrap items-start justify-between gap-3" data-business-hours>
+          <div className="min-w-0">
+            <p className="text-sm font-bold text-slate-800">Business hours</p>
+            <p className="text-xs font-semibold text-slate-600" data-hours-summary>{weekSummary(businessWeek(c))}</p>
+            <p className="text-xs text-slate-500" data-hours-starts>{hasOwnHours(c) ? `A start time every ${spacingLabel(arrivalSpacing(c))}, from opening` : `Start times: ${startTimesSummary(c)}`}</p>
+          </div>
+          <button type="button" className={`${secondaryButton} shrink-0`} disabled={!editable('openWeek')} onClick={() => setHoursOpen(true)}><CalendarClock size={14} />Edit hours</button>
         </div>
+        {hoursOpen && <BusinessHoursEditor config={c} onCancel={() => setHoursOpen(false)} onSave={async (patch) => { await saveHours(patch); setHoursOpen(false); }} />}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <Num label="Most jobs per day" value={c.maxJobsPerDay} onChange={(n) => update('maxJobsPerDay', n)} />
           <Num label="Booking notice" suffix="hours" min={12} value={Math.max(12, c.leadHours)} onChange={(n) => update('leadHours', n)} hint="At least 12 hours for every booking. Longer notice still applies." />
@@ -992,7 +1139,7 @@ export function SettingsPage({ active = true }: { active?: boolean }) {
         <Field label="Closed dates" hint="YYYY-MM-DD, comma separated"><textarea rows={2} className={inputClass} value={text.blocked} onChange={(e) => { setText({ ...text, blocked: e.target.value }); update('blockedDates', list(e.target.value)); }} /></Field>
       </Section>
 
-            <Technicians techs={techs} config={c} onChange={(next) => { setTechs(next); setTechDirty(true); }} onSaveSchedule={saveSchedule} />
+            <Technicians techs={techs} config={c} onChange={(next) => { setTechs(next); setTechDirty(true); }} onSaveSchedule={saveSchedule} onSaveTech={saveTech} onRemoveTech={removeTech} />
             {can('integrations.manage') && <AlsoAssign value={c.alsoAssignJobberUserIds || []} techs={techs} disabled={!editable('alsoAssignJobberUserIds')} onChange={(next) => update('alsoAssignJobberUserIds', next)} />}
       </fieldset></div>}
 

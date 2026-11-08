@@ -1738,6 +1738,8 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
               catch { errors.push('Email HTML must produce readable content within the allowed size.'); }
             }
           }
+          // A technician removed since keeps no place in the list; naming someone who doesn't exist is still refused.
+          next.activeTechnicianIds = next.activeTechnicianIds.filter((id) => known.includes(id) || !(old.activeTechnicianIds || []).includes(id));
           if (next.activeTechnicianIds.some((id) => !known.includes(id))) errors.push("Select a known technician.");
           if (errors.length) fail(400, errors.join(" "));
           await store.set("config", next);

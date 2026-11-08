@@ -67,5 +67,6 @@ export const CONFIG_FIELD_PERMISSIONS = Object.freeze({
   'upsells.dryerflexEnabled':'settings.services.manage', 'upsells.dryerflexTitle':'settings.services.manage', 'upsells.dryerflexBadge':'settings.services.manage', 'upsells.dryerflexWasCents':'settings.services.manage', 'upsells.dryerflexPoints':'settings.services.manage', 'upsells.dryerflexLink':'settings.services.manage', 'upsells.foggingEnabled':'settings.services.manage', 'upsells.foggingTitle':'settings.services.manage', 'upsells.foggingDescription':'settings.services.manage', 'upsells.bundleEnabled':'settings.services.manage', 'upsells.bundleSavingsCents':'settings.services.manage', 'upsells.ultimateEnabled':'settings.services.manage', 'upsells.ultimatePitch':'settings.services.manage',
   bufferMinutes:'settings.schedule.manage', minVisitMinutes:'settings.schedule.manage', maxJobsPerDay:'settings.schedule.manage', leadHours:'settings.schedule.manage', horizonDays:'settings.schedule.manage',
   weekdayStarts:'settings.schedule.manage', weekdayClose:'settings.schedule.manage', saturdayStarts:'settings.schedule.manage', saturdayClose:'settings.schedule.manage',
+  openWeek:'settings.schedule.manage', arrivalEveryMins:'settings.schedule.manage',
   blockedDates:'settings.schedule.manage', activeTechnicianIds:'settings.schedule.manage', alsoAssignJobberUserIds:'integrations.manage',
 });

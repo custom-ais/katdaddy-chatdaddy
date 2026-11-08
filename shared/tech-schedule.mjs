@@ -9,6 +9,9 @@
 //   (no start/end = the whole day; with them, that window on each day in the range).
 
 import { dateTime } from "./domain.mjs";
+import { ARRIVAL_SPACINGS, hasOwnHours, minutes, hhmm } from "./business-hours.mjs";
+
+export { ARRIVAL_SPACINGS, hasOwnHours, validOpenWeek } from "./business-hours.mjs";
 
 export const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -16,12 +19,58 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const realDay = (d) => DAY.test(d) && !Number.isNaN(Date.parse(`${d}T12:00:00Z`)) && new Date(`${d}T12:00:00Z`).toISOString().slice(0, 10) === d;
 export const MAX_TIME_OFF = 100;
 
-/** A 7-day schedule matching the business hours, as the starting point for a custom one. */
+// ---- Business hours -------------------------------------------------------------------------
+// Settings → Scheduling & team → Business hours: each day open or closed, with its opening and
+// closing time, kept as 7 strings, Sunday first ("" = closed, "09:00-17:00" = open 9 to 5). BOB
+// offers a start time at opening and then every `arrivalEveryMins`, as long as the visit fits
+// before closing. Until those are saved (openWeek is []), the older lists still apply: Mon–Fri and
+// Saturday start times with their closing times, closed Sundays.
+
+/**
+ * Saves the editor's 7 days of { on, start, end } as business hours ("" for a closed day).
+ * @param {{ on: boolean, start: string, end: string }[]} week
+ * @returns {string[]}
+ */
+export function toOpenWeek(week) {
+  return week.map((d) => (d.on ? `${d.start}-${d.end}` : ""));
+}
+
+/**
+ * The business hours as 7 days of { on, start, end }, Sunday first.
+ * @param {any} config
+ * @returns {{ on: boolean, start: string, end: string }[]}
+ */
 export function businessWeek(config) {
+  if (hasOwnHours(config)) {
+    return config.openWeek.map((d, i) => (d ? { on: true, start: d.slice(0, 5), end: d.slice(6) } : { on: false, start: i === 6 ? "10:00" : "09:00", end: i === 6 ? "14:00" : "17:00" }));
+  }
   const first = (list, fallback) => (Array.isArray(list) && list.length ? [...list].sort()[0] : fallback);
-  const weekday = { on: true, start: first(config?.weekdayStarts, "09:00"), end: config?.weekdayClose || "17:00" };
+  const weekday = { on: Array.isArray(config?.weekdayStarts) ? config.weekdayStarts.length > 0 : true, start: first(config?.weekdayStarts, "09:00"), end: config?.weekdayClose || "17:00" };
   const saturday = { on: Array.isArray(config?.saturdayStarts) && config.saturdayStarts.length > 0, start: first(config?.saturdayStarts, "10:00"), end: config?.saturdayClose || "14:00" };
   return [{ on: false, start: "09:00", end: "17:00" }, weekday, weekday, weekday, weekday, weekday, saturday].map((d) => ({ ...d }));
+}
+
+/** How often start times are offered with saved hours: Settings' choice, else the gap in the older Mon–Fri list (2 hours by default). */
+export function arrivalSpacing(config) {
+  if (ARRIVAL_SPACINGS.includes(config?.arrivalEveryMins)) return config.arrivalEveryMins;
+  const list = [...(config?.weekdayStarts || [])].sort();
+  const gap = list.length > 1 ? minutes(list[1]) - minutes(list[0]) : 120;
+  return ARRIVAL_SPACINGS.includes(gap) ? gap : 120;
+}
+
+/** The start times offered on a weekday (0 = Sunday) and when that day closes; no start times = closed. */
+export function dayHours(config, weekday) {
+  if (hasOwnHours(config)) {
+    const day = config.openWeek[weekday];
+    if (!day) return { starts: [], close: "" };
+    const step = arrivalSpacing(config), open = minutes(day.slice(0, 5)), close = minutes(day.slice(6)), starts = [];
+    for (let t = open; t < close; t += step) starts.push(hhmm(t));
+    return { starts, close: day.slice(6) };
+  }
+  if (weekday === 0) return { starts: [], close: "" };
+  return weekday === 6
+    ? { starts: [...(config?.saturdayStarts || [])], close: config?.saturdayClose || "14:00" }
+    : { starts: [...(config?.weekdayStarts || [])], close: config?.weekdayClose || "17:00" };
 }
 
 export function validWorkWeek(week) {
@@ -110,11 +159,23 @@ export const timeOffLabel = (t) => {
 const weekdayOf = (date) => new Date(`${date}T12:00:00-07:00`).getUTCDay();
 const addDays = (date, n) => new Date(Date.parse(`${date}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 
-/** The weekdays the business is open for online booking (0 = Sunday): Mon–Fri and Saturday by their start times. */
-export const openWeekdays = (config) => [
-  ...((config?.weekdayStarts || []).length ? [1, 2, 3, 4, 5] : []),
-  ...((config?.saturdayStarts || []).length ? [6] : []),
-];
+/** "Mon–Fri 09:00, 11:00, 13:00, 15:00; Sat 10:00, 12:00; closed Sun": the start times by day, for the smart chat. */
+export function startTimesSummary(config) {
+  const order = [1, 2, 3, 4, 5, 6, 0], groups = [], closed = [];
+  for (const i of order) {
+    const label = dayHours(config, i).starts.join(", ");
+    if (!label) { closed.push(WEEKDAYS[i].slice(0, 3)); continue; }
+    const last = groups.at(-1);
+    if (last && last.label === label && order.indexOf(i) === order.indexOf(last.to) + 1) last.to = i;
+    else groups.push({ from: i, to: i, label });
+  }
+  const short = (i) => WEEKDAYS[i].slice(0, 3);
+  const open = groups.map((g) => `${short(g.from)}${g.to !== g.from ? `–${short(g.to)}` : ""} ${g.label}`);
+  return [...open, ...(closed.length ? [`closed ${closed.join(", ")}`] : [])].join("; ") || "no start times set";
+}
+
+/** The weekdays the business is open for online booking (0 = Sunday): the days with start times. */
+export const openWeekdays = (config) => [0, 1, 2, 3, 4, 5, 6].filter((i) => dayHours(config, i).starts.length > 0);
 
 /** Whether the tech works at all that day: their weekly schedule (business hours when none) and no all-day time off. */
 export function worksOn(tech, date) {

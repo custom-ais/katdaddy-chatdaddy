@@ -7,7 +7,7 @@
 
 import { phoenixDate, dateTime } from "../shared/domain.mjs";
 import { bookingNoticeAllows, bookingNoticeHours } from "../shared/booking-notice.mjs";
-import { onShift, offShiftReason, weekSummary } from "../shared/tech-schedule.mjs";
+import { onShift, offShiftReason, weekSummary, dayHours } from "../shared/tech-schedule.mjs";
 import { emergencySameDayEligible } from "./activity.mjs";
 import { routeScore } from "./route-score.mjs";
 import { paceBonus } from "./revenue-pace.mjs";
@@ -19,7 +19,7 @@ export const URGENT_ROUTE_EXTRA_MINUTES = 5;
 const phoenixHour = (ms) => Number(new Intl.DateTimeFormat("en-US", { timeZone: "America/Phoenix", hour: "numeric", hourCycle: "h23" }).format(new Date(ms)));
 
 /**
- * Candidate start times, applying BOB's hours, Sundays, closing time, notice and horizon.
+ * Candidate start times, applying the business hours (open days, start times, closing time), notice and horizon.
  * Two optional lanes from the scheduling workbook, both off unless switched on:
  *   sameDay  — today, before the cutoff hour, with at least 12 hours' notice (must sit next to a booked job)
  *   overflow — a weekday 5 PM start for short, nearby, higher-ticket visits (needs approval)
@@ -36,9 +36,10 @@ export function candidateStarts({ config, durationMins, now, date = "", ticketCe
     if (d === today && Number.isFinite(config.emergencyRequestedAt) && !emergencySameDayEligible(config.emergencyRequestedAt, d)) continue;
     if (config.blockedDates.includes(d)) continue;
     const weekday = new Date(`${d}T12:00:00-07:00`).getUTCDay();
-    if (weekday === 0) continue;
-    const times = weekday === 6 ? config.saturdayStarts : config.weekdayStarts;
-    const close = dateTime(d, weekday === 6 ? config.saturdayClose : config.weekdayClose).getTime();
+    // Business hours (Settings): that day's start times and closing time; a closed day has none.
+    const hours = dayHours(config, weekday), times = hours.starts;
+    if (!times.length) continue;
+    const close = dateTime(d, hours.close).getTime();
     const sameDayOpen = sd.enabled && d === today && phoenixHour(now) < sd.cutoffHour;
     for (const time of times) {
       const start = dateTime(d, time).getTime();
@@ -49,7 +50,7 @@ export function candidateStarts({ config, durationMins, now, date = "", ticketCe
       if (start >= now + bookingNoticeHours(config.leadHours) * 3_600_000) out.push({ date: d, start, end });
       else if (sameDayOpen && start >= now + bookingNoticeHours(sd.minNoticeHours) * 3_600_000) out.push({ date: d, start, end, sameDay: true });
     }
-    if (ov.enabled && weekday !== 6 && durationMins <= ov.maxDurationMins && ticketCents >= ov.minTicketCents) {
+    if (ov.enabled && weekday >= 1 && weekday <= 5 && durationMins <= ov.maxDurationMins && ticketCents >= ov.minTicketCents) {
       const start = dateTime(d, ov.start).getTime();
       if (bookingNoticeAllows(config, start, now, config.leadHours) && start >= close && start <= now + config.horizonDays * 86_400_000) {
         out.push({ date: d, start, end: start + durationMins * MIN, overflow: true });
