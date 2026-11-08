@@ -43,6 +43,7 @@ import { withTiming, step, timingSummary, serverTimingHeader } from "./timing.mj
 // Booking-flow endpoints report where their time went (header, log line, BOB activity).
 const TIMED_PATHS = new Set(["/api/availability", "/api/holds", "/api/holds/extras", "/api/bookings", "/api/approvals", "/api/contact", "/api/verify/check"]);
 import { chatTurn } from "./chat.mjs";
+import { accountMatch, inOtherAccount } from "./jobber-account.mjs";
 import { confirmationEmail, confirmationSms, approvalRequestText, afterHoursRequestSms, afterHoursRequestEmail } from "./messages.mjs";
 
 /** Whether an optional add-on that doubles as a checkout upsell is switched on in Settings. */
@@ -383,22 +384,59 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     return list;
   };
 
-  const dashboardSnapshot = async ({ maintain = true } = {}) => ({
-    config: await store.config(),
-    bookingEnabled: await bookingOpen(await store.config()),
-    faqs: await store.get("faqs"),
-    technicians: await store.technicians(),
-    appointments: await store.appointments(),
-    requests: await store.requests(),
-    approvals: maintain ? await sweepApprovals(await store.approvals()) : await store.approvals(),
-    heldLocksCount: await store.countActiveHolds(),
-    conversations: await store.countSessions(),
-    notifications: await store.recentEvents(),
-    notificationsConfigured: smsReady(await store.config()) || emailReady(await store.config()) || Boolean(webhookUrl),
-    integrations: await integrations(),
-    westValleyZips: WEST_VALLEY_ZIPS,
-    now: clock(),
-  });
+  /** The connected Jobber company ({ id, name }), or null when Jobber is off, not connected or can't say. */
+  const currentJobberAccount = async () => { try { return (await jobber.connectedAccount?.()) || null; } catch { return null; } };
+  /**
+   * Older bookings don't say which Jobber account they went into. Check a few each time the dashboard
+   * loads (their job, else client, in the connected account?) and note the answer on them, so each is
+   * asked once. A booking Jobber couldn't answer for is asked again after 12 hours; meanwhile it shows.
+   */
+  const checkJobberAccounts = async (account, { limit = 10, budgetMs = 4000 } = {}) => {
+    if (!account?.id || !jobber.accountHas) return 0;
+    const started = Date.now();
+    let asked = 0;
+    for (const a of await store.appointments()) {
+      if (asked >= limit || Date.now() - started > budgetMs) break;
+      const j = a.jobber;
+      if (!j || !(j.jobId || j.clientId) || accountMatch(a, account) !== "unknown") continue;
+      if (j.accountCheck?.accountId === account.id && clock() - j.accountCheck.at < 12 * 3_600_000) continue;
+      asked++;
+      let has = null;
+      try { has = await jobber.accountHas({ jobId: j.jobId, clientId: j.clientId }); } catch { has = null; }
+      const latest = await store.appointment(a.id);
+      if (!latest?.jobber) continue;
+      latest.jobber = has === true ? { ...latest.jobber, accountId: account.id }
+        : has === false ? { ...latest.jobber, notInAccounts: [...new Set([...(latest.jobber.notInAccounts || []), account.id])] }
+        : { ...latest.jobber, accountCheck: { accountId: account.id, at: clock() } };
+      await store.updateAppointment(latest);
+      if (has === null) break; // Jobber is having trouble: try the rest another time
+    }
+    return asked;
+  };
+
+  const dashboardSnapshot = async ({ maintain = true } = {}) => {
+    // Only appointments booked into the Jobber account connected now (or not known to be elsewhere).
+    const account = await currentJobberAccount();
+    const all = await store.appointments();
+    const appointments = all.filter((a) => !inOtherAccount(a, account));
+    return {
+      config: await store.config(),
+      bookingEnabled: await bookingOpen(await store.config()),
+      faqs: await store.get("faqs"),
+      technicians: await store.technicians(),
+      appointments,
+      appointmentsOtherAccount: all.length - appointments.length,
+      requests: await store.requests(),
+      approvals: maintain ? await sweepApprovals(await store.approvals()) : await store.approvals(),
+      heldLocksCount: await store.countActiveHolds(),
+      conversations: await store.countSessions(),
+      notifications: await store.recentEvents(),
+      notificationsConfigured: smsReady(await store.config()) || emailReady(await store.config()) || Boolean(webhookUrl),
+      integrations: await integrations(),
+      westValleyZips: WEST_VALLEY_ZIPS,
+      now: clock(),
+    };
+  };
 
   const notificationText = (appt) => {
     if (appt.status !== "confirmed" && appt.status !== "in_progress" && appt.status !== "completed") {
@@ -540,7 +578,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     if (!visit?.id) throw Object.assign(new Error("The scheduled Jobber visit could not be verified."), { jobberJob: job, uncertain: true });
     const hubAccountAfter = hubAccountBefore ? await clientHub.capture() : null;
     const hubBinding = hubAccountAfter && hubAccountAfter.id === hubAccountBefore.id && hubAccountAfter.epoch === hubAccountBefore.epoch ? { accountId: hubAccountAfter.id, clientHubEpoch: hubAccountAfter.epoch } : {};
-    return { clientId, propertyId, jobId: job.id, jobNumber: job.jobNumber, webUri: job.jobberWebUri, visitId: visit.id, ...hubBinding };
+    // Which Jobber account this went into, so the dashboard shows it only while that account is connected.
+    const account = await currentJobberAccount();
+    return { clientId, propertyId, jobId: job.id, jobNumber: job.jobNumber, webUri: job.jobberWebUri, visitId: visit.id, ...(account ? { accountId: account.id } : {}), ...hubBinding };
   }
 
   /** Confirmation transports never change booking success and report actual delivery state. */
@@ -1621,7 +1661,11 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           res.setHeader("Set-Cookie", ["bob_admin=; HttpOnly; SameSite=Lax; Path=/api/admin; Max-Age=0", "bob_user=; HttpOnly; SameSite=Lax; Path=/api/admin; Max-Age=0"]);
           return send(200, { signedOut: true });
         }
-        if (method === "GET" && pathname === "/api/admin/data") return send(200, await snapshot());
+        if (method === "GET" && pathname === "/api/admin/data") {
+          // Sort out older bookings' Jobber account a few at a time (each is asked once).
+          await checkJobberAccounts(await currentJobberAccount());
+          return send(200, await snapshot());
+        }
         if (method === "GET" && pathname === "/api/admin/activity") return send(200, await store.activity({ sessionId: (url.searchParams.get("session") || "").slice(0, 32), level: url.searchParams.get("level") || "", cursor: url.searchParams.get("cursor") || "", limit: 100 }));
         // The browser Maps key is separate from the server key: it's restricted to the dashboard's web
         // address in Google Cloud, so it's safe to send to the browser. Without it the map uses OpenStreetMap.
@@ -1976,7 +2020,8 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
             let verifiedVisit;
             try { verifiedVisit = await jobber.verifyScheduledVisit({ visitId, jobNumber: Number(number), start: Date.parse(a.scheduledAt), end: Date.parse(a.scheduledAt) + a.durationMins * 60_000, jobberUserId: tech.jobberUserId, alsoAssign: c.alsoAssignJobberUserIds || [] }); if (!verifiedVisit?.id) throw new Error("Missing verified visit ID"); }
             catch { fail(409, "Jobber has not verified this visit's time and technician. Keep it pending and correct the visit in Jobber."); }
-            a.jobber = { ...(a.jobber || {}), jobNumber: Number(number), visitId: verifiedVisit.id };
+            const account = await currentJobberAccount();
+            a.jobber = { ...(a.jobber || {}), jobNumber: Number(number), visitId: verifiedVisit.id, ...(account ? { accountId: account.id } : {}) };
             a.jobberState = "resolved";
             a.status = "confirmed";
             a.revision++;

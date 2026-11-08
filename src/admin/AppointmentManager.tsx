@@ -71,6 +71,11 @@ export function AppointmentManager() {
         <Stat label="Scheduled ahead" value={counts.scheduled} tone="text-amber-600" icon={<Clock size={20} className="text-amber-600" />} />
         <Stat label="Needs attention" value={counts.action_needed} tone={counts.action_needed ? 'text-rose-600' : 'text-slate-900'} icon={<AlertTriangle size={20} className="text-rose-600" />} />
       </div>
+      {(data.appointmentsOtherAccount || 0) > 0 && (
+        <p className="text-xs font-semibold text-slate-500 -mt-2" data-other-account>
+          {data.appointmentsOtherAccount === 1 ? '1 appointment booked into a different Jobber account is' : `${data.appointmentsOtherAccount} appointments booked into a different Jobber account are`} hidden. They show again if that account is connected.
+        </p>
+      )}
 
       <div className="bg-white p-4 sm:p-5 rounded-3xl border border-slate-200/90 shadow-xs space-y-3.5">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">

@@ -152,6 +152,7 @@ export function createStore(db, { clock = Date.now } = {}) {
         location: r.data?.location || null,
         address: r.data?.address ? `${r.data.address}, ${r.data.city}, AZ ${r.data.zip}` : "",
         overflow: Boolean(r.data?.overflow),
+        jobber: r.data?.jobber || null,
       }));
     },
     /** Insert; returns false when the idempotency key already exists. */

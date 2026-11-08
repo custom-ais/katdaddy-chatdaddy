@@ -431,6 +431,43 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     return { id: data.account.id, name: data.account.name, verified: true, checkedAt: Date.now() };
   }
 
+  /**
+   * The connected Jobber company ({ id, name }), looked up once per connection and remembered
+   * (connecting or disconnecting starts a new connection). null when Jobber isn't connected.
+   */
+  async function connectedAccount() {
+    if (!(await connected())) return null;
+    const connection = (await store.kvGet("client-hub:connection-epoch")) || null;
+    const saved = await store.kvGet("jobber:account");
+    if (saved?.id && (saved.connection || null) === connection) return { id: saved.id, name: saved.name };
+    const account = await accountIdentity();
+    await store.kvSet("jobber:account", { id: account.id, name: account.name, connection, at: Date.now() });
+    return { id: account.id, name: account.name };
+  }
+
+  /**
+   * Whether a Jobber job (or, if that's gone, its client) is in the connected account: true,
+   * false, or null when Jobber couldn't say (a timeout, busy, an answer we don't recognise).
+   */
+  async function accountHas({ jobId, clientId } = {}) {
+    let asked = false;
+    for (const [field, id] of [["job", jobId], ["client", clientId]]) {
+      if (typeof id !== "string" || !id) continue;
+      asked = true;
+      try {
+        const data = await gql(`query BobAccountHas${field}($id: EncodedId!) { ${field}(id: $id) { id } }`, { id });
+        if (data?.[field]?.id) return true;
+      } catch (error) {
+        // Only a plain "no such record" answer counts as no. Anything else, including a query Jobber
+        // doesn't understand ("Field 'job' doesn't exist on type 'Query'"), means it couldn't say.
+        const message = error.message || "";
+        if (/field|on type|argument|variable|syntax|parse/i.test(message)) return null;
+        if (!/not.?found|couldn.?t find|could not find|does(?: not|n.?t) exist|access denied|not authori[sz]ed|unauthori[sz]ed|permission/i.test(message)) return null;
+      }
+    }
+    return asked ? false : null;
+  }
+
   // ---- Booking ---------------------------------------------------------------------
   const digits = (s) => String(s || "").replace(/\D/g, "");
   const sameStreet = (a, b) => String(a || "").toLowerCase().replace(/[^a-z0-9]/g, "") === String(b || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -613,6 +650,8 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     verifyAssignment,
     verifyScheduledVisit,
     accountIdentity,
+    connectedAccount,
+    accountHas,
     accountIdentityRevision,
     ensureClientAndProperty,
     createScheduledJob,
