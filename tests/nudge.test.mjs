@@ -1,4 +1,5 @@
-// The website nudge: page-aware offers in the embed script, and taps logged as activity.
+// The website nudge: BOB introduces itself as soon as the visitor scrolls, with a page-aware offer to
+// book plus "Ask a question"; taps are logged as activity.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -14,16 +15,22 @@ test("the embed script offers page-aware nudges, can be turned off, and is ASCII
   assert.match(embed, /bob-nudge-dismissed/);
   assert.match(embed, /14\*864e5/, "a dismissal keeps it away for two weeks");
   assert.match(embed, /'\/chat\?embed=1'\+\(start\?'&start='/, "tapping it opens BOB on the matching path");
+  assert.match(embed, /Hi, I'm BOB!/, "BOB introduces itself");
+  assert.match(embed, /Dryer Vent Squad's booking assistant/);
+  assert.match(embed, /'Ask a question'/);
+  assert.match(embed, /toggle\(true,'question'\)/, "Ask a question opens the chat's questions");
+  assert.match(embed, /window\.scrollY>=80/, "shows as soon as the visitor starts scrolling");
+  assert.match(embed, /const page=home\?'':/, "the home page gets the general offer");
 });
 
 test("a nudge tap is logged with its topic; unknown topics are logged as general", async (t) => {
   const h = await harness(t);
   const token = await h.fresh();
-  for (const topic of ["repair", "made-up"]) {
+  for (const topic of ["repair", "question", "made-up"]) {
     const r = await h.call("/api/activity", { method: "POST", token, body: { kind: "widget.nudge_opened", topic } });
     assert.equal(r.status, 201, JSON.stringify(r.data));
   }
   const { items } = await h.store.activity({});
   const taps = items.filter((i) => i.kind === "widget.nudge_opened").map((i) => i.details.topic).sort();
-  assert.deepEqual(taps, ["general", "repair"]);
+  assert.deepEqual(taps, ["general", "question", "repair"]);
 });

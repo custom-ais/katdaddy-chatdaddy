@@ -13,6 +13,7 @@ import { PACKAGES, TIERS, MORE } from "../shared/catalog.mjs";
 import { officePhone } from "../shared/conversation.mjs";
 import { QUESTIONS, FACT_VALUES, SYMPTOMS, WELCOME, SAVINGS_AVERAGES, savingsEstimate } from "../shared/conversation.mjs";
 import { bundleAssessmentCents, money, serviceQuote } from "../shared/domain.mjs";
+import { startTimesSummary } from "../shared/tech-schedule.mjs";
 
 const ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models";
 
@@ -171,7 +172,7 @@ function knowledge(config, faqs) {
     .map((f) => `Q: ${f.question}\nA: ${priced ? f.answer : f.answer.replace(/\$\d[\d,]*/g, "[price pending]")}`)
     .join("\n\n");
   return `BUSINESS: ${config.businessName}. Residential dryer-vent service in the West Valley (Phoenix area). Service ZIP codes are checked by the booking system.${config.phone ? ` Office phone: ${config.phone}.` : ""}
-Online booking: weekday start times ${config.weekdayStarts.join(", ")}; Saturday ${config.saturdayStarts.join(", ")}; closed Sundays. Times are arrival windows (30 minutes either side), Arizona time. Live availability comes from the schedule; never promise a time.
+Online booking start times: ${startTimesSummary(config)}. Times are arrival windows (30 minutes either side), Arizona time. Live availability comes from the schedule; never promise a time.
 ${priced ? "" : "Prices are pending the owner's review: don't state any service price.\n"}
 SERVICES:
 ${svc}

@@ -1,6 +1,7 @@
 import { DEFAULT_MESSAGE_TEMPLATES, validateMessageTemplates } from './message-templates.mjs';
 import {SERVICE_CATALOG,RETIRED_FAMILIES,effectiveFamily,lineForService,addOnLines,RECENT_SERVICE_DISCOUNT,RECENT_SERVICE_DISCOUNT_CENTS,DEFAULT_UPSELLS,bundleSavings} from './catalog.mjs';
 import {difficultyMinutes} from './airflow.mjs';
+import {ARRIVAL_SPACINGS,validOpenWeek} from './business-hours.mjs';
 import {COVERAGE_VERSION,COVERAGE_IN,COVERAGE_TRAVEL,validPoint,customCoverage} from './coverage.mjs';
 // Cleaning packages get extra time when the answers point to a restricted or severe vent.
 const DIFFICULTY_FAMILIES=new Set(['premium','ultimate','express','postservice']);
@@ -88,6 +89,9 @@ export const DEFAULT_CONFIG = {
   minVisitMinutes: 90,
   weekdayStarts: ['09:00','11:00','13:00','15:00'], weekdayClose: '17:00',
   saturdayStarts: ['10:00','12:00'], saturdayClose: '14:00',
+  // Business hours saved in Settings: 7 days, Sunday first, "" = closed or "09:00-17:00".
+  // [] = not set yet, so the start-time lists above still apply (see shared/tech-schedule.mjs).
+  openWeek: [], arrivalEveryMins: 120,
   blockedDates: [],
   serviceZips: [],
   // Just outside the service area (the 852 ZIPs on the office's coverage list): BOB says so,
@@ -261,6 +265,8 @@ export function validateConfig(c) {
  }
  for(const key of ['weekdayStarts','saturdayStarts'])if(!Array.isArray(c[key])||c[key].length>12||c[key].some(t=>!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)))errors.push(`Invalid ${key}.`);
  for(const key of ['weekdayClose','saturdayClose'])if(!/^([01]\d|2[0-3]):[0-5]\d$/.test(c[key]||''))errors.push(`Invalid ${key}.`);
+ if(!validOpenWeek(c.openWeek))errors.push('Check the business hours: keep at least one day open, and each open day needs its opening time before its closing time.');
+ if(!ARRIVAL_SPACINGS.includes(c.arrivalEveryMins))errors.push('Choose how often start times are offered: every 30 minutes to 4 hours.');
  if(!Array.isArray(c.serviceZips)||c.serviceZips.length>1000||c.serviceZips.some(z=>!/^\d{5}$/.test(z)))errors.push('Coverage must contain five-digit ZIP codes.');
  if(!Array.isArray(c.travelZips)||c.travelZips.length>1000||c.travelZips.some(z=>!/^\d{5}$/.test(z)))errors.push('Just-outside ZIPs must be five-digit ZIP codes.');
  if(c.coverageVersion!=null&&!Number.isInteger(c.coverageVersion))errors.push('Invalid coverageVersion.');

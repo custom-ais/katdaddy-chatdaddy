@@ -77,7 +77,7 @@ function validateArrayKeys(path,value) {
     } else if (Object.values(row).some(item => item !== null && typeof item === 'object')) throw forbidden();
   }
 }
-const arrayFields = new Set(['alsoAssignJobberUserIds','services','travelFeeTiers','customServiceAreas','serviceZips','travelZips','approvalServices','weekdayStarts','saturdayStarts','blockedDates','activeTechnicianIds']);
+const arrayFields = new Set(['alsoAssignJobberUserIds','services','travelFeeTiers','customServiceAreas','serviceZips','travelZips','approvalServices','weekdayStarts','saturdayStarts','openWeek','blockedDates','activeTechnicianIds']);
 function canChange(principal,path) {
   const permission = CONFIG_FIELD_PERMISSIONS[path];
   if (!permission || !hasPermission(principal,permission)) return false;
@@ -155,7 +155,7 @@ function blankConfig() {
     revenuePacing:{enabled:false,period:'month',targetCents:0,outsideJobCents:0},
     upsells:{dryerflexEnabled:false,dryerflexTitle:'',dryerflexBadge:'',dryerflexWasCents:0,dryerflexPoints:'',dryerflexLink:'',foggingEnabled:false,foggingTitle:'',foggingDescription:'',bundleEnabled:false,bundleSavingsCents:0,ultimateEnabled:false,ultimatePitch:''},
     cleaningMinutes:0,assessmentMinutes:0,bundleMinutes:0,bufferMinutes:0,minVisitMinutes:0,maxJobsPerDay:0,leadHours:0,horizonDays:0,
-    weekdayStarts:[],weekdayClose:'',saturdayStarts:[],saturdayClose:'',blockedDates:[],serviceZips:[],travelZips:[],coverageVersion:0,activeTechnicianIds:[],alsoAssignJobberUserIds:[],assessmentCredited:false,
+    weekdayStarts:[],weekdayClose:'',saturdayStarts:[],saturdayClose:'',openWeek:[],arrivalEveryMins:0,blockedDates:[],serviceZips:[],travelZips:[],coverageVersion:0,activeTechnicianIds:[],alsoAssignJobberUserIds:[],assessmentCredited:false,
   };
 }
 // Reading a status page never inherits every field controlled by its administrator.
@@ -169,7 +169,7 @@ const configReadGroups = {
   'settings.templates.view':['messageTemplates.confirmationSms','messageTemplates.confirmationEmailSubject','messageTemplates.confirmationEmailBody','messageEmailFormat'],
   'settings.services.view':['pricesAcknowledged','services','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','bundlePriceCents','cleaningMinutes','assessmentMinutes','bundleMinutes','assessmentCredited','upsells.dryerflexEnabled','upsells.dryerflexTitle','upsells.dryerflexBadge','upsells.dryerflexWasCents','upsells.dryerflexPoints','upsells.dryerflexLink','upsells.foggingEnabled','upsells.foggingTitle','upsells.foggingDescription','upsells.bundleEnabled','upsells.bundleSavingsCents','upsells.ultimateEnabled','upsells.ultimatePitch'],
   'settings.coverage.view':['baseAddress','baseLocation.lat','baseLocation.lng','customServiceAreas','serviceAreaMode','serviceAreaMiles','travelAreaMiles','serviceZips','travelZips','coverageVersion','travelZoneFeeCents','travelFeeTiers'],
-  'settings.schedule.view':['maxDriveFromBaseMin','maxDriveBetweenJobsMin','nearbyFirst','routeScoring','sameDay.enabled','sameDay.cutoffHour','sameDay.minNoticeHours','sameDay.requireNearby','overflow.enabled','overflow.start','overflow.maxDurationMins','overflow.minTicketCents','overflow.requireNearby','dailyRevenueTargetCents','revenuePacing.enabled','revenuePacing.period','revenuePacing.targetCents','revenuePacing.outsideJobCents','bufferMinutes','minVisitMinutes','maxJobsPerDay','leadHours','horizonDays','weekdayStarts','weekdayClose','saturdayStarts','saturdayClose','blockedDates','activeTechnicianIds'],
+  'settings.schedule.view':['maxDriveFromBaseMin','maxDriveBetweenJobsMin','nearbyFirst','routeScoring','sameDay.enabled','sameDay.cutoffHour','sameDay.minNoticeHours','sameDay.requireNearby','overflow.enabled','overflow.start','overflow.maxDurationMins','overflow.minTicketCents','overflow.requireNearby','dailyRevenueTargetCents','revenuePacing.enabled','revenuePacing.period','revenuePacing.targetCents','revenuePacing.outsideJobCents','bufferMinutes','minVisitMinutes','maxJobsPerDay','leadHours','horizonDays','weekdayStarts','weekdayClose','saturdayStarts','saturdayClose','openWeek','arrivalEveryMins','blockedDates','activeTechnicianIds'],
   'appointments.view':['scheduleSource'],
   'appointments.manage':['services','serviceZips','scheduleSource','cleaningPriceCents','assessmentPriceCents','bundleAssessmentCents','cleaningMinutes','assessmentMinutes','bundleMinutes'],
   'inbox.view':['approver.name'],

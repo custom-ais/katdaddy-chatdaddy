@@ -384,6 +384,8 @@ function iconFor(label: string) {
 
 /** The website nudge's topics, each starting the matching menu path. */
 const NUDGE_STARTS: Record<string, string> = { cleaning: 'Book a Cleaning', repair: 'Repairs, Reroutes & Upgrades', emergency: 'Emergency', pest: 'Pest / Nest Removal' };
+// The website nudge's "Ask a question": the chat opens its list of common questions, ready for the visitor's own.
+const pageStartAllowed = (key: unknown): key is string => typeof key === 'string' && (key === 'question' || Object.hasOwn(NUDGE_STARTS, key));
 
 const WELCOME_CARDS: [string, React.ReactElement][] = [
   ['Book a Cleaning', <Wind strokeWidth={2} size={26} />],
@@ -1104,7 +1106,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     const receive = (event: MessageEvent) => {
       let parentOrigin = ''; try { parentOrigin = new URL(document.referrer).origin; } catch {}
       if (event.source === window.parent && parentOrigin && event.origin === parentOrigin && event.data?.type === 'bob:restore') { setMinimized(false); try { sessionStorage.removeItem(preview ? 'bob.preview.minimized' : 'bob.minimized'); } catch {} }
-      if (event.source === window.parent && parentOrigin && event.origin === parentOrigin && event.data?.type === 'bob:start' && NUDGE_STARTS[event.data.start]) { pageStart.current = event.data.start; setStartTick((n) => n + 1); }
+      if (event.source === window.parent && parentOrigin && event.origin === parentOrigin && event.data?.type === 'bob:start' && pageStartAllowed(event.data.start)) { pageStart.current = event.data.start; setStartTick((n) => n + 1); }
     };
     window.addEventListener('message', receive); return () => window.removeEventListener('message', receive);
   }, [embedded, preview]);
@@ -1253,6 +1255,14 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   };
   useEffect(() => {
     const key = pageStart.current;
+    if (key === 'question') {
+      if (!ready) return;
+      pageStart.current = null;
+      setFaqOpen(true);
+      requestAnimationFrame(() => inputRef.current?.focus());
+      if (token) void api('/api/activity', { method: 'POST', token, body: { kind: 'widget.nudge_opened', topic: 'question' } }).catch(() => {});
+      return;
+    }
     if (!key || !ready || messages.length || receipt) return;
     pageStart.current = null;
     const label = NUDGE_STARTS[key];

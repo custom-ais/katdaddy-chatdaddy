@@ -111,6 +111,7 @@ test('each technician has an Edit schedule dialog that saves their days and hour
   assert.equal(await page.locator('[data-schedule-gaps]').count(), 0, "covered again: no warning");
   // Turning everyone off for online bookings warns right away, before saving.
   const ryanOnline = page.getByRole('checkbox', { name: 'Ryan Boucher' }).first();
+  await ryanOnline.evaluate((el) => el.scrollIntoView({ block: 'center' })); // clear of the sticky header
   await ryanOnline.uncheck({ force: true });
   assert.match(await page.locator('[data-schedule-gaps]').textContent(), /No technician takes online bookings/);
   await ryanOnline.check({ force: true });
