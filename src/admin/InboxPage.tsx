@@ -202,6 +202,11 @@ export function InboxPage({ focusApproval }: { focusApproval?: string | null }) 
       <Banner eyebrow={<><Inbox size={14} />Needs a person</>} title="Approvals and customer requests">
         Visits that need a yes before booking (after-hours and same-day emergency service, and 5 PM overflow), and customers who asked the team to follow up.
       </Banner>
+      {(data.inboxOtherAccount || 0) > 0 && (
+        <p className="text-xs font-semibold text-slate-500 -mt-3" data-other-account>
+          {data.inboxOtherAccount === 1 ? '1 request from when a different Jobber account was connected is' : `${data.inboxOtherAccount} requests from when a different Jobber account was connected are`} hidden. They show again if that account is connected.
+        </p>
+      )}
 
       <section className="bg-white rounded-3xl border border-slate-200/90 shadow-sm p-5 sm:p-6 space-y-4">
         <div className="flex items-center justify-between gap-3 pb-3 border-b border-slate-100">
