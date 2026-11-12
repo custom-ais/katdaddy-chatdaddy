@@ -12,6 +12,12 @@ import { PACKAGES } from "./catalog.mjs";
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : "");
 const str = (v) => (typeof v === "string" ? v.trim() : "");
 const plainCode = (code) => str(code).replace(/[._]+/g, " ").trim();
+const azTime = (iso) => {
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? new Date(t).toLocaleString("en-US", { timeZone: "America/Phoenix", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+};
+const dollars = (cents) => (Number.isFinite(cents) ? `$${(cents / 100).toFixed(cents % 100 ? 2 : 0)}` : "");
+const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && x.trim()) : []);
 
 /** Where the customer was in the chat when something happened. */
 export const STAGE_LABELS = {
@@ -42,6 +48,7 @@ const REQUESTS = [
   ["POST", /^\/api\/chat$/, "customer", "send a message to BOB", "sent a message to BOB"],
   ["POST", /^\/api\/chat\/back$/, "customer", "go back a step in the chat", "went back a step in the chat"],
   ["POST", /^\/api\/activity$/, "customer", "use the chat window", "used the chat window"],
+  ["POST", /^\/api\/transcript$/, "customer", "save part of their chat", "saved part of their chat"],
   ["GET", /^\/api\/availability$/, "customer", "see open appointment times", "looked at open appointment times"],
   ["POST", /^\/api\/holds$/, "customer", "hold an appointment time", "held an appointment time"],
   ["DELETE", /^\/api\/holds$/, "customer", "let go of a held time", "let go of a held time"],
@@ -277,8 +284,40 @@ function describeKind(kind, d) {
     case "conversation.message": {
       const step = stageLabel(d.stage);
       const text = str(d.text) === "[verification code omitted]" ? "(A verification code. Hidden for security.)" : str(d.text);
+      const shown = [list(d.shown).length && `Packages shown: ${list(d.shown).join("; ")}`, list(d.options).length && `Buttons shown: ${list(d.options).join(" · ")}`].filter(Boolean).join("\n");
       if (d.role === "user") return { title: "Customer wrote", quote: { who: "customer", text }, ...(step ? { detail: `While ${step}.` } : {}), tone: "info", chat: true };
-      return { title: "BOB replied", quote: { who: "bob", text }, ...(d.via === "ai" ? { detail: "Written with help from BOB's AI assistant." } : {}), tone: "info", chat: true };
+      const detail = [shown, d.via === "ai" && "Written with help from BOB's AI assistant."].filter(Boolean).join("\n");
+      return { title: "BOB replied", quote: { who: "bob", text }, ...(detail ? { detail } : {}), tone: "info", chat: true };
+    }
+    case "conversation.went_back":
+      return { title: "Customer went back a step", detail: "They changed an earlier answer.", tone: "info", chat: true };
+    case "booking.time_held": {
+      const when = azTime(d.scheduledAt);
+      return { title: when ? `Customer picked a time: ${when}` : "Customer picked a time", detail: [[str(d.service), dollars(d.totalCents)].filter(Boolean).join(" · "), d.approvalRequired ? "This time needs the team's approval before it's booked." : "BOB holds the time for a few minutes while they finish."].filter(Boolean).join("\n"), tone: "info" };
+    }
+    case "booking.confirmed": {
+      const summary = [str(d.service), azTime(d.scheduledAt), dollars(d.totalCents)].filter(Boolean).join(" · ");
+      return d.pending
+        ? { title: "Customer booked a visit, but it needs a Jobber check", detail: `${summary ? `${summary}\n` : ""}BOB couldn't confirm the visit reached Jobber. Check it in Appointments.`, tone: "attention" }
+        : { title: "Customer booked a visit", ...(summary ? { detail: summary } : {}), tone: "good" };
+    }
+    case "approval.requested":
+      return { title: "Customer asked the team to approve a time", detail: [[str(d.service), azTime(d.scheduledAt)].filter(Boolean).join(" · "), "Someone needs to answer it in the Inbox."].filter(Boolean).join("\n"), tone: "attention" };
+    case "approval.decided": {
+      const what = [str(d.service), azTime(d.scheduledAt), str(d.technicianName) && `with ${str(d.technicianName)}`].filter(Boolean).join(" · ");
+      const outcomes = {
+        booked: ["The team approved the customer's request and it was booked", "good"],
+        action_needed: ["The team approved the customer's request, but the booking needs a Jobber check", "attention"],
+        declined: ["The team declined the customer's request", "info"],
+        expired: ["The customer's request expired before anyone answered", "attention"],
+        failed: ["The team approved the customer's request, but it couldn't be booked", "problem"],
+      };
+      const [title, tone] = outcomes[d.status] || [`The customer's request ended (${plainCode(d.status) || "unknown"})`, "info"];
+      return { title, detail: [what, str(d.failure) && `Reason: ${str(d.failure)}`].filter(Boolean).join("\n"), tone };
+    }
+    case "request.sent": {
+      const from = [str(d.name), str(d.phone), str(d.email)].filter(Boolean).join(" · ");
+      return { title: d.afterHours ? "Customer sent an after-hours request to the office" : "Customer sent a message to the office", quote: { who: "customer", text: str(d.message) }, detail: [from && `From ${from}.`, `Prefers a ${d.preference === "email" ? "reply by email" : "call back"}. It's in the Inbox.`].filter(Boolean).join(" "), tone: "attention" };
     }
     case "conversation.unanswered_question":
       return { title: "BOB couldn't answer a customer's question", quote: { who: "customer", text: str(d.text) }, detail: "If customers ask this often, add an answer in Settings → Answers.", tone: "attention" };

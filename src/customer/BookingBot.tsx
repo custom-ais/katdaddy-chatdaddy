@@ -13,7 +13,9 @@ import { money, phoenixDate, properName } from '../../shared/domain.mjs';
 import { CODE_DIGITS } from '../../shared/verification-code.mjs';
 
 const TZ = 'America/Phoenix';
-type Msg = { role: 'user' | 'model'; text: string; info?: string[]; card?: any; local?: boolean };
+// logged: the server already saved it in BOB activity (a /api/chat turn or restored history).
+// Everything else is sent to /api/transcript so the office can read the whole conversation.
+type Msg = { role: 'user' | 'model'; text: string; info?: string[]; card?: any; local?: boolean; logged?: boolean; options?: string[] };
 
 /** "8:30 AM" and "9:30 AM" → "8:30–9:30 AM"; "11:30 AM" and "12:30 PM" stay whole. */
 export const timeRange = (a: string, b: string) => {
@@ -1140,7 +1142,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       try { sessionStorage.setItem(storageKey, r.token); } catch {}
       const s = r.session;
       setSession(s); setConfig(r.config);
-      setMessages((s.history || []).map((m: any) => ({ role: m.role === 'user' ? 'user' : 'model', text: m.text, ...(m.card ? { card: m.card } : {}) })));
+      setMessages((s.history || []).map((m: any) => ({ role: m.role === 'user' ? 'user' : 'model', text: m.text, logged: true, ...(m.card ? { card: m.card } : {}) })));
       setOptions(s.options || []); setMulti(false); setSuggested('');
       if (r.receipt) { setReceipt(r.receipt); setPending(r.receipt.status === 'action_needed'); }
       else if (s.stage === 'approval' && s.approvalId) {
@@ -1200,13 +1202,42 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   }, [messages, busy, action, receipt, requestId, contactStep, options.length]);
 
   const say = (role: Msg['role'], t: string, extra: Partial<Msg> = {}) => setMessages((m) => [...m, { role, text: t, local: true, ...extra }]);
+  // Save every message the window shows that the server didn't already save, in order, as soon as it
+  // appears (a short wait groups messages added together). Leaving the page sends what's left.
+  const transcript = useRef<{ token: string; entries: any[] }>({ token: '', entries: [] });
+  const transcriptSeen = useRef(0), transcriptTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushTranscript = useCallback((keepalive = false) => {
+    if (transcriptTimer.current) { clearTimeout(transcriptTimer.current); transcriptTimer.current = null; }
+    const { token: owner, entries } = transcript.current;
+    transcript.current = { token: owner, entries: [] };
+    if (!owner) return;
+    for (let i = 0; i < entries.length; i += 25) void api('/api/transcript', { method: 'POST', token: owner, body: { entries: entries.slice(i, i + 25) }, keepalive }).catch(() => {});
+  }, []);
+  const queueTranscript = useCallback((entries: any[]) => {
+    if (!token || !entries.length) return;
+    if (transcript.current.token !== token) flushTranscript();
+    transcript.current = { token, entries: [...transcript.current.entries, ...entries] };
+    if (!transcriptTimer.current) transcriptTimer.current = setTimeout(() => flushTranscript(), 50);
+  }, [token, flushTranscript]);
+  useEffect(() => {
+    if (messages.length < transcriptSeen.current) transcriptSeen.current = messages.length; // went back, or started over
+    const fresh = messages.slice(transcriptSeen.current).filter((m) => !m.logged && m.text?.trim());
+    transcriptSeen.current = messages.length;
+    queueTranscript(fresh.map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', text: m.text, ...(m.options?.length ? { options: m.options } : {}) })));
+  }, [messages, queueTranscript]);
+  useEffect(() => {
+    const hidden = () => { if (document.visibilityState === 'hidden') flushTranscript(true); };
+    const leave = () => flushTranscript(true);
+    document.addEventListener('visibilitychange', hidden); window.addEventListener('pagehide', leave);
+    return () => { document.removeEventListener('visibilitychange', hidden); window.removeEventListener('pagehide', leave); flushTranscript(); };
+  }, [flushTranscript]);
   const onApprovalBooked = useCallback((r: any, p: boolean) => { setReceipt(r); setPending(p); setAction(''); setAutoClose(!p && !preview); }, [preview]);
   /** Back to the package choices after a same-day request is cancelled or can't happen. */
   const showChoices = useCallback((r: any, lead = '') => {
     setApproval(null);
     setAction(r.action === 'slots' ? 'slots' : ''); // an after-hours request that ended goes back to regular times
     setSession(r.session);
-    setMessages((m) => [...m, ...(lead ? [{ role: 'model' as const, local: true, text: lead }] : []), { role: 'model', text: r.reply, info: r.info, ...(r.card ? { card: r.card } : {}) }]);
+    setMessages((m) => [...m, ...(lead ? [{ role: 'model' as const, local: true, text: lead }] : []), { role: 'model', text: r.reply, info: r.info, options: r.options || [], ...(r.card ? { card: r.card } : {}) }]);
     setOptions(r.options || []); setMulti(false); setSuggested(r.suggested || '');
   }, []);
   const onApprovalCancelled = useCallback((r: any) => showChoices(r), [showChoices]);
@@ -1232,7 +1263,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     if (contactStep) return answerContact(message);
     remember('server');
     busyRef.current = true; setBusy(true); setError(''); setText(''); setPicked([]);
-    setMessages((m) => [...m, { role: 'user', text: message }]);
+    setMessages((m) => [...m, { role: 'user', text: message, logged: true }]);
     try {
       // Playbook: a short, natural pause with the typing dots before every reply (800–1500 ms).
       const pause = 800 + Math.random() * 700, began = Date.now();
@@ -1240,7 +1271,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       const wait = pause - (Date.now() - began);
       if (wait > 0) await new Promise((done) => setTimeout(done, wait));
       setSession(r.session);
-      setMessages((m) => [...m, { role: 'model', text: r.reply, info: r.info, ...(r.card ? { card: r.card } : {}) }]);
+      setMessages((m) => [...m, { role: 'model', text: r.reply, info: r.info, logged: true, ...(r.card ? { card: r.card } : {}) }]);
       setOptions(r.options || []); setMulti(Boolean(r.multi)); setSuggested(r.suggested || '');
       if (r.action === 'contact') { setAction('contact'); startContact(r.session); }
       else if (r.action === 'request') setAction('request');
@@ -1286,6 +1317,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       } finally { setBusy(false); busyRef.current = false; }
     }
     undo.current.pop(); setUndoCount(undo.current.length);
+    if (snap.kind !== 'server') queueTranscript([{ event: 'went_back' }]); // the server records its own back steps
     setMessages(snap.messages); setOptions(snap.options); setMulti(snap.multi); setSuggested(snap.suggested);
     setAction(snap.action); setContactStep(snap.contactStep); setDraft(snap.draft); setSession(snap.session);
     setText(''); setPicked([]); setAddrItems([]); setAddrActive(-1);
