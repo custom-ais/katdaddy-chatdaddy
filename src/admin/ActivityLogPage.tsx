@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AlertTriangle, CheckCircle2, Download, Info, Loader2, MessageSquare, RefreshCw, Search, X, XCircle } from 'lucide-react';
+import { Activity, AlertTriangle, CheckCircle2, Copy, Download, Info, Loader2, MessageSquare, RefreshCw, Search, X, XCircle } from 'lucide-react';
 import { api, saveText } from '../lib/api';
 import { describeActivity } from '../../shared/activity-text.mjs';
 import { ErrorNote, Field, inputClass, secondaryButton } from './ui';
@@ -25,6 +25,18 @@ const TONES = {
 const SPEAKERS: Record<string, string> = { customer: 'Customer', bob: 'BOB', error: 'Message shown' };
 
 type Item = { id: string; kind: string; created: number; level?: string; sessionId?: string; requestId?: string; details?: any };
+
+/** A conversation as plain text, one line per message or step, in the order given. */
+export function conversationText(items: Item[]) {
+  return items.map((item) => {
+    const text = describeActivity(item);
+    const who = text.quote?.who === 'bob' ? 'BOB' : text.quote?.who === 'customer' ? 'Customer' : 'Message shown';
+    const said = text.quote?.text ? `${who}: ${text.quote.text}` : '';
+    const notes = (text.detail || '').split('\n').filter((line) => line && (!text.chat || /^(Buttons|Packages) shown/.test(line)));
+    const lines = text.chat && said ? [said, ...notes] : [text.title, ...(said ? [said] : []), ...notes];
+    return [`[${dayHeading(item.created)} ${timeOfDay(item.created)}] ${lines[0]}`, ...lines.slice(1).map((line) => `    ${line}`)].join('\n');
+  }).join('\n');
+}
 
 /** The raw record, kept out of the way for whoever is helping troubleshoot. */
 function TechnicalDetails({ item }: { item: Item }) {
@@ -56,7 +68,7 @@ export function ActivityEntry({ item, showConversation, onShowConversation }: { 
           {when}
         </div>
         {text.quote?.text && <blockquote className={`text-sm whitespace-pre-wrap rounded-xl px-3 py-2 border-l-4 ${text.quote.who === 'bob' ? 'bg-orange-50 border-orange-300 text-slate-800' : text.quote.who === 'error' ? 'bg-white border-rose-300 text-slate-800' : 'bg-slate-50 border-blue-300 text-slate-800'}`}><span className="font-bold">{SPEAKERS[text.quote.who] || 'Said'}: </span>{text.quote.text}</blockquote>}
-        {text.detail && <p className="text-sm text-slate-600">{text.detail}</p>}
+        {text.detail && <p className="text-sm text-slate-600 whitespace-pre-line">{text.detail}</p>}
         <div className="flex flex-wrap items-start gap-x-4 gap-y-1">
           {showConversation && item.sessionId && <button type="button" className="text-xs font-bold text-blue-700 hover:underline" onClick={() => onShowConversation?.(item.sessionId!)}>See this whole conversation</button>}
           <TechnicalDetails item={item} />
@@ -78,7 +90,16 @@ export function ActivityLogPage() {
   }, [filter, level]);
   useEffect(() => { void load(); }, [load]);
   const openConversation = (id: string) => { setSession(id); setFilter(id); };
-  const shown = useMemo(() => showRoutine ? items : items.filter((item) => !describeActivity(item).routine), [items, showRoutine]);
+  // One conversation reads from start to finish; everything else shows the newest first.
+  const shown = useMemo(() => {
+    const kept = showRoutine ? items : items.filter((item) => !describeActivity(item).routine);
+    return filter ? [...kept].reverse() : kept;
+  }, [items, showRoutine, filter]);
+  const [copied, setCopied] = useState(false);
+  const copyConversation = async () => {
+    try { await navigator.clipboard.writeText(conversationText(shown)); setCopied(true); setTimeout(() => setCopied(false), 2500); }
+    catch { setError('Your browser blocked copying. Use "Download for support" instead.'); }
+  };
   const hidden = items.length - shown.length;
   const days = useMemo(() => {
     const out: { heading: string; items: Item[] }[] = [];
@@ -97,7 +118,7 @@ export function ActivityLogPage() {
       <button className={secondaryButton}><Search size={16} />Filter</button>
       <label className="basis-full flex items-center gap-2 text-sm text-slate-600 cursor-pointer"><input type="checkbox" className="size-4 accent-orange-500" checked={showRoutine} onChange={(e) => setShowRoutine(e.target.checked)} />Show behind-the-scenes steps (each tap and screen a customer goes through)</label>
     </form>
-    {filter && <div className="flex flex-wrap items-center gap-2 text-sm bg-blue-50 border border-blue-200 text-blue-900 rounded-2xl px-4 py-2.5"><MessageSquare size={16} aria-hidden="true" /><span>Showing one conversation, in order from newest to oldest.</span><button type="button" className="ml-auto inline-flex items-center gap-1 font-bold hover:underline" onClick={() => { setSession(''); setFilter(''); }}><X size={14} />Show everything</button></div>}
+    {filter && <div className="flex flex-wrap items-center gap-2 text-sm bg-blue-50 border border-blue-200 text-blue-900 rounded-2xl px-4 py-2.5"><MessageSquare size={16} aria-hidden="true" /><span>Showing one conversation, from start to finish.</span><span className="ml-auto flex flex-wrap gap-3"><button type="button" className="inline-flex items-center gap-1 font-bold hover:underline disabled:opacity-50" disabled={!shown.length} onClick={() => void copyConversation()}><Copy size={14} />{copied ? 'Copied' : 'Copy conversation'}</button><button type="button" className="inline-flex items-center gap-1 font-bold hover:underline" onClick={() => { setSession(''); setFilter(''); }}><X size={14} />Show everything</button></span></div>}
     {error && <ErrorNote>{error}</ErrorNote>}
     {busy && !items.length && <p role="status" className="flex items-center gap-2 text-slate-500"><Loader2 className="animate-spin" size={18} />Loading saved activity…</p>}
     {!busy && !items.length && !error && <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-slate-500">Nothing to show for this filter yet. New activity appears here as customers use BOB.</div>}

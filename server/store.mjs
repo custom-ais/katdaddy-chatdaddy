@@ -247,9 +247,10 @@ export function createStore(db, { clock = Date.now } = {}) {
     },
 
     // Reuse the durable events store; recorded activity is never dispatched as a webhook.
-    async log(kind, details = {}, { sessionId = "", level = "info", requestId = "" } = {}) {
+    // `at` keeps records written together (one transcript batch) in the order they happened.
+    async log(kind, details = {}, { sessionId = "", level = "info", requestId = "", at = null } = {}) {
       const id = randomUUID();
-      await q("insert into bob.events(id,kind,created,data,status) values($1,$2,$3,$4::jsonb,'recorded')", [id, `activity.${kind}`, clock(), json({ sessionId, level, requestId, details: safeDetails(details) })]);
+      await q("insert into bob.events(id,kind,created,data,status) values($1,$2,$3,$4::jsonb,'recorded')", [id, `activity.${kind}`, Number.isFinite(at) ? at : clock(), json({ sessionId, level, requestId, details: safeDetails(details) })]);
       return id;
     },
     async activity({ sessionId = "", level = "", cursor = "", limit = 100 } = {}) {

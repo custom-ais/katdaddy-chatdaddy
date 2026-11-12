@@ -20,14 +20,14 @@ function delay(ms: number, signal?: AbortSignal) {
 }
 
 export async function api<T = any>(path: string, {
-  method = 'GET', body, token, signal,
-}: { method?: string; body?: unknown; token?: string; signal?: AbortSignal } = {}): Promise<T> {
+  method = 'GET', body, token, signal, keepalive,
+}: { method?: string; body?: unknown; token?: string; signal?: AbortSignal; keepalive?: boolean } = {}): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     const response = await fetch(path, {
       method,
       headers: { 'Content-Type': 'application/json', 'X-BOB-Request': '1', ...(token ? { 'X-BOB-Session': token } : {}) },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-      credentials: 'same-origin', signal,
+      credentials: 'same-origin', signal, ...(keepalive ? { keepalive: true } : {}),
     });
     let result: any;
     try { result = await response.json(); }

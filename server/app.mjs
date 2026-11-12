@@ -26,6 +26,7 @@ import { BOOKING_REPORT_TO, COMMISSION_CENTS, bookingTotals, bookingReportEmail 
 import { createVerification } from "./verification.mjs";
 import { waitForRequestLock } from "./request-lock.mjs";
 import { approvalPolicy } from "./approval-policy.mjs";
+import { isVerificationCode } from "../shared/verification-code.mjs";
 import { isIP } from "node:net";
 import { distanceMiles, validPoint } from "../shared/coverage.mjs";
 import { randomBytes, createHash, scryptSync, timingSafeEqual, createHmac } from "node:crypto";
@@ -46,6 +47,14 @@ import { chatTurn } from "./chat.mjs";
 import { accountMatch, inOtherAccount, accountSwitchedAt, inboxInOtherAccount } from "./jobber-account.mjs";
 import { confirmationEmail, confirmationSms, approvalRequestText, afterHoursRequestSms, afterHoursRequestEmail } from "./messages.mjs";
 
+/** What a reply showed besides its text: the buttons offered and any package cards. */
+const shownWith = (result) => {
+  const options = Array.isArray(result?.options) ? result.options.filter((o) => typeof o === "string" && o.trim()).slice(0, 12) : [];
+  const picks = Array.isArray(result?.card?.picks) ? result.card.picks.map((p) => [p?.name, p?.price].filter(Boolean).join(" · ")).filter(Boolean).slice(0, 8) : [];
+  return { ...(options.length ? { options } : {}), ...(picks.length ? { shown: picks } : {}) };
+};
+/** A message that is just a verification code never reaches activity. */
+const redactCode = (text) => isVerificationCode(String(text).trim()) ? "[verification code omitted]" : text;
 /** Whether an optional add-on that doubles as a checkout upsell is switched on in Settings. */
 const upsellOn = (c, key) => key === "dryerflex" ? upsellSettings(c).dryerflexEnabled : key === "fogging" ? upsellSettings(c).foggingEnabled : true;
 
@@ -288,10 +297,13 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     }
   };
 
-  const record = async (req, kind, details, level = "info") => {
-    try { await store.log(kind, { ...details, ...(req.adminPrincipal?.role !== 'legacy' && req.adminPrincipal?.id ? { actorUserId: req.adminPrincipal.id } : {}) }, { ...req.bobActivity, level }); return true; }
+  const record = async (req, kind, details, level = "info", at = null) => {
+    try { await store.log(kind, { ...details, ...(req.adminPrincipal?.role !== 'legacy' && req.adminPrincipal?.id ? { actorUserId: req.adminPrincipal.id } : {}) }, { ...req.bobActivity, level, at }); return true; }
     catch (error) { console.error("[activity] persistent write failed", error.message); return false; }
   };
+  /** How a request waiting on the team ended, in the customer's own conversation. */
+  const logDecision = (a) => store.log("approval.decided", { approvalId: a.id, kind: a.kind || "", status: a.status, service: a.service || "", scheduledAt: a.scheduledAt || null, technicianName: a.technicianName || null, failure: a.failure || null },
+    { sessionId: String(a.session || "").slice(0, 16), level: ["failed", "action_needed"].includes(a.status) ? "warning" : "info" }).catch((error) => console.error("[activity] approval decision", error.message));
 
   const publicConfig = async () => {
     const c = await store.config();
@@ -379,6 +391,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         await store.updateApproval(a);
         await store.releaseHold(a.holdId);
         await store.audit("approval.expired", a.id);
+        await logDecision(a);
       }
     }
     return list;
@@ -777,6 +790,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       a.status = "declined"; // the customer's chat sees it and offers regular openings
       await store.updateApproval(a);
       await store.audit("approval.declined", a.id);
+      await logDecision(a);
       return;
     }
     const arrival = typeof b.arrivalAt === "number" ? b.arrivalAt : Date.parse(String(b.arrivalAt || ""));
@@ -807,6 +821,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     }
     await store.updateApproval(a);
     await store.audit(`approval.${a.status}`, a.id);
+    await logDecision(a);
   }
 
   const publicApproval = (a, c) => ({
@@ -947,8 +962,9 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         data = projectAdminResponse(req.adminPrincipal, req.method, req.adminPermissionPath, data);
         if (data?.config && Array.isArray(data.appointments)) data.access = projectPrincipal(req.adminPrincipal);
       }
-      if (req.url !== "/api/health" && (status >= 400 || req.method !== "GET")) {
-        const path = String(req.url || "").split("?")[0];
+      const path = String(req.url || "").split("?")[0];
+      // A saved transcript batch is itself the record; only a failed one needs its own entry.
+      if (req.url !== "/api/health" && (status >= 400 || (req.method !== "GET" && path !== "/api/transcript"))) {
         await record(req, "request.finished", { path, method: req.method, status, ...(status >= 400 ? { error: data?.error } : {}), ...(TIMED_PATHS.has(path) ? { timing: timingSummary() } : {}) }, status >= 500 ? "error" : status >= 400 ? "warning" : "info");
       }
       response = { status, data };
@@ -985,7 +1001,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       if (method !== "GET") csrf(req);
       // Serialize session mutations (including chat/contact/verification/booking),
       // so a slow provider response cannot restore stale ownership or contact data.
-      if (method !== 'GET' && !pathname.startsWith('/api/admin/') && !['/api/session', '/api/activity'].includes(pathname) && req.headers['x-bob-session']) {
+      if (method !== 'GET' && !pathname.startsWith('/api/admin/') && !['/api/session', '/api/activity', '/api/transcript'].includes(pathname) && req.headers['x-bob-session']) {
         const token = digest(req.headers['x-bob-session']);
         if (!await store.loadSession(token)) fail(401, 'This conversation expired. Start again.');
         req.bobActivity.sessionId = token.slice(0, 16);
@@ -1024,6 +1040,30 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         return send(201, { recorded: true });
       }
 
+      // Everything the chat window shows that didn't come from a /api/chat turn (contact questions and
+      // answers, add-on choices, confirmations, notes), so the office can read the whole conversation.
+      // Turns from /api/chat are recorded there, not here.
+      if (method === "POST" && pathname === "/api/transcript") {
+        await rate(req, "transcript", 60);
+        const { data } = await session(req), body = await readBody(req);
+        const entries = Array.isArray(body.entries) ? body.entries : [];
+        if (!entries.length || entries.length > 25) fail(400, "Send 1–25 transcript entries.");
+        const clean = entries.map((e) => {
+          if (e?.event === "went_back") return { event: "went_back" };
+          const role = e?.role === "user" ? "user" : e?.role === "assistant" ? "assistant" : null;
+          const text = typeof e?.text === "string" ? e.text.trim().slice(0, 4000) : "";
+          if (!role || !text) fail(400, "Each transcript entry needs a role and text.");
+          const options = Array.isArray(e.options) ? e.options.filter((o) => typeof o === "string" && o.trim()).slice(0, 12).map((o) => o.slice(0, 200)) : [];
+          return { role, text: redactCode(text), ...(options.length ? { options } : {}) };
+        });
+        const at = clock();
+        for (const [i, e] of clean.entries()) {
+          if (e.event) await record(req, "conversation.went_back", { stage: data.stage, source: "chat_window" }, "info", at + i);
+          else await record(req, "conversation.message", { ...e, stage: data.stage, source: "chat_window" }, "info", at + i);
+        }
+        return send(201, { recorded: clean.length });
+      }
+
       if (method === "POST" && pathname === "/api/chat") {
         await rate(req, "chat", 80);
         const { token, data } = await session(req), body = await readBody(req);
@@ -1035,20 +1075,24 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         if (data.stage === 'verify' && /\b\d{4,8}\b/.test(body.message)) {
           body.message = body.message.replace(/\b\d{4,8}\b/g, '[verification code omitted]');
           if (!detectSafety(body.message)) {
-            await record(req, 'conversation.message', { role: 'user', text: '[verification code omitted]', stage: data.stage });
-            return send(200, { session: data, reply: 'Please enter the verification code in the code box below, not in the chat.', options: [], via: 'rules' });
+            const reply = 'Please enter the verification code in the code box below, not in the chat.', saidAt = clock();
+            await record(req, 'conversation.message', { role: 'user', text: '[verification code omitted]', stage: data.stage }, 'info', saidAt);
+            await record(req, 'conversation.message', { role: 'assistant', text: reply, stage: data.stage, via: 'rules' }, 'info', Math.max(clock(), saidAt + 1));
+            return send(200, { session: data, reply, options: [], via: 'rules' });
           }
         }
         const c = await store.config();
         const place = data.pending === "serviceAddress" || data.stage === "out_of_area" ? await lookupPlace(body.message, c) : null;
-        await record(req, "conversation.message", { role: "user", text: /^\s*\d{4,8}\s*$/.test(body.message) ? "[verification code omitted]" : body.message, stage: data.stage });
+        // A reply is always stamped after the message it answers, so the conversation reads in order.
+        const saidAt = clock();
+        await record(req, "conversation.message", { role: "user", text: redactCode(body.message), stage: data.stage }, "info", saidAt);
         const result = await chatTurn({ message: body.message, session: data, config: c, faqs: await store.get("faqs"), assistant: aiReady(c) ? selectedAssistant(c) : null, place });
         // Same-day emergency availability checks are gone: emergencies go to the office by phone.
         await store.saveSession(token, result.session);
-        await record(req, "conversation.message", { role: "assistant", text: result.reply, stage: result.session.stage, via: result.via, availabilityRequestId: result.session.availabilityRequestId || "" });
+        await record(req, "conversation.message", { role: "assistant", text: result.reply, stage: result.session.stage, via: result.via, availabilityRequestId: result.session.availabilityRequestId || "", ...shownWith(result) }, "info", Math.max(clock(), saidAt + 1));
         // Questions BOB couldn't answer from approved knowledge, and AI answers the safety filter blocked,
         // show under Activity → Warnings so the office can add the missing FAQ.
-        const asked = /^\s*\d{4,8}\s*$/.test(body.message) ? "[verification code omitted]" : String(body.message).slice(0, 500);
+        const asked = String(redactCode(body.message)).slice(0, 500);
         if (result.unanswered) await record(req, "conversation.unanswered_question", { text: asked, stage: data.stage, voiced: Boolean(result.voiced) }, "warning");
         if (result.aiRejected?.includes("answer")) await record(req, "conversation.ai_answer_blocked", { text: asked, stage: data.stage }, "warning");
         // Keep the state before this answer so the customer can go back and change it.
@@ -1074,6 +1118,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         await store.saveSession(token, restored);
         await store.kvSet(`undo:${token}`, undo, UNDO_TTL);
         await store.releaseHolds(token);
+        await record(req, "conversation.went_back", { stage: restored.stage });
         return send(200, { session: restored, canGoBack: undo.length > 0 });
       }
 
@@ -1232,6 +1277,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           await store.releaseHolds(token);
           if (!bookingNoticeAllows(c, slot.start, clock(), noticeForSlot(slot, c, quote))) fail(409, "That time no longer meets the booking notice rules. Please choose a fresh opening.");
           await store.insertHold(hold);
+          await record(req, "booking.time_held", { scheduledAt: slot.scheduledAt, service: quote.name, totalCents: quote.totalCents, approvalRequired: needsApproval(quote, slot, c) });
           return send(201, { hold: { id: hold.id, expiresAt: hold.expires, scheduledAt: slot.scheduledAt, quote, approvalRequired: needsApproval(quote, slot, c), overflow: Boolean(slot.overflow) } });
         } finally {
           await store.unlock(`slot:${day}`);
@@ -1299,6 +1345,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         requireAllowedSlot(hold.quote, hold, c);
         if (needsApproval(hold.quote, hold, c)) fail(409, "This visit needs approval from our team first.", { code: "APPROVAL_REQUIRED" });
         const { appt, pending } = await commitBooking({ token, data, hold, c, idem: body.idempotencyKey });
+        await record(req, "booking.confirmed", { appointmentId: appt.id, scheduledAt: appt.scheduledAt, service: appt.package, totalCents: Math.round(appt.price * 100), pending });
         return send(pending ? 202 : 201, { receipt: await receipt(appt), pending });
       }
 
@@ -1344,6 +1391,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         a.notified = await notifyApprover(a, c, publicOrigin || (req.headers.host ? `${String(req.headers["x-forwarded-proto"] || "https").split(",")[0]}://${req.headers.host}` : ""));
         await store.updateApproval(a);
         await store.audit("approval.requested", a.id);
+        await record(req, "approval.requested", { approvalId: a.id, service: a.service, scheduledAt: new Date(hold.start).toISOString() });
         return send(201, { approval: publicApproval(a, c) });
       }
       // An after-hours (on-call) request: no regular time to hold. The office picks the arrival time
@@ -1517,6 +1565,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         }
         await store.enqueue("request.created", request, Boolean(webhookUrl));
         await store.audit("request.created", request.id);
+        await record(req, "request.sent", { requestId: request.id, name: request.name, phone: request.phone, email: request.email, preference: request.preference, message: body.message.trim(), afterHours: request.kind === "after_hours" });
         await dispatch();
         return send(201, { request: { id: request.id, status: "submitted" } });
       }
@@ -1924,6 +1973,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
             const s = await store.loadSession(a.session);
             if (s) await store.saveSession(a.session, { ...s, stage: "review" });
             await store.audit("approval.declined", a.id);
+            await logDecision(a);
             return send(200, await snapshot());
           }
           const data = await store.loadSession(a.session);
@@ -1947,6 +1997,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           }
           await store.updateApproval(a);
           await store.audit(`approval.${a.status}`, a.id);
+          await logDecision(a);
           return send(200, { ...(await snapshot()), result: { status: a.status, failure: a.failure || null, appointmentId: a.appointmentId || null } });
         }
 
