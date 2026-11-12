@@ -27,6 +27,15 @@
       ]
     },
     {
+      "source": "/chat",
+      "headers": [
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://tile.openstreetmap.org; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self' https://dryerventsquadaz.com https://www.dryerventsquadaz.com https://444390.us12.myftpupload.com https://dryer-vent-squad-az-preview.og-kvtdaddy.chatgpt.site"
+        }
+      ]
+    },
+    {
       "source": "/admin(.*)",
       "headers": [
         {
