@@ -20,6 +20,7 @@ const routes = [
   ['POST', /^\/api\/admin\/booking-report\/test$/, ['integrations.manage']],
   ['GET', /^\/api\/admin\/maps-key$/, ['settings.coverage.view']],
   ['GET', /^\/api\/admin\/revenue-pace$/, ['settings.schedule.view','finance.view']],
+  ['GET', /^\/api\/admin\/website-analytics$/, ['analytics.view','finance.view']], // Same people as the Analytics tab.
   ['GET', /^\/api\/admin\/integration-accounts$/, ['settings.connections.view']],
   ['POST', /^\/api\/admin\/(?:integration-accounts|connections\/refresh)$/, ['integrations.manage']],
   ['GET', /^\/api\/admin\/jobber\/(?:connect|users)$/, ['integrations.manage']],
@@ -284,6 +285,7 @@ function projectIntegrations(value,principal) {
   for (const name of ['jobber','verification','sms','email','assistant','database']) result.observed[name] = pick(value?.observed?.[name],['status','checkedAt','lastSuccessAt','operation','meaning','stale']);
   result.assistant.providers = {};
   for (const name of ['gemini','openai']) result.assistant.providers[name] = pick(value?.assistant?.providers?.[name],['configured','model']);
+  result.analytics = pick(value?.analytics,['configured','site']);
   if (hasPermission(principal,'integrations.manage')) result.clientHub = pick(value?.clientHub,['url','enabled','accountName','reason']);
   return result;
 }
@@ -319,6 +321,21 @@ export function projectSnapshot(snapshot,principal) {
   return result;
 }
 
+/** Google Analytics report for the Analytics tab: counts, page paths and setup guidance only. */
+function projectWebsiteAnalytics(body) {
+  const totals = value => pick(value,['activeUsers','newUsers','sessions','pageViews','engagementRate','avgSessionSeconds']);
+  return {
+    ...pick(body,['status','site','propertyId','days','timeZone','fetchedAt','serviceAccount']),
+    ...(object(body?.totals) ? {totals:totals(body.totals),previous:totals(body.previous)} : {}),
+    daily:list(body?.daily).map(row => pick(row,['date','users','sessions','pageViews'])),
+    pages:list(body?.pages).map(row => pick(row,['path','views','users'])),
+    channels:list(body?.channels).map(row => pick(row,['name','sessions'])),
+    devices:list(body?.devices).map(row => pick(row,['name','users'])),
+    missing:safeStrings(body?.missing), problems:safeStrings(body?.problems),
+    ...(object(body?.error) ? {error:pick(body.error,['code','message'])} : {}),
+  };
+}
+
 /** Apply to successful admin responses. Parent attaches its own projected access envelope. */
 export function projectAdminResponse(principal,method,path,body) {
   requireAdminRoute(principal,method,path);
@@ -335,6 +352,7 @@ export function projectAdminResponse(principal,method,path,body) {
   if (isMaster(principal) && path === '/api/admin/booking-report/test') return pick(body,['status','to']);
   if (path === '/api/admin/maps-key') return pick(body,['key']);
   if (path === '/api/admin/revenue-pace') return pick(body,['pace']);
+  if (path === '/api/admin/website-analytics') return projectWebsiteAnalytics(body);
   if (hasPermission(principal,'integrations.manage') && /^\/api\/admin\/(?:integration-accounts|jobber\/)/.test(path)) return clone(body);
   if (path === '/api/admin/status') return pick(body,['authenticated','setupRequired','passwordFromEnv','namedUsersEnabled']);
   if (path === '/api/admin/logout') return pick(body,['signedOut']);

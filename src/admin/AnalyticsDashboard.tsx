@@ -3,6 +3,7 @@ import { AlertTriangle, Bot, Calendar, DollarSign, Gauge, MapPin, Target, Timer,
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useDashboard, azDate, azDay, azHour, dollars } from './DashboardContext';
 import { Banner } from './ui';
+import { WebsiteAnalytics } from './WebsiteAnalytics';
 
 const COLORS = ['#f97316', '#3b82f6', '#8b5cf6', '#10b981', '#ef4444', '#06b6d4', '#64748b'];
 const DAY = 86_400_000;
@@ -101,7 +102,7 @@ export function AnalyticsDashboard({ onNavigateToAppointments }: { onNavigateToA
           </div>
           {can('appointments.view') && <button onClick={onNavigateToAppointments} className="px-5 py-3 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white font-extrabold text-sm rounded-2xl shadow-lg shadow-orange-500/30 active:scale-95 whitespace-nowrap">View appointments</button>}
         </>}>
-        Every number here is counted from appointments in BOB. Nothing is estimated — a blank means there's no data yet.
+        Booking numbers are counted from appointments in BOB. Nothing is estimated — a blank means there's no data yet. Website traffic, further down, comes from Google Analytics.
       </Banner>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -229,6 +230,8 @@ export function AnalyticsDashboard({ onNavigateToAppointments }: { onNavigateToA
           </div>
         </div>
       </div>
+
+      <WebsiteAnalytics />
     </div>
   );
 }

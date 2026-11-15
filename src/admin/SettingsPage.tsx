@@ -100,7 +100,7 @@ function AccountIdentity({ account }: { account?: { status?: string; displayName
 
 function ConnectionStatus() {
   const { data, refresh, loading } = useDashboard();
-  const names: [string, string][] = [['jobber', 'Jobber'], ['verification', 'Verification'], ['sms', 'Appointment texts'], ['email', 'Appointment email'], ['maps', 'Maps'], ['assistant', 'Smart chat']];
+  const names: [string, string][] = [['jobber', 'Jobber'], ['verification', 'Verification'], ['sms', 'Appointment texts'], ['email', 'Appointment email'], ['maps', 'Maps'], ['assistant', 'Smart chat'], ['analytics', 'Website analytics (Google Analytics)']];
   return <Section icon={<Link2 size={18} />} title="Connection status" description="Recorded status only. Provider management, account lookups and messaging controls are restricted to Master Admin." action={<button type="button" className={secondaryButton} disabled={loading} onClick={() => void refresh()}>Refresh recorded status</button>}>
     <dl className="divide-y divide-slate-100">{names.map(([key, label]) => { const state = data.integrations?.[key]; return <div key={key} className="flex justify-between gap-4 py-3 text-sm"><dt className="font-bold">{label}</dt><dd>{!state ? 'Status unavailable' : state.enabled === false ? 'Off' : state.connected === true ? 'Connected' : state.configured === true || state.appConfigured === true ? 'Configuration present' : 'Setup required'}</dd></div>; })}</dl>
     <p className="text-xs text-slate-500">Configuration presence does not verify provider operation or message delivery.</p>
@@ -150,7 +150,7 @@ function Connections({ config, onChange }: { config: any; onChange: (key: string
     const on = name === 'Smart chat' ? config.aiAssistant !== false : key ? enabled(key) : true;
     const savedOn = name === 'Smart chat' ? data.config?.aiAssistant !== false : key ? data.config?.integrations?.[key] !== false : true;
     const draft = on !== savedOn || (name === 'Smart chat' && aiProvider !== (data.config?.aiProvider === 'openai' ? 'openai' : 'gemini'));
-    let status = !on ? 'Off' : name === 'Jobber' ? (i.jobber?.connected ? 'Connected' : i.jobber?.appConfigured ? 'Configured — connect account' : 'Setup required') : name === 'Smart chat' ? (ai?.configured ? 'Configured' : 'Setup required') : name === 'Maps' ? (i.maps?.configured || i.maps?.provider === 'google' ? 'Configured' : 'Setup required — Census only') : name === 'Database' ? (['supabase-rest', 'postgres'].includes(i.database) ? 'Configured' : 'Local test storage') : name === 'Server error history' ? 'History' : i[key]?.configured ? 'Configured' : 'Setup required';
+    let status = !on ? 'Off' : name === 'Jobber' ? (i.jobber?.connected ? 'Connected' : i.jobber?.appConfigured ? 'Configured — connect account' : 'Setup required') : name === 'Smart chat' ? (ai?.configured ? 'Configured' : 'Setup required') : name === 'Maps' ? (i.maps?.configured || i.maps?.provider === 'google' ? 'Configured' : 'Setup required — Census only') : name === 'Database' ? (['supabase-rest', 'postgres'].includes(i.database) ? 'Configured' : 'Local test storage') : name === 'Google Analytics' ? (i.analytics?.configured ? 'Configured' : 'Setup required') : name === 'Server error history' ? 'History' : i[key]?.configured ? 'Configured' : 'Setup required';
     const observedKey = name === 'Smart chat' ? 'assistant' : name === 'Database' ? 'database' : key;
     const observed = name === 'Maps' ? i.maps?.health : i.observed?.[observedKey];
     const fresh = on && !draft && observed?.stale !== true && observed?.fresh !== false && Number.isFinite(observed?.checkedAt) && observed.checkedAt > 0;
@@ -167,6 +167,7 @@ function Connections({ config, onChange }: { config: any; onChange: (key: string
     'Smart chat': [['Server environment', 'https://vercel.com/dashboard']],
     Maps: [['Server environment', 'https://vercel.com/dashboard']],
     Database: [['Server environment', 'https://vercel.com/dashboard']],
+    'Google Analytics': [['Google Analytics', 'https://analytics.google.com/'], ['Server environment', 'https://vercel.com/dashboard']],
   };
   const rows: [string, boolean, React.ReactNode, React.ReactNode?][] = [
     ['Jobber', enabled('jobber') && !!i.jobber?.connected,
@@ -186,6 +187,8 @@ function Connections({ config, onChange }: { config: any; onChange: (key: string
     ['Maps', enabled('maps') && i.maps?.provider === 'google' && i.maps?.health?.status === 'healthy' && Number.isFinite(i.maps?.health?.lastSuccessAt) && i.maps.health.lastSuccessAt > 0,
       <>{!enabled('maps') ? 'Off in these settings: address and routing calls stop. All online booking is paused, including ZIP-based coverage.' : i.maps?.provider === 'google' ? 'Google configuration is present for address and measured-route lookups.' : 'Census address lookup only. Measured driving routes are unavailable; automatic bookings that need a travel check stay blocked. Add GOOGLE_MAPS_API_KEY for measured driving routes.'}
         {enabled('maps') ? <RecordedHealth configured={i.maps?.configured === true || i.maps?.provider === 'google'} health={i.maps?.health} legacyIssue={i.maps?.issue} /> : <details className="mt-2"><summary className="cursor-pointer">Recorded check history — not current enabled status</summary><RecordedHealth configured={i.maps?.configured === true || i.maps?.provider === 'google'} health={i.maps?.health} legacyIssue={i.maps?.issue} /></details>}</>, switchFor('maps', 'Maps')],
+    ['Google Analytics', !!i.analytics?.configured,
+      <>{i.analytics?.configured ? `Configuration present for ${i.analytics.site || 'the website'}. Its traffic appears on the Analytics tab; the key is read-only and stays on the server.` : `Not connected: website traffic for ${i.analytics?.site || 'Custom-AIs.com'} appears on the Analytics tab once GA4_PROPERTY_ID and GA4_SERVICE_ACCOUNT_JSON are set in the server environment. The Analytics tab lists the setup steps.`}<p className="mt-1">Reads reports only. It doesn't affect booking, messages or the chat.</p></>],
     ['Database', !!i.database, <>{i.database === 'supabase-rest' ? 'Supabase, through the server-side service key.' : i.database === 'postgres' ? 'Postgres connection.' : 'Local test database — data is not kept.'}<p className="mt-1 font-semibold">Required for safe booking state; no on/off switch.</p></>],
     ...(i.lastError ? [['Server error history', false, <details><summary className="cursor-pointer">Previous server error — not a current health check</summary><p>{when(i.lastError.at)} on {i.lastError.path}: {i.lastError.message}</p></details>] as [string, boolean, React.ReactNode]] : []),
   ];

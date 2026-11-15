@@ -10,6 +10,7 @@ import { MESSAGE_VARIABLES } from '../shared/message-templates.mjs';
 import { deliverConfirmationSmsOnce } from './sms-notification.mjs';
 import { createClientHub } from './client-hub.mjs';
 import { sanitizeDiagnostic } from "./integration-status.mjs";
+import { createGoogleAnalytics, ANALYTICS_RANGES, DEFAULT_RANGE } from "./google-analytics.mjs";
 // BOB HTTP API — Postgres-backed, serverless-friendly. Jobber is the master schedule,
 // Explicitly selected providers carry verification and messages; the selected AI reads
 // free-typed chat. Static files are served by the host (Vercel).
@@ -104,8 +105,10 @@ async function readBody(req) {
 const APPROVAL_WINDOW = 30 * 60_000;
 const FAQ_STATUSES = ["approved", "draft"];
 
-export function createBobHandler({ store, jobber, geo, scheduler, assistant = null, twilio = null, sendgrid = null, integrationAccounts = null, connectionHealth = null, env = process.env, clock = () => Date.now() }) {
+export function createBobHandler({ store, jobber, geo, scheduler, assistant = null, twilio = null, sendgrid = null, integrationAccounts = null, connectionHealth = null, websiteAnalytics = null, env = process.env, clock = () => Date.now() }) {
   const rawStore = store;
+  // Website traffic (Google Analytics) for the Analytics tab. Read-only; reports are cached in the store.
+  websiteAnalytics ??= createGoogleAnalytics({ env, cache: rawStore, clock });
   const adminAuth = createAdminAuth({ store: rawStore, clock });
   const adminScope = new AsyncLocalStorage();
   const currentAdmin = async () => {
@@ -352,6 +355,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       lastError: historicalIssue(await store.kvGet('diag:last-error').catch(() => null)),
       assistant: { enabled: c.aiAssistant !== false, provider: c.aiProvider || 'gemini', configured: Boolean(ai?.configured), model: ai?.model || '', providers: assistant?.providers || { gemini: { configured: Boolean(assistant?.configured), model: assistant?.model || '' }, openai: { configured: false, model: '' } } },
       database: store.db.kind,
+      analytics: { configured: websiteAnalytics.configured, site: websiteAnalytics.site },
     };
   };
 
@@ -1740,6 +1744,12 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           const pacing = { enabled: true, period: ["month", "week"].includes(q.get("period")) ? q.get("period") : rp.period || "month", targetCents: num("target", rp.targetCents || 0), outsideJobCents: num("outside", rp.outsideJobCents || 0) };
           const pace = await scheduler.pace({ config: { ...c, revenuePacing: pacing }, now: clock() });
           return send(200, { pace: pace && { ...pace, now: clock(), weeks: pace.weeks.map(({ days, ...w }) => w) } });
+        }
+        // Website traffic from Google Analytics (the Analytics tab). Never calls Google when it isn't set up.
+        if (method === "GET" && pathname === "/api/admin/website-analytics") {
+          await rate(req, "website-analytics", 30);
+          const days = Number(url.searchParams.get("days"));
+          return send(200, await websiteAnalytics.report({ days: ANALYTICS_RANGES.includes(days) ? days : DEFAULT_RANGE }));
         }
         if (method === "GET" && pathname === "/api/admin/maps-key") {
           const key = String(env.GOOGLE_MAPS_BROWSER_KEY || "").trim();

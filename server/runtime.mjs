@@ -22,6 +22,7 @@ import { createGeo } from "./geo.mjs";
 import { createScheduler } from "./schedule.mjs";
 import { createBobHandler } from "./app.mjs";
 import { createAssistant } from "./assistant.mjs";
+import { createGoogleAnalytics } from "./google-analytics.mjs";
 
 let instance = null;
 
@@ -55,7 +56,8 @@ export async function bobRuntime(env = process.env) {
     } });
     const { twilio, sendgrid, assistant } = observeMessaging({ health: connectionHealth, twilio: gatedTwilio, sendgrid: gatedSendgrid, assistant: rawAssistant });
     const integrationAccounts = createIntegrationAccounts({ env, store, jobber });
-    const handle = createBobHandler({ connectionHealth: { ...connectionHealth, refresh: () => connectionHealth.refresh({ integrationAccounts }) }, integrationAccounts, store, jobber, geo, scheduler, assistant, twilio, sendgrid, env });
+    const websiteAnalytics = createGoogleAnalytics({ env, cache: store, fetchImpl: timedFetch('analytics', fetch) });
+    const handle = createBobHandler({ websiteAnalytics, connectionHealth: { ...connectionHealth, refresh: () => connectionHealth.refresh({ integrationAccounts }) }, integrationAccounts, store, jobber, geo, scheduler, assistant, twilio, sendgrid, env });
     return { db, store, jobber, geo, scheduler, assistant, handle };
   })().catch((error) => {
     instance = null;
