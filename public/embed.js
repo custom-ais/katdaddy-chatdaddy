@@ -13,13 +13,19 @@
  const avatar=document.createElement('img');avatar.src=origin+'/bob-avatar.png';avatar.alt='';avatar.width=40;avatar.height=40;launch.prepend(avatar);
  const panel=document.createElement('div');panel.id='bob-chat-panel';panel.className='panel';panel.setAttribute('role','region');panel.setAttribute('aria-label','DVS booking assistant');
  const close=document.createElement('button');close.type='button';close.className='close';close.textContent='\u00d7';close.setAttribute('aria-label','Close booking assistant');
- let iframe,open=false,ready=false,loadedAt=0;
+ let iframe,open=false,ready=false,loadedAt=0,frameAudience='';
+ // The commercial side of the website: BOB only collects details and needs there, and never books.
+ // data-audience="commercial" (or "residential") on the script tag decides; otherwise a page whose
+ // address has "commercial" in it counts. Checked each time the chat opens, so a site that changes
+ // pages without reloading gets the right chat.
+ const audienceSetting=(script.dataset.audience||'').toLowerCase();
+ const audience=()=>audienceSetting==='commercial'||audienceSetting==='residential'?audienceSetting:(/(^|[\/_-])commercial([\/_.-]|$)/.test(location.pathname.toLowerCase())?'commercial':'residential');
  // The chat says 'bob:ready' once it's running. One that loaded but never said so (blocked, or the network
  // dropped) is loaded again the next time it's opened, instead of staying broken until the page is reloaded.
  const stuck=()=>iframe&&!ready&&loadedAt&&Date.now()-loadedAt>3000;
  // start: a starting path from the nudge (cleaning, repair, emergency, pest); the chat begins it if nothing's been said yet.
  // While the chat is open the launcher becomes a round close button in the same spot, below the chat.
- const toggle=(value,start='')=>{const focused=shadow.activeElement===launch;open=value;panel.classList.toggle('open',open);close.classList.toggle('open',open);launch.classList.toggle('hide',open);launch.setAttribute('aria-expanded',String(open));if(open){hideNudge();}if(open&&stuck()){iframe.remove();iframe=null;}if(open&&!iframe){const frame=document.createElement('iframe');iframe=frame;ready=false;loadedAt=0;frame.src=origin+'/chat?embed=1'+(start?'&start='+encodeURIComponent(start):'');frame.title='BOB \u2014 Dryer Vent Squad booking assistant';frame.referrerPolicy='strict-origin';frame.addEventListener('load',()=>{if(frame!==iframe)return;loadedAt=Date.now();if(open)frame.contentWindow?.postMessage({type:'bob:restore'},origin);});panel.append(frame);}else if(open&&iframe){iframe.contentWindow?.postMessage({type:'bob:restore'},origin);if(start)iframe.contentWindow?.postMessage({type:'bob:start',start},origin);}if(!open)launch.focus();else if(focused)close.focus();};
+ const toggle=(value,start='')=>{const focused=shadow.activeElement===launch;open=value;panel.classList.toggle('open',open);close.classList.toggle('open',open);launch.classList.toggle('hide',open);launch.setAttribute('aria-expanded',String(open));if(open){hideNudge();}if(open&&(stuck()||(iframe&&frameAudience!==audience()))){iframe.remove();iframe=null;}if(open&&!iframe){const frame=document.createElement('iframe');iframe=frame;ready=false;loadedAt=0;frameAudience=audience();frame.src=origin+'/chat?embed=1'+(frameAudience==='commercial'?'&audience=commercial':(start?'&start='+encodeURIComponent(start):''));frame.title='BOB \u2014 Dryer Vent Squad booking assistant';frame.referrerPolicy='strict-origin';frame.addEventListener('load',()=>{if(frame!==iframe)return;loadedAt=Date.now();if(open)frame.contentWindow?.postMessage({type:'bob:restore'},origin);});panel.append(frame);}else if(open&&iframe){iframe.contentWindow?.postMessage({type:'bob:restore'},origin);if(start)iframe.contentWindow?.postMessage({type:'bob:start',start},origin);}if(!open)launch.focus();else if(focused)close.focus();};
  launch.addEventListener('click',()=>toggle(!open));close.addEventListener('click',()=>toggle(false));shadow.addEventListener('keydown',e=>{if(e.key==='Escape'&&open)toggle(false);});
  window.addEventListener('message',event=>{if(event.origin!==origin||!iframe||event.source!==iframe.contentWindow)return;if(event.data?.type==='bob:ready')ready=true;if(event.data?.type==='bob:minimize')toggle(false);});
 
@@ -37,13 +43,15 @@
  // The home page covers everything, so it gets the general offer; other pages match their topic.
  const home=/^\/?(index\.\w+)?$/.test(location.pathname);
  const page=home?'':(location.pathname+' '+document.title).toLowerCase();
- const pick=NUDGES.find(n=>n.test.test(page))||{key:'',text:'I can help you book a visit, or answer any questions about your dryer vent.',cta:'Book a visit'};
+ const commercialPage=audience()==='commercial';
+ const pick=commercialPage?{key:'',text:'Need dryer vent service for a commercial property? Tell me what you need and our team will reach out.',cta:'Request a quote'}:NUDGES.find(n=>n.test.test(page))||{key:'',text:'I can help you book a visit, or answer any questions about your dryer vent.',cta:'Book a visit'};
+ if(commercialPage)launch.lastChild.textContent='Chat with BOB';
  const nudge=document.createElement('div');nudge.className='nudge';nudge.setAttribute('role','dialog');nudge.setAttribute('aria-label','Message from BOB');
  const row=document.createElement('div');row.className='nudge-row';
  const face=document.createElement('img');face.src=origin+'/bob-avatar.png';face.alt='';face.width=36;face.height=36;
  const copy=document.createElement('div');copy.setAttribute('aria-live','polite');
  const hi=document.createElement('strong');hi.className='nudge-hi';hi.textContent="Hi, I'm BOB!";
- const words=document.createElement('p');words.textContent="Dryer Vent Squad's booking assistant. "+pick.text;copy.append(hi,words);row.append(face,copy);
+ const words=document.createElement('p');words.textContent=(commercialPage?"Dryer Vent Squad's assistant. ":"Dryer Vent Squad's booking assistant. ")+pick.text;copy.append(hi,words);row.append(face,copy);
  const cta=document.createElement('button');cta.type='button';cta.className='nudge-cta';cta.textContent=pick.cta;
  const ask=document.createElement('button');ask.type='button';ask.className='nudge-ask';ask.textContent='Ask a question';
  const actions=document.createElement('div');actions.className='nudge-actions';actions.append(cta,ask);
