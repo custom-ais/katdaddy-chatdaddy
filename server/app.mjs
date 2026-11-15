@@ -34,7 +34,7 @@ import {
   DEFAULT_CONFIG, INITIAL_FAQS, bookingQuote, travelFeeFor, validateContact,
   validateConfig, normalizePhone, properName, isBookable, BUNDLE_PRICE_CENTS, phoenixDate, areaFor, drivingAreaFor, money,
 } from "../shared/domain.mjs";
-import { initialSession, WELCOME, detectSafety, turn } from "../shared/conversation.mjs";
+import { initialSession, WELCOME, COMMERCIAL_WELCOME, detectSafety, turn } from "../shared/conversation.mjs";
 import { isUrgentBooking } from "../shared/booking-urgency.mjs";
 import { territoryFor, WEST_VALLEY_ZIPS } from "../shared/territory.mjs";
 import { PACKAGES, upsellSettings } from "../shared/catalog.mjs";
@@ -836,7 +836,12 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
   });
 
   /** Checks shared by holds, bookings and approvals. */
+  /** Commercial jobs are quoted and scheduled by the team; no booking step runs for one. */
+  function requireNotCommercial(data) {
+    if (data?.commercial) fail(409, "Commercial jobs are scheduled by our team. Send the request form and someone will contact you.", { code: "COMMERCIAL_REQUEST_ONLY" });
+  }
   function requireReadyToBook(data, c) {
+    requireNotCommercial(data);
     if (data.stage !== "slots" || data.safety || !data.serviceAccepted || !data.location) fail(409, "Complete the service and contact details first.");
     if (data.route === "bundle" && !data.bundleAccepted) fail(409, "Accept the combined assessment offer first.");
     if (!phoneOk(data, c)) fail(409, "Verify your selected contact method with a code first.", { code: "PHONE_NOT_VERIFIED" });
@@ -1015,10 +1020,14 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
 
       if (method === "POST" && pathname === "/api/session") {
         await rate(req, "new-session", 30, 3_600_000);
-        const token = secret(), s = initialSession();
+        const token = secret(), s = initialSession(), body = await readBody(req).catch(() => ({}));
+        // The commercial side of the website (?audience=commercial): BOB opens with its commercial
+        // welcome and the request form, and nothing in the conversation can be booked.
+        if (body?.audience === "commercial") Object.assign(s, { commercial: "page", stage: "review", history: [{ role: "assistant", text: COMMERCIAL_WELCOME }] });
         await store.createSession(digest(token), s);
         req.bobActivity.sessionId = digest(token).slice(0, 16);
-        await record(req, "conversation.started", { stage: s.stage });
+        await record(req, "conversation.started", { stage: s.stage, ...(s.commercial ? { audience: "commercial" } : {}) });
+        if (s.commercial) await record(req, "conversation.message", { role: "assistant", text: COMMERCIAL_WELCOME, stage: s.stage, via: "rules" }, "info", clock() + 1);
         return send(201, { token, session: s, config: await publicConfig() });
       }
       if (method === "GET" && pathname === "/api/session") {
@@ -1092,6 +1101,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         await record(req, "conversation.message", { role: "assistant", text: result.reply, stage: result.session.stage, via: result.via, availabilityRequestId: result.session.availabilityRequestId || "", ...shownWith(result) }, "info", Math.max(clock(), saidAt + 1));
         // Questions BOB couldn't answer from approved knowledge, and AI answers the safety filter blocked,
         // show under Activity → Warnings so the office can add the missing FAQ.
+        if (result.session.commercial && !data.commercial) await record(req, "conversation.commercial", { stage: data.stage }, "info", Math.max(clock(), saidAt + 2));
         const asked = String(redactCode(body.message)).slice(0, 500);
         if (result.unanswered) await record(req, "conversation.unanswered_question", { text: asked, stage: data.stage, voiced: Boolean(result.voiced) }, "warning");
         if (result.aiRejected?.includes("answer")) await record(req, "conversation.ai_answer_blocked", { text: asked, stage: data.stage }, "warning");
@@ -1106,6 +1116,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       // Back: restore the state before the last chat answer. The server keeps those states, so a
       // customer can change an answer but can't hand BOB a made-up conversation.
       if (method === "POST" && pathname === "/api/chat/back") {
+        requireNotCommercial((await session(req)).data);
         await rate(req, "chat-back", 60);
         const { token, data } = await session(req);
         if (data.bookingId || ["verify", "slots", "approval", "confirmed"].includes(data.stage) || data.contact?.phone) fail(409, "Your details are already in. Use “Edit details” to change them.");
@@ -1151,7 +1162,8 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
 
       if (method === "POST" && pathname === "/api/contact") {
         await rate(req, "contact", 20, 600_000);
-        const { token } = await session(req), body = await readBody(req);
+        const { token, data } = await session(req), body = await readBody(req);
+        requireNotCommercial(data);
         if (!await store.lock(`verification:${token}`, 30)) fail(409, 'A verification request is in progress. Please wait.');
         try {
         const data = await store.loadSession(token);
@@ -1211,6 +1223,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       if (method === "POST" && pathname === "/api/verify/send") {
         await rate(req, "verify-send", 10, 3_600_000);
         const { token, data } = await session(req);
+        requireNotCommercial(data);
         const c = await store.config();
         if (!useTwilioVerify || !verificationReady(c)) fail(503, 'Verification is disabled or not configured. Please contact the office.');
         const body = await readBody(req);
@@ -1226,6 +1239,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       if (method === "GET" && pathname === "/api/availability") {
         await rate(req, "availability", 40);
         const { token, data } = await session(req);
+        requireNotCommercial(data);
         const c = await store.config();
         if (data.stage !== "slots" || !data.serviceAccepted || data.safety || !data.location) fail(409, "Complete the service and contact details first.");
         if (!phoneOk(data, c)) fail(409, "Verify your selected contact method with a code first.", { code: "PHONE_NOT_VERIFIED" });
@@ -1352,6 +1366,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       if (method === "POST" && pathname === "/api/approvals") {
         await rate(req, "approvals", 10, 600_000);
         const { token, data } = await session(req), body = await readBody(req);
+        requireNotCommercial(data);
         if (body.approved !== true) fail(400, "Approve the final service, price, address, and arrival window first.");
         if (data.approvalId) {
           const current = await store.approval(data.approvalId);
@@ -1399,6 +1414,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       // The summary the customer approves before the request goes out: the service, the premium and the address.
       if (method === "GET" && pathname === "/api/approvals/after-hours") {
         const { data } = await session(req);
+        requireNotCommercial(data);
         if (!data.afterHours || data.stage !== "slots" || !data.contact) fail(409, "Choose after-hours service and enter your details first.");
         const c = await store.config();
         const q = afterHoursQuote(data, c);
@@ -1408,6 +1424,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       if (method === "POST" && pathname === "/api/approvals/after-hours") {
         await rate(req, "approvals", 10, 600_000);
         const { token, data } = await session(req), body = await readBody(req);
+        requireNotCommercial(data);
         if (body.approved !== true) fail(400, "Approve the service, the after-hours premium and your address first.");
         if (data.approvalId) {
           const current = await store.approval(data.approvalId);
@@ -1553,7 +1570,20 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           request.afterHours = { package: q?.name || null, serviceCents: q?.priceCents ?? null, premiumCents: fee };
           request.message = `AFTER-HOURS EMERGENCY REQUEST${q ? `: ${q.name} (${money(q.priceCents)})` : ""}${fee ? ` + after-hours premium ${money(fee)}` : ""}. Call the customer to confirm on-call availability.\n\n${request.message}`;
         }
+        if (data.commercial) {
+          request.kind = "commercial";
+          request.message = `COMMERCIAL REQUEST. Contact the customer to discuss the job and quote it.\n\n${request.message}`;
+        }
         await store.insertRequest(request, token, body.idempotencyKey);
+        if (request.kind === "commercial") {
+          const to = c.email || c.approver?.email || "";
+          if (to) {
+            const text = `${request.message}\n\nCustomer: ${request.name}\nPhone: ${request.phone}\nEmail: ${request.email || "—"}\nZIP: ${request.zip || "—"}\nPreferred contact: ${request.preference}\n\nReview in the dashboard Inbox: ${publicOrigin || ""}/admin`;
+            await deliverEmailOnce({ store, kind: "commercial_request", id: request.id, to, clock, enabled: true, configured: useSendGrid && Boolean(sendgrid?.configured),
+              message: { subject: `Commercial request: ${request.name}`, text },
+              sendEmail: async ({ to: recipient, ...content }) => sendgrid.sendEmail(recipient, content) }).catch(() => {});
+          }
+        }
         if (request.kind === "after_hours") {
           const to = c.approver?.email || c.email || "";
           if (to) {
@@ -1565,7 +1595,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         }
         await store.enqueue("request.created", request, Boolean(webhookUrl));
         await store.audit("request.created", request.id);
-        await record(req, "request.sent", { requestId: request.id, name: request.name, phone: request.phone, email: request.email, preference: request.preference, message: body.message.trim(), afterHours: request.kind === "after_hours" });
+        await record(req, "request.sent", { requestId: request.id, name: request.name, phone: request.phone, email: request.email, preference: request.preference, message: body.message.trim(), afterHours: request.kind === "after_hours", commercial: request.kind === "commercial" });
         await dispatch();
         return send(201, { request: { id: request.id, status: "submitted" } });
       }

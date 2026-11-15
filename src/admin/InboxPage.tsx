@@ -159,6 +159,7 @@ function RequestModal({ request: r, onClose }: { request: any; onClose: () => vo
       </>}>
       {!canManage && <p className="text-sm text-slate-600">You have view-only access to the inbox.</p>}
       {r.safety && <div className="bg-rose-50 border border-rose-200 rounded-2xl p-3 text-sm font-bold text-rose-800 flex gap-2"><AlertTriangle size={18} />Safety flag: {r.safety}</div>}
+      {r.kind === 'commercial' && <div className="bg-blue-50 border border-blue-200 rounded-2xl p-3 text-sm font-bold text-blue-900">Commercial job: BOB didn't book anything. Contact the customer to discuss it and give a quote.</div>}
       <div className="text-sm text-slate-700 space-y-1">
         <p><a className="font-bold hover:text-orange-600" href={`tel:${r.phone}`}>{r.phone}</a>{r.email ? ` · ${r.email}` : ''}{r.zip ? ` · ZIP ${r.zip}` : ''}</p>
         <p className="text-xs text-slate-500">{r.smsConsent ? 'OK to text' : 'No texting consent'}{r.route ? ` · asked about ${r.route}` : ''}</p>

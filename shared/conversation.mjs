@@ -18,7 +18,10 @@
 //     only on a yes; just the cleaning stays available: if damage keeps the technician from cleaning,
 //     the visit becomes an assessment instead; if the cleaning can still be done, an assessment for an
 //     upgrade, reroute or minor damage can be added on site at the add-on price ($60)
-//   • appliance problems, commercial work, complaints and "talk to a person" go to the team
+//   • commercial jobs are never booked online: a chat from the commercial side of the website, or one
+//     where the customer says it's for a business, HOA, apartments or another multi-unit property,
+//     only collects contact details and needs for the team (the server refuses every booking step)
+//   • appliance problems, complaints and "talk to a person" go to the team
 //   • facts already given are reused, "Not sure" is accepted, and a question asked mid-booking
 //     is answered before returning to the unfinished step
 //
@@ -283,11 +286,19 @@ export function detectSafety(text) {
   return null;
 }
 
+/** Words that make a job commercial. "Apartment" alone is a resident's home, so it isn't here. */
+export const COMMERCIAL = /\b(?:commercial|hoas?|apartments|apartment (?:complex|complexes|building|buildings|community|communities)|multi-?units?|multi-?family|property manag\w*|laundromats?|coin laundr\w*)\b/;
+/** BOB's opening on the commercial side of the website, and its answer once a chat turns commercial. */
+export const COMMERCIAL_WELCOME = "Hi! I'm BOB with Dryer Vent Squad West Valley. Commercial jobs are quoted and scheduled by our team, so I don't book them online. Fill in the form below with your contact details and what you need: the type of property, how many units or dryers, and any problems you've noticed. Someone from our team will contact you.";
+export const COMMERCIAL_SWITCH = "Thanks for letting me know. Commercial jobs (businesses, HOAs, apartment and multi-unit properties, laundromats) are quoted and scheduled by our team, so I can't book them online. Fill in the form below with your contact details and what you need, and someone from Dryer Vent Squad will contact you.";
+export const COMMERCIAL_NOTED = "Got it, I've added that to your conversation for the team. When you're ready, send the form below with your contact details and someone from our team will contact you.";
+
 export function classify(text, session = initialSession()) {
   const t = normalize(text), s = detectSafety(t);
   if (s === "gas" || s === "fire") return { route: "emergency", safety: s };
+  if (COMMERCIAL.test(t)) return { route: "commercial" };
   if (/\b(?:kitchen ventilation|kitchen exhaust|chimney|hvac|air ducts)\b/.test(t)) return { route: "review" };
-  if (/\b(?:human|person|(?:talk|speak|chat) (?:to|with) (?:someone|somebody)|(?:have|get) (?:someone|somebody) (?:to )?call|someone (?:to )?call me|representative|callback|call me|call back|talk to (?:the )?team|complaint|warranty|refund|reschedule|cancel (?:my |the )?(?:appointment|booking)|commercial|hoa|apartments|multi-unit)\b/.test(t)) return { route: "review" };
+  if (/\b(?:human|person|(?:talk|speak|chat) (?:to|with) (?:someone|somebody)|(?:have|get) (?:someone|somebody) (?:to )?call|someone (?:to )?call me|representative|callback|call me|call back|talk to (?:the )?team|complaint|warranty|refund|reschedule|cancel (?:my |the )?(?:appointment|booking))\b/.test(t)) return { route: "review" };
   if (/\b(dryer|machine|appliance)\b/.test(t) && /\b(won't (?:turn on|start|spin|heat)|will not (?:turn on|start|spin|heat)|not (?:turning on|starting|spinning|heating)|motor|drum|control board|dryer is broken|broken dryer|repair my dryer)\b/.test(t) && !VENT.test(t)) return { route: "appliance" };
   if (NO_CLEAN.test(t)) return { route: "assessment", explicitSwitch: true };
   if (NEST.test(t)) return { route: "nest_offer" };
@@ -1384,6 +1395,21 @@ export function turn(text, current, config = DEFAULT_CONFIG, faqs = [], opts = {
     s.pending = null;
     s.serviceAccepted = false;
     return respond(FIRE_ALERT, [FIRE_SAFE], { action: "emergency" });
+  }
+  // -- commercial jobs: never booked online -----------------------------------------------------
+  // commercial: "page" when the chat started on the commercial side of the website (kept through
+  // "start over"), "said" when the customer described a commercial job. Either way, from then on
+  // every answer points to the request form. Gas, smoke and fire were handled above.
+  if (s.stage !== "emergency" && !s.commercial && classify(text, s).route === "commercial") s.commercial = "said";
+  if (s.commercial && s.stage !== "emergency") {
+    if (/^(?:start over|restart|new conversation|reset)$/.test(t) && s.commercial === "said") {
+      Object.assign(s, { ...initialSession(), history: s.history });
+      delete s.commercial;
+      return welcome();
+    }
+    const switched = !current?.commercial;
+    Object.assign(s, { stage: "review", pending: null, serviceAccepted: false });
+    return respond(switched ? COMMERCIAL_SWITCH : COMMERCIAL_NOTED, [], { action: "request" });
   }
   if (s.stage === "emergency") return respond(`Do not resume using the dryer. Emergency responders or a qualified professional must confirm the immediate danger is resolved. Once everyone is safe, call our office at **${officePhone(config)}** and the team will help you.`, [], { action: "call_office", phone: officePhone(config) });
   if (safety === "stop") rememberHeatSources(s, t);

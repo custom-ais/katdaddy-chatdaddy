@@ -14,7 +14,10 @@ test("the embed script offers page-aware nudges, can be turned off, and is ASCII
   assert.match(embed, /data-nudge="off"|dataset\.nudge==='off'/);
   assert.match(embed, /bob-nudge-dismissed/);
   assert.match(embed, /14\*864e5/, "a dismissal keeps it away for two weeks");
-  assert.match(embed, /'\/chat\?embed=1'\+\(start\?'&start='/, "tapping it opens BOB on the matching path");
+  assert.match(embed, /'\/chat\?embed=1'\+\(frameAudience==='commercial'\?'&audience=commercial':\(start\?'&start='/, "tapping it opens BOB on the matching path; on the commercial side, the commercial chat");
+  assert.match(embed, /script\.dataset\.audience/, "the site can say which side a page is on");
+  assert.match(embed, /commercial\(\[\\\/_\.-\]\|\$\)/, "otherwise a page address with \"commercial\" in it counts");
+  assert.match(embed, /cta:'Request a quote'/, "the commercial side offers a quote request, not a booking");
   assert.match(embed, /Hi, I'm BOB!/, "BOB introduces itself");
   assert.match(embed, /Dryer Vent Squad's booking assistant/);
   assert.match(embed, /'Ask a question'/);

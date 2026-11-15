@@ -449,7 +449,9 @@ function LineItems({ items, total }: { items: any[]; total: number }) {
 }
 
 function RequestForm({ token, session, onDone }: { token: string; session: any; onDone: (id: string) => void }) {
+  const commercial = Boolean(session?.commercial);
   const [form, setForm] = useState({ name: session?.contact?.name || '', phone: session?.contact?.phone || '', email: session?.contact?.email || '', zip: session?.zip || '', message: [session?.afterHours ? 'After-hours emergency visit requested.' : '', ...(session?.concerns || [])].filter(Boolean).join('\n'), preference: 'phone', smsConsent: false });
+  const [business, setBusiness] = useState('');
   const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const id = useRef(crypto.randomUUID());
   const input = 'w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-semibold text-slate-800 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 outline-none';
@@ -458,22 +460,24 @@ function RequestForm({ token, session, onDone }: { token: string; session: any; 
     if (busy) return;
     setBusy(true); setError('');
     try {
-      const r = await api('/api/requests', { method: 'POST', token, body: { ...form, idempotencyKey: id.current } });
+      const message = commercial && business.trim() ? `Business / property: ${business.trim()}\n\n${form.message}` : form.message;
+      const r = await api('/api/requests', { method: 'POST', token, body: { ...form, message, idempotencyKey: id.current } });
       onDone(r.request.id);
     } catch (err) { setError((err as Error).message); } finally { setBusy(false); }
   };
   return (
     <Card>
       <form onSubmit={submit} className="space-y-3">
-        <h3 className="font-extrabold text-slate-800 text-lg flex items-center gap-2"><Phone size={20} className="text-orange-500" />Send the team a request</h3>
-        <p className="text-sm text-slate-500">It goes straight to the Dryer Vent Squad office. It isn't a booking or a change to one — the team will call or email you.</p>
+        <h3 className="font-extrabold text-slate-800 text-lg flex items-center gap-2"><Phone size={20} className="text-orange-500" />{commercial ? 'Tell us about your commercial job' : 'Send the team a request'}</h3>
+        <p className="text-sm text-slate-500">{commercial ? "It goes straight to the Dryer Vent Squad office. Commercial jobs aren't booked online — someone from the team will contact you to discuss it and give you a quote." : "It goes straight to the Dryer Vent Squad office. It isn't a booking or a change to one — the team will call or email you."}</p>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <label className="text-xs font-bold text-slate-700">Full name<input className={input} required autoComplete="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+          {commercial && <label className="text-xs font-bold text-slate-700">Business or property name (optional)<input className={input} autoComplete="organization" maxLength={200} value={business} onChange={(e) => setBusiness(e.target.value)} /></label>}
           <label className="text-xs font-bold text-slate-700">Callback number<PhoneInput className={input} required type="tel" autoComplete="tel" value={form.phone} onValueChange={(value) => setForm({ ...form, phone: value })} /></label>
           <label className="text-xs font-bold text-slate-700">Email (optional)<input className={input} type="email" autoComplete="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
-          <label className="text-xs font-bold text-slate-700">Service ZIP (optional)<input className={input} autoComplete="postal-code" inputMode="numeric" maxLength={5} value={form.zip} onChange={(e) => setForm({ ...form, zip: e.target.value })} /></label>
+          <label className="text-xs font-bold text-slate-700">{commercial ? 'Property ZIP (optional)' : 'Service ZIP (optional)'}<input className={input} autoComplete="postal-code" inputMode="numeric" maxLength={5} value={form.zip} onChange={(e) => setForm({ ...form, zip: e.target.value })} /></label>
         </div>
-        <label className="block text-xs font-bold text-slate-700">What do you need?<textarea className={`${input} min-h-24`} required maxLength={4000} value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} /></label>
+        <label className="block text-xs font-bold text-slate-700">What do you need?<textarea className={`${input} min-h-24`} required maxLength={4000} placeholder={commercial ? 'Type of property (apartments, HOA, laundromat, business), how many units or dryers, and any problems you’ve noticed.' : undefined} value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} /></label>
         <label className="block text-xs font-bold text-slate-700">Best way to reach you
           <select className={input} value={form.preference} onChange={(e) => setForm({ ...form, preference: e.target.value })}><option value="phone">Phone call</option><option value="email">Email</option></select>
         </label>
@@ -1086,6 +1090,8 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
   const [token, setToken] = useState(''), [session, setSession] = useState<any>(null), [config, setConfig] = useState<any>(null);
   // A starting path from the website nudge (?start=repair), begun once the chat is ready and empty.
   const pageStart = useRef<string | null>(embedded ? new URLSearchParams(window.location.search).get('start') : null);
+  // The commercial side of the website (?audience=commercial): BOB only collects details and needs there.
+  const commercialPage = useRef(new URLSearchParams(window.location.search).get('audience') === 'commercial').current;
   const [startTick, setStartTick] = useState(0);
   const [autoClose, setAutoClose] = useState(false);
   const [minimized, setMinimized] = useState(() => { try { return sessionStorage.getItem(preview ? 'bob.preview.minimized' : 'bob.minimized') === '1'; } catch { return false; } });
@@ -1136,7 +1142,9 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       try { stored = fresh ? '' : sessionStorage.getItem(storageKey) || ''; } catch {}
       let r: any = null;
       if (stored) { try { r = await api('/api/session', { token: stored }); r.token = stored; } catch { r = null; } }
-      if (!r) r = await api('/api/session', { method: 'POST', body: {} });
+      // On the commercial side, an earlier home-service chat (nothing booked) gives way to a commercial one.
+      if (r && commercialPage && !r.session?.commercial && !r.receipt && !r.session?.bookingId) r = null;
+      if (!r) r = await api('/api/session', { method: 'POST', body: commercialPage ? { audience: 'commercial' } : {} });
       if (!mounted.current) return;
       setToken(r.token);
       try { sessionStorage.setItem(storageKey, r.token); } catch {}
@@ -1273,6 +1281,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       setSession(r.session);
       setMessages((m) => [...m, { role: 'model', text: r.reply, info: r.info, logged: true, ...(r.card ? { card: r.card } : {}) }]);
       setOptions(r.options || []); setMulti(Boolean(r.multi)); setSuggested(r.suggested || '');
+      if (r.session?.commercial) forget(); // a commercial chat can't be taken back to booking
       if (r.action === 'contact') { setAction('contact'); startContact(r.session); }
       else if (r.action === 'request') setAction('request');
       else if (r.action === 'emergency') setAction('emergency');
@@ -1302,7 +1311,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     if (token) void api('/api/activity', { method: 'POST', token, body: { kind: 'widget.nudge_opened', topic: key } }).catch(() => {});
   }, [ready, messages.length, receipt, startTick]);
   const goBack = async () => {
-    if (busyRef.current || !undo.current.length) return;
+    if (busyRef.current || !undo.current.length || session?.commercial) return;
     const snap = undo.current[undo.current.length - 1];
     setError('');
     if (snap.kind === 'server') {
@@ -1506,7 +1515,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
             <h1 className="flex items-center gap-2 leading-none">
               <span className="font-display font-extrabold text-lg text-white tracking-tight">BOB</span>
               <span className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-wide ${ready ? 'bg-emerald-400/15 text-emerald-300' : error ? 'bg-rose-400/15 text-rose-300' : 'bg-slate-600/60 text-slate-300'}`}>
-                {ready ? (config?.bookingEnabled ? 'Live schedule' : 'Requests') : error ? 'Not connected yet' : 'Connecting…'}
+                {ready ? (session?.commercial ? 'Commercial' : config?.bookingEnabled ? 'Live schedule' : 'Requests') : error ? 'Not connected yet' : 'Connecting…'}
               </span>
             </h1>
             <p className="mt-1 truncate text-xs font-semibold text-slate-300">{config?.businessName || 'Dryer Vent Squad West Valley'}</p>

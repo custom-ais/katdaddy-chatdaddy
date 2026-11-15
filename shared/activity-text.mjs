@@ -141,6 +141,7 @@ const EMAIL_KINDS = {
   approval_pending: "the email asking the team to approve a time",
   booking_report: "the booking report email",
   after_hours_request: "the after-hours request email to the team",
+  commercial_request: "the commercial request email to the office",
 };
 const NOT_PROOF = "The text service accepted it. That usually means it arrives, but doesn't prove it reached the phone.";
 const NOT_PROOF_EMAIL = "The email service accepted it. That usually means it arrives, but doesn't prove it reached the inbox.";
@@ -280,7 +281,11 @@ function describeKind(kind, d) {
   const status = rest.join(".");
   switch (kind) {
     case "conversation.started":
-      return { title: "A customer opened a new chat with BOB", tone: "info" };
+      return d.audience === "commercial"
+        ? { title: "A customer opened BOB on the commercial side of the website", detail: "BOB doesn't book commercial jobs. It only collects their details and needs for the team.", tone: "info" }
+        : { title: "A customer opened a new chat with BOB", tone: "info" };
+    case "conversation.commercial":
+      return { title: "BOB stopped booking: the customer said it's a commercial job", detail: "BOB asked for their details and needs so the team can contact them.", tone: "info", chat: true };
     case "conversation.message": {
       const step = stageLabel(d.stage);
       const text = str(d.text) === "[verification code omitted]" ? "(A verification code. Hidden for security.)" : str(d.text);
@@ -317,7 +322,7 @@ function describeKind(kind, d) {
     }
     case "request.sent": {
       const from = [str(d.name), str(d.phone), str(d.email)].filter(Boolean).join(" · ");
-      return { title: d.afterHours ? "Customer sent an after-hours request to the office" : "Customer sent a message to the office", quote: { who: "customer", text: str(d.message) }, detail: [from && `From ${from}.`, `Prefers a ${d.preference === "email" ? "reply by email" : "call back"}. It's in the Inbox.`].filter(Boolean).join(" "), tone: "attention" };
+      return { title: d.commercial ? "Commercial customer sent a request to the office" : d.afterHours ? "Customer sent an after-hours request to the office" : "Customer sent a message to the office", quote: { who: "customer", text: str(d.message) }, detail: [from && `From ${from}.`, `Prefers a ${d.preference === "email" ? "reply by email" : "call back"}. It's in the Inbox.`].filter(Boolean).join(" "), tone: "attention" };
     }
     case "conversation.unanswered_question":
       return { title: "BOB couldn't answer a customer's question", quote: { who: "customer", text: str(d.text) }, detail: "If customers ask this often, add an answer in Settings → Answers.", tone: "attention" };
