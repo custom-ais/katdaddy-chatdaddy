@@ -16,6 +16,23 @@ async function pool(items, limit, fn) {
 }
 
 export function createScheduler({ store, jobber, geo }) {
+  // Tasks and events Jobber won't describe or answer don't stop bookings (visits and assessments
+  // still count), but the office hears about it in BOB activity, at most every six hours.
+  async function calendarItems(from, to, fresh) {
+    try { return await jobber.readCalendarItems(from, to, { fresh }); }
+    catch (error) {
+      if (error?.code !== "JOBBER_CALENDAR_UNSUPPORTED") throw error;
+      console.warn("[schedule] Jobber tasks and events unavailable:", error.message);
+      try {
+        if (!(await store.kvGet("diag:jobber-calendar-warned"))) {
+          await store.kvSet("diag:jobber-calendar-warned", true, 21_600);
+          await store.log("jobber.calendar_unavailable", { reason: error.message }, { level: "warning" });
+        }
+      } catch {}
+      return [];
+    }
+  }
+
   /** Everything occupying the crew between two instants. */
   async function blocks({ config, technicians, from, to, excludeSession = "", ignoreAppointmentId = null, fresh = false }) {
     const out = [];
@@ -28,15 +45,24 @@ export function createScheduler({ store, jobber, geo }) {
         const ids = userIds.map((u) => byJobberUser.get(u)).filter(Boolean);
         return ids.length ? ids : null;
       };
-      const [visits, assessments] = await Promise.all([
+      const [visits, assessments, calendar] = await Promise.all([
         jobber.readVisits(from, to, { fresh }),
         typeof jobber.readAssessments === "function" ? jobber.readAssessments(from, to, { fresh }) : [],
+        typeof jobber.readCalendarItems === "function" ? calendarItems(from, to, fresh) : [],
       ]);
       for (const v of visits) {
         out.push({ id: `j:${v.id}`, kind: "jobber", start: v.start, end: v.end, allDay: v.allDay, techIds: crew(v.jobberUserIds), address: v.address, location: null });
       }
       for (const v of assessments) {
         out.push({ id: `ja:${v.id}`, kind: "jobber", source: "assessment", start: v.start, end: v.end, allDay: v.allDay, techIds: crew(v.jobberUserIds), address: v.address, location: null });
+      }
+      // Tasks and events (time off, meetings, errands) take their time from the people they're for,
+      // but have no address, so they aren't stops on a route (timeOnly). Unassigned, or Jobber didn't
+      // say: everyone, like an unassigned visit. For people who aren't BOB technicians (the office):
+      // only technicians not linked to a Jobber user, who could be anyone.
+      for (const v of calendar) {
+        const techIds = Array.isArray(v.jobberUserIds) && v.jobberUserIds.length ? v.jobberUserIds.map((u) => byJobberUser.get(u)).filter(Boolean) : null;
+        out.push({ id: `jt:${v.id}`, kind: "jobber", source: v.kind, timeOnly: true, title: v.title, start: v.start, end: v.end, allDay: v.allDay, techIds, address: "", location: null });
       }
     }
     const alsoTechs = new Set(technicians.filter((t) => t.jobberUserId && (config.alsoAssignJobberUserIds || []).includes(t.jobberUserId)).map((t) => t.id));
@@ -55,7 +81,7 @@ export function createScheduler({ store, jobber, geo }) {
     // Calendar items BOB didn't book (BidBee, the office) often carry a default or short length.
     // Each takes at least the standard visit length; BOB's own verified bookings keep their real one.
     const floor = Math.max(0, Number(config.minVisitMinutes) || 0) * 60_000;
-    for (const b of out) if (b.kind === "jobber" && !b.own && !b.allDay && b.end - b.start < floor) b.end = b.start + floor;
+    for (const b of out) if (b.kind === "jobber" && !b.own && !b.allDay && !b.timeOnly && b.end - b.start < floor) b.end = b.start + floor;
     for (const h of await store.activeHolds(from, to, excludeSession)) {
       out.push({ id: `h:${h.id}`, kind: "hold", start: h.start, end: h.end, allDay: false, techIds: [h.tech], address: h.address, location: h.location, overflow: Boolean(h.overflow) });
     }

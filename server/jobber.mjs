@@ -370,6 +370,163 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     return all.filter((a) => a.start >= from && a.start < to);
   }
 
+  // ---- Tasks and events ---------------------------------------------------------------
+  // Tasks and events (time off, meetings, errands) share the Jobber calendar with visits and
+  // assessments, but only Jobber's scheduledItems list has them. Its filter names and item types
+  // aren't published anywhere BOB can check, so the query is built from Jobber's own description
+  // of its API (GraphQL introspection), read once a day per API version: how the list filters by
+  // date, which kinds of calendar item it holds, and each kind's fields. Visits and assessments are
+  // read above; reminders occupy nobody.
+  const TYPE_REF = "kind name ofType { kind name ofType { kind name ofType { kind name } } }";
+  const named = (t) => { let x = t; while (x && (x.kind === "NON_NULL" || x.kind === "LIST") && x.ofType) x = x.ofType; return x || null; };
+  const listOf = (t) => { for (let x = t; x; x = x.ofType) if (x.kind === "LIST") return true; return false; };
+  const NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  const NOT_TASKS = /^(?:visit|assessment|reminder\w*)$/i;
+  const SHAPE_KEY = () => `jobber:calendar-shape:v1:${cfg.version}`;
+  const calendarUnsupported = (reason) => Object.assign(new Error(reason), { code: "JOBBER_CALENDAR_UNSUPPORTED" });
+  // Jobber answered, but refused what was asked (a schema change, or a permission the app lacks):
+  // not a network problem, so asking again won't help.
+  const refused = (error) => /^Jobber: /.test(error?.message || "") || /^Jobber HTTP 4(?!29)\d\d/.test(error?.message || "");
+
+  async function describe(query, variables) {
+    try { return await gql(query, variables); }
+    catch (error) { if (refused(error)) throw calendarUnsupported(`Jobber didn't describe its calendar (${error.message.replace(/^Jobber:?\s*/, "")}).`); throw error; }
+  }
+
+  /** How to ask Jobber for tasks and events: { supported, reason } or { supported, dateField, pair, scalar, kinds, types }. */
+  async function discoverCalendar() {
+    const no = (reason) => ({ supported: false, reason });
+    const root = await describe(`query BobCalendarSchemaRoot { schema: __type(name: "Query") { fields { name args { name type { ${TYPE_REF} } } type { ${TYPE_REF} } } } }`);
+    const field = (root?.schema?.fields || []).find((f) => f?.name === "scheduledItems");
+    if (!field) return no("This Jobber API version has no calendar list (scheduledItems).");
+    const args = field.args || [];
+    const connection = named(field.type)?.name, filterType = named(args.find((a) => a?.name === "filter")?.type)?.name;
+    if (!connection || !filterType || !["first", "after"].every((n) => args.some((a) => a?.name === n))) return no("Jobber's calendar list can't be filtered by date and paged.");
+    const parts = await describe(`query BobCalendarSchemaParts($connection: String!, $filter: String!) {
+      connection: __type(name: $connection) { fields { name type { ${TYPE_REF} } } }
+      filter: __type(name: $filter) { inputFields { name defaultValue type { ${TYPE_REF} } } }
+    }`, { connection, filter: filterType });
+    const connFields = parts?.connection?.fields || [], inputs = parts?.filter?.inputFields || [];
+    const node = named(connFields.find((f) => f?.name === "nodes")?.type)?.name;
+    const dateField = ["startAt", "startsBetween", "occursWithin", "occursBetween"].map((n) => inputs.find((i) => i?.name === n)).find(Boolean);
+    const kindField = inputs.find((i) => /^(?:schedul\w*Item)?Types?$/i.test(i?.name || "") && named(i.type)?.kind === "ENUM");
+    // A filter input Jobber requires that BOB doesn't know how to fill makes the list unreadable.
+    const unknownRequired = inputs.filter((i) => i?.type?.kind === "NON_NULL" && i.defaultValue == null && i !== dateField && i !== kindField);
+    if (!node || !connFields.some((f) => f?.name === "pageInfo") || !dateField || named(dateField.type)?.kind !== "INPUT_OBJECT") return no("Jobber's calendar list has no date range filter BOB recognizes.");
+    if (unknownRequired.length) return no(`Jobber's calendar list requires filters BOB doesn't know (${unknownRequired.map((i) => i.name).join(", ")}).`);
+    const details = await describe(`query BobCalendarSchemaTypes($node: String!, $date: String!, $kinds: String!) {
+      node: __type(name: $node) { possibleTypes { name fields { name args { name } type { ${TYPE_REF} } } } }
+      date: __type(name: $date) { inputFields { name type { ${TYPE_REF} } } }
+      kinds: __type(name: $kinds) { enumValues { name } }
+    }`, { node, date: named(dateField.type).name, kinds: named(kindField?.type)?.name || named(dateField.type).name });
+    const range = details?.date?.inputFields || [];
+    const pair = [["after", "before"], ["from", "to"], ["startAt", "endAt"], ["start", "end"]].find(([a, b]) => range.some((i) => i?.name === a) && range.some((i) => i?.name === b));
+    const scalar = pair && named(range.find((i) => i.name === pair[0]).type)?.name;
+    if (!pair || !NAME.test(scalar || "")) return no("Jobber's calendar date filter has a shape BOB doesn't recognize.");
+    const types = [];
+    for (const t of details?.node?.possibleTypes || []) {
+      if (!NAME.test(t?.name || "") || NOT_TASKS.test(t.name)) continue;
+      const has = (n) => (t.fields || []).find((f) => f?.name === n);
+      if (!has("id") || !has("startAt")) continue;
+      const users = has("assignedUsers");
+      const target = users && named(users.type);
+      // Who it's for, read the way Jobber shapes it; an unknown shape counts as everyone.
+      const assigned = !users ? null
+        : target?.kind === "OBJECT" && /Connection$/.test(target.name || "") && (users.args || []).some((a) => a?.name === "first") ? "assignedUsers(first: 5) { nodes { id } pageInfo { hasNextPage } }"
+          : listOf(users.type) && (users.args || []).every((a) => a?.name !== "first") ? "assignedUsers { id }" : null;
+      types.push({ name: t.name, fields: ["id", has("title") && "title", "startAt", has("endAt") && "endAt", has("allDay") && "allDay", assigned].filter(Boolean) });
+    }
+    if (!types.length) return no("Jobber's calendar has no task or event items BOB can read.");
+    // Ask only for tasks and events when the filter can name every one of them; otherwise read the
+    // whole calendar and keep them.
+    const squash = (s) => String(s).replace(/[^a-z]/gi, "").toLowerCase();
+    const values = (details?.kinds?.enumValues || []).map((v) => v?.name).filter((v) => NAME.test(v || ""));
+    const picked = kindField ? types.map((t) => values.find((v) => squash(v) === squash(t.name) || squash(t.name).endsWith(squash(v)))) : [];
+    const kinds = kindField && picked.every(Boolean) && (listOf(kindField.type) || new Set(picked).size === 1)
+      ? { field: kindField.name, values: [...new Set(picked)], list: listOf(kindField.type) } : null;
+    return { supported: true, dateField: dateField.name, pair, scalar, kinds, types };
+  }
+
+  async function calendarShape() {
+    const cached = await store.kvGet(SHAPE_KEY());
+    if (cached) return cached;
+    const shape = await discoverCalendar();
+    await store.kvSet(SHAPE_KEY(), shape, shape.supported ? 86_400 : 3_600);
+    return shape;
+  }
+
+  const calendarQuery = (shape) => {
+    const [a, b] = shape.pair;
+    const kinds = shape.kinds ? `, ${shape.kinds.field}: ${shape.kinds.list ? `[${shape.kinds.values.join(", ")}]` : shape.kinds.values[0]}` : "";
+    return `query BobCalendarItems($from: ${shape.scalar}!, $to: ${shape.scalar}!, $cursor: String) {
+      scheduledItems(first: 50, after: $cursor, filter: { ${shape.dateField}: { ${a}: $from, ${b}: $to }${kinds} }) {
+        pageInfo { hasNextPage endCursor }
+        nodes { __typename ${shape.types.map((t) => `... on ${t.name} { ${t.fields.join(" ")} }`).join(" ")} }
+      }
+    }`;
+  };
+
+  // A week off or a multi-day event can start before the window it blocks.
+  const CALENDAR_LOOKBACK_MS = 7 * 86_400_000;
+
+  /**
+   * Tasks and events overlapping [from, to), shaped like readVisits rows plus kind ("task" or
+   * "event"). jobberUserIds is null when Jobber doesn't say who it's for. Throws an error with code
+   * JOBBER_CALENDAR_UNSUPPORTED when Jobber won't describe or answer the lookup.
+   */
+  async function readCalendarItems(from, to, { fresh = false } = {}) {
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) throw new Error("A valid Jobber calendar lookup interval is required.");
+    const binding = await accountIdentityRevision();
+    if (!appConfigured || !binding) throw new JobberNotConnected();
+    const key = `jobber:calendar:v1:${binding}:${cfg.version}:${from}:${to}`;
+    if (!fresh) {
+      const cached = await store.kvGet(key);
+      if (cached) return cached;
+    }
+    const shape = await calendarShape();
+    if (!shape.supported) throw calendarUnsupported(shape.reason);
+    const query = calendarQuery(shape);
+    const items = [];
+    let cursor = null, complete = false;
+    for (let page = 0; page < 15; page++) {
+      let data;
+      try {
+        data = await gql(query, { from: new Date(from - CALENDAR_LOOKBACK_MS).toISOString(), to: new Date(to).toISOString(), cursor });
+      } catch (error) {
+        if (!refused(error)) throw error;
+        await store.kvSet(SHAPE_KEY(), null, 1); // describe the API again next time
+        throw calendarUnsupported(`Jobber refused the task and event lookup (${error.message.replace(/^Jobber:?\s*/, "")}).`);
+      }
+      const list = data?.scheduledItems;
+      if (!Array.isArray(list?.nodes) || typeof list.pageInfo?.hasNextPage !== "boolean") throw new Error("Jobber tasks and events could not be fully verified.");
+      for (const n of list.nodes) {
+        if (!n || !shape.types.some((t) => t.name === n.__typename)) continue; // visits and assessments are read on their own
+        if (n.startAt == null) continue; // not on the calendar yet
+        if (typeof n.id !== "string" || !n.id.trim()) throw new Error("Jobber returned an invalid task or event ID. Office review is required.");
+        const start = Date.parse(n.startAt);
+        const end = n.endAt ? Date.parse(n.endAt) : n.allDay ? start + 86_400_000 : start + 3_600_000;
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) throw new Error("Jobber returned an invalid task or event time. Office review is required.");
+        let jobberUserIds = null;
+        if (n.assignedUsers !== undefined) {
+          const connection = !Array.isArray(n.assignedUsers);
+          const people = connection ? n.assignedUsers?.nodes : n.assignedUsers;
+          if (!Array.isArray(people) || (connection && n.assignedUsers.pageInfo?.hasNextPage !== false)) throw new Error("Jobber task or event assignment list is incomplete. Office review is required.");
+          if (people.some((u) => typeof u?.id !== "string" || !u.id)) throw new Error("Jobber task or event assignment could not be verified.");
+          jobberUserIds = people.map((u) => u.id);
+        }
+        if (end <= from || start >= to) continue;
+        items.push({ id: n.id, kind: /event/i.test(n.__typename) ? "event" : "task", title: n.title || "", start, end, allDay: Boolean(n.allDay), jobberUserIds, address: "" });
+      }
+      if (!list.pageInfo.hasNextPage) { complete = true; break; }
+      const next = list.pageInfo.endCursor;
+      if (!next || next === cursor) throw new Error("Jobber task and event pagination could not be completed.");
+      cursor = next;
+    }
+    if (!complete) throw new Error("Jobber tasks and events exceed the verification limit. Office review is required.");
+    if (await accountIdentityRevision() === binding) await store.kvSet(key, items, 60);
+    return items;
+  }
+
   // The team list changes rarely: bookings reuse it for 5 minutes (per connected account). A
   // technician missing from a cached list is looked up again before a booking is refused.
   let usersCache = null;
@@ -646,6 +803,7 @@ export function createJobber({ store, env = process.env, fetchImpl = fetch, toke
     gql,
     readVisits,
     readAssessments,
+    readCalendarItems,
     listUsers,
     verifyAssignment,
     verifyScheduledVisit,

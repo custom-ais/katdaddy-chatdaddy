@@ -133,6 +133,12 @@ test("an availability lookup over 20 calendar visits stays within a database rou
     const op = JSON.parse(init.body).query.match(/query\s+(\w+)/)?.[1];
     if (op === "BobVisits") return json({ data: { visits: { nodes: visits, pageInfo: { hasNextPage: false } } } });
     if (op === "BobAssessments") return json({ data: { requests: { nodes: [], pageInfo: { hasNextPage: false } } } });
+    // Tasks and events: Jobber describes its calendar list once, then the list itself (empty here).
+    const T = (kind, name = null, ofType = null) => ({ kind, name, ofType });
+    if (op === "BobCalendarSchemaRoot") return json({ data: { schema: { fields: [{ name: "scheduledItems", args: [{ name: "first", type: T("SCALAR", "Int") }, { name: "after", type: T("SCALAR", "String") }, { name: "filter", type: T("INPUT_OBJECT", "ScheduledItemsFilter") }], type: T("NON_NULL", null, T("OBJECT", "ScheduledItemConnection")) }] } } });
+    if (op === "BobCalendarSchemaParts") return json({ data: { connection: { fields: [{ name: "nodes", type: T("LIST", null, T("INTERFACE", "ScheduledItemInterface")) }, { name: "pageInfo", type: T("OBJECT", "PageInfo") }] }, filter: { inputFields: [{ name: "startAt", defaultValue: null, type: T("INPUT_OBJECT", "DateRange") }] } } });
+    if (op === "BobCalendarSchemaTypes") return json({ data: { node: { possibleTypes: [{ name: "Event", fields: ["id", "title", "startAt", "endAt", "allDay"].map((name) => ({ name, args: [], type: T("SCALAR", "String") })) }] }, date: { inputFields: ["after", "before"].map((name) => ({ name, type: T("SCALAR", "ISO8601DateTime") })) }, kinds: { enumValues: null } } });
+    if (op === "BobCalendarItems") return json({ data: { scheduledItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } });
     throw new Error(`unexpected ${op}`);
   };
   const point = (s) => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0; return { lat: 33.4 + (h % 1000) / 10000, lng: -112.4 - ((h >> 10) % 1000) / 10000 }; };

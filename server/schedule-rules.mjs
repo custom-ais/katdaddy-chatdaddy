@@ -87,9 +87,15 @@ export function evaluateTech({ candidate, tech, blocks, drive, config, urgent = 
   const timed = mine.filter((b) => !b.allDay);
 
   if (timed.some((b) => b.start < candidate.end && b.end > candidate.start)) return { ok: false, reason: "overlap" };
+  // Jobber tasks and events have no place: an all-day one takes the day, a timed one keeps the usual
+  // gap on each side. They aren't stops, so they don't need a drive time.
+  if (mine.some((b) => b.timeOnly && b.allDay)) return { ok: false, reason: "busy_all_day" };
+  const gap = (Number(buffer) || 0) * MIN;
+  if (timed.some((b) => b.timeOnly && b.start < candidate.end + gap && b.end + gap > candidate.start)) return { ok: false, reason: "too_close_to_calendar_item" };
+  const stops = timed.filter((b) => !b.timeOnly);
 
   const legs = [];
-  const prev = timed.filter((b) => b.end <= candidate.start).sort((a, b) => b.end - a.end)[0];
+  const prev = stops.filter((b) => b.end <= candidate.start).sort((a, b) => b.end - a.end)[0];
   if (prev) {
     const d = drive.get(prev.id)?.toNew ?? null;
     if (!Number.isFinite(d) || d < 0) return { ok: false, reason: "unknown_location" };
@@ -97,7 +103,7 @@ export function evaluateTech({ candidate, tech, blocks, drive, config, urgent = 
     if (prev.end + Math.max(d, buffer) * MIN > candidate.start) return { ok: false, reason: "no_gap_after_previous", minutes: d };
     legs.push(d);
   }
-  const next = timed.filter((b) => b.start >= candidate.end).sort((a, b) => a.start - b.start)[0];
+  const next = stops.filter((b) => b.start >= candidate.end).sort((a, b) => a.start - b.start)[0];
   if (next) {
     const d = drive.get(next.id)?.fromNew ?? null;
     if (!Number.isFinite(d) || d < 0) return { ok: false, reason: "unknown_location" };
@@ -105,7 +111,7 @@ export function evaluateTech({ candidate, tech, blocks, drive, config, urgent = 
     if (candidate.end + Math.max(d, buffer) * MIN > next.start) return { ok: false, reason: "no_gap_before_next", minutes: d };
     legs.push(d);
   }
-  for (const b of mine.filter((x) => x.allDay)) {
+  for (const b of mine.filter((x) => x.allDay && !x.timeOnly)) {
     const info = drive.get(b.id);
     const d = info && info.toNew != null && info.fromNew != null ? Math.max(info.toNew, info.fromNew) : null;
     if (!Number.isFinite(d) || d < 0) return { ok: false, reason: "unknown_location" };
@@ -123,7 +129,7 @@ export function evaluateTech({ candidate, tech, blocks, drive, config, urgent = 
 
 /** Company-wide daily cap (BOB's "Maximum jobs per day"). */
 export function dayIsFull({ date, blocks, config }) {
-  const starting = blocks.filter((b) => phoenixDate(new Date(b.start)) === date);
+  const starting = blocks.filter((b) => !b.timeOnly && phoenixDate(new Date(b.start)) === date); // tasks and events aren't jobs
   return starting.length >= config.maxJobsPerDay;
 }
 
@@ -155,7 +161,7 @@ export function openSlots({ config, technicians, blocks, drive, durationMins, no
       const needsNearby = (candidate.sameDay && config.sameDay?.requireNearby) || (candidate.overflow && config.overflow?.requireNearby);
       if (needsNearby && !result.nearby) continue;
       if (candidate.overflow && result.nearestMin == null) continue; // never a 5 PM visit on an empty day
-      const jobs = blocks.filter((b) => !b.allDay && blockBelongsTo(b, tech) && phoenixDate(new Date(b.start)) === candidate.date);
+      const jobs = blocks.filter((b) => !b.allDay && !b.timeOnly && blockBelongsTo(b, tech) && phoenixDate(new Date(b.start)) === candidate.date);
       const route = config.routeScoring !== false && place ? routeScore({ candidate, jobs, place }) : { score: 0, parts: [] };
       const better =
         !best ||
@@ -188,7 +194,7 @@ export function openSlots({ config, technicians, blocks, drive, durationMins, no
  */
 export function explainDay({ config, technicians, blocks, drive, durationMins, now, date, ticketCents = 0, urgent = false }) {
   const at = (ms) => new Intl.DateTimeFormat("en-US", { timeZone: "America/Phoenix", hour: "numeric", minute: "2-digit" }).format(ms);
-  const source = (b) => (b.kind === "jobber" ? (b.source === "assessment" ? "jobber request" : b.own ? "jobber visit booked by BOB" : "jobber visit") : b.kind === "appointment" ? "BOB booking record" : b.kind);
+  const source = (b) => (b.kind === "jobber" ? (b.source === "assessment" ? "jobber request" : b.source === "task" ? "jobber task" : b.source === "event" ? "jobber event" : b.own ? "jobber visit booked by BOB" : "jobber visit") : b.kind === "appointment" ? "BOB booking record" : b.kind);
   const candidates = candidateStarts({ config, durationMins, now, date, ticketCents });
   return {
     date, durationMins, candidates: candidates.length,
