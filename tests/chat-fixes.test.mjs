@@ -246,11 +246,11 @@ test("an answer the AI already recorded moves on instead of looping on 'Sorry, I
 
 test("a booking says why no confirmation went out, so the office can see it", async (t) => {
   const sendgrid = { configured: true, calls: [], async sendEmail(to, m) { this.calls.push({ to, ...m }); return { status: "accepted" }; } };
-  const h = await harness(t, { sendgrid, env: { BOOKING_EMAIL_PROVIDER: "sendgrid" } });
-  const skipped = await h.book("cleaning", { name: "No Email Test", phone: "6235551234", email: "", address: "100 W Test St", city: "Buckeye", zip: "85326", notes: "" });
+  const h = await harness(t, { sendgrid, config: { emailConfirmations: false }, env: { BOOKING_EMAIL_PROVIDER: "sendgrid" } });
+  const skipped = await h.book("cleaning", { name: "Email Off Test", phone: "6235551234", email: "emailoff@example.test", address: "100 W Test St", city: "Buckeye", zip: "85326", notes: "" });
   assert.equal(skipped.status, 201, JSON.stringify(skipped.data));
   const appt = await h.store.appointment(skipped.data.receipt?.id || skipped.data.appointment?.id || (await h.store.appointments()).at(-1).id);
   assert.equal(appt.notifications.email, "skipped");
-  assert.equal(appt.notifications.emailReason, "no_email");
+  assert.equal(appt.notifications.emailReason, "email_confirmations_off");
   assert.equal(sendgrid.calls.filter((c) => /You're booked/.test(c.subject || "")).length, 0);
 });

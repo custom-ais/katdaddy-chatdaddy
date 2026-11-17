@@ -23,7 +23,7 @@ export const approved = {
   leadHours: 12,
 };
 export const contact = {
-  name: "Booking Test", phone: "6235551234", email: "", address: "100 W Test St", city: "Buckeye",
+  name: "Booking Test", phone: "6235551234", email: "booking-test@example.test", address: "100 W Test St", city: "Buckeye",
   zip: "85326", notes: "Automated test only", smsConsent: false,
 };
 

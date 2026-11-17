@@ -1179,7 +1179,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         if (!data) fail(401, 'This conversation expired. Start again.');
         if (!["cleaning", "assessment", "bundle"].includes(data.route) || !data.serviceAccepted || data.safety || ["review", "approval", "confirmed"].includes(data.stage)) fail(409, "Choose and accept the appropriate service first.");
         if (data.route === "bundle" && !data.bundleAccepted) fail(409, "Accept the combined assessment offer first.");
-        const errors = validateContact(body);
+        const errors = validateContact(body, { requireEmail: true });
         if (errors.length) fail(400, errors.join(" "));
         const c = await store.config();
         const initialArea = areaFor(body.zip, c);
@@ -1552,7 +1552,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
       if (method === "POST" && pathname === "/api/requests") {
         await rate(req, "requests", 10, 600_000);
         const { token, data } = await session(req), body = await readBody(req);
-        const errors = validateContact(body, { address: false });
+        const errors = validateContact(body, { address: false, requireEmail: true });
         if (errors.length) fail(400, errors.join(" "));
         if (typeof body.message !== "string" || body.message.trim().length < 3 || body.message.length > 4000) fail(400, "Include a short description of the request.");
         if (typeof body.idempotencyKey !== "string" || !/^[a-zA-Z0-9_-]{16,100}$/.test(body.idempotencyKey)) fail(400, "A valid request identifier is required.");

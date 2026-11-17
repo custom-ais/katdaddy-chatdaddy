@@ -11,6 +11,7 @@ import { api, ApiError, saveBlob, saveText } from '../lib/api';
 import { renderAppointmentCard } from './appointmentCard';
 import { money, phoenixDate, properName } from '../../shared/domain.mjs';
 import { CODE_DIGITS } from '../../shared/verification-code.mjs';
+import { EMAIL_PRIVACY, EMAIL_PRIVACY_SHORT } from '../../shared/email-privacy.mjs';
 
 const TZ = 'America/Phoenix';
 // logged: the server already saved it in BOB activity (a /api/chat turn or restored history).
@@ -408,7 +409,8 @@ const contactPrompt = (step: ContactStep, d: any, cfg?: any): string => {
   switch (step) {
     case 'name': return 'To reserve your appointment slot, what is your first and last name?';
     // With customer texts off, email is the only way the confirmation reaches them: say so.
-    case 'email': return `${first ? `Thanks, ${first}. ` : ''}${cfg?.textMessages ? 'What is the best email address for booking contact and optional email verification?' : "What email should I send your appointment confirmation to?"}`;
+    // Required: it's where the confirmation goes. Say plainly how it's (not) used.
+    case 'email': return `${first ? `Thanks, ${first}. ` : ''}What's your email address? Your appointment confirmation goes there${cfg?.textMessages ? ', and you can use it to verify instead of a text' : ''}. ${EMAIL_PRIVACY}`;
     case 'phone': return cfg?.verificationChannels?.includes('email') ? `${d?.email ? 'Got it. ' : ''}What is your callback phone number (mobile or landline)? You can verify by email instead of text.` : `${d?.email ? 'Got it. ' : ''}What is your mobile phone number?${cfg?.phoneVerification === false ? '' : " We'll text a code to confirm it."}`;
     case 'sms': return `Understood. Is it okay to send automated text updates and technician arrival notifications to ${d?.phone || 'this number'}? Not marketing. Message and data rates may apply; reply STOP anytime.`;
     case 'address': return 'Thank you. What is the street address for the service location? Include a unit number if there is one.';
@@ -474,7 +476,7 @@ function RequestForm({ token, session, onDone }: { token: string; session: any; 
           <label className="text-xs font-bold text-slate-700">Full name<input className={input} required autoComplete="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
           {commercial && <label className="text-xs font-bold text-slate-700">Business or property name (optional)<input className={input} autoComplete="organization" maxLength={200} value={business} onChange={(e) => setBusiness(e.target.value)} /></label>}
           <label className="text-xs font-bold text-slate-700">Callback number<PhoneInput className={input} required type="tel" autoComplete="tel" value={form.phone} onValueChange={(value) => setForm({ ...form, phone: value })} /></label>
-          <label className="text-xs font-bold text-slate-700">Email (optional)<input className={input} type="email" autoComplete="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label>
+          <label className="text-xs font-bold text-slate-700">Email<input className={input} type="email" required autoComplete="email" maxLength={254} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /><span className="block mt-1 text-[11px] font-medium text-slate-500 leading-snug">{EMAIL_PRIVACY}</span></label>
           <label className="text-xs font-bold text-slate-700">{commercial ? 'Property ZIP (optional)' : 'Service ZIP (optional)'}<input className={input} autoComplete="postal-code" inputMode="numeric" maxLength={5} value={form.zip} onChange={(e) => setForm({ ...form, zip: e.target.value })} /></label>
         </div>
         <label className="block text-xs font-bold text-slate-700">What do you need?<textarea className={`${input} min-h-24`} required maxLength={4000} placeholder={commercial ? 'Type of property (apartments, HOA, laundromat, business), how many units or dryers, and any problems you’ve noticed.' : undefined} value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} /></label>
@@ -1347,7 +1349,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
     setContactStep(step);
     const upsell = step === 'addons' && session?.upsell;
     say('model', contactPrompt(step, d, { ...config, upsellReady: Boolean(upsell) }));
-    setOptions(step === 'email' ? ['Skip'] : step === 'notes' ? ['No special notes', 'Gate code required'] : step === 'sms' ? ['Yes, SMS updates are fine', 'No, call or email only'] : step === 'addons' && !upsell ? [...addOnLabels(session), 'No add-ons'] : []);
+    setOptions(step === 'notes' ? ['No special notes', 'Gate code required'] : step === 'sms' ? ['Yes, SMS updates are fine', 'No, call or email only'] : step === 'addons' && !upsell ? [...addOnLabels(session), 'No add-ons'] : []);
     setMulti(step === 'addons' && !upsell);
     setSuggested('');
   };
@@ -1432,8 +1434,9 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       d.smsConsent = /^yes/i.test(value);
       say('user', value);
     } else if (step === 'email' && /^skip$/i.test(value)) {
-      d.email = '';
-      say('user', 'Skip');
+      say('user', value);
+      say('model', `An email address is needed to book: it's where your confirmation goes. ${EMAIL_PRIVACY}`);
+      return;
     } else if (step === 'notes' && /^(?:no special notes|no gate code|no\b)/i.test(value)) {
       d.notes = '';
       say('user', value);
@@ -1450,7 +1453,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       return nextContact('notes', d);
     } else {
       if (step === 'phone' && value.replace(/\D/g, '').length < 10) { say('user', value); say('model', 'That number looks short. Please enter a 10-digit callback number.'); return; }
-      if (step === 'email' && value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) { say('user', value); say('model', "That email doesn't look right. Enter it again, or choose Skip."); return; }
+      if (step === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) { say('user', value); say('model', "That email doesn't look right. Please enter it again, like name@example.com."); return; }
       if (step === 'address' && !/^\d+\s+\S/.test(value)) { say('user', value); say('model', 'Please include the house number and street, like “15420 W Bell Rd”.'); return; }
       if (step === 'name' && value.length < 2) return;
       d[step] = step === 'name' || step === 'city' ? properName(value) : value;
@@ -1704,7 +1707,7 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
         </form>
         </div>
         <div className="mt-2 flex items-center justify-between max-w-3xl mx-auto text-[11px] text-slate-300">
-          <span>BOB is Dryer Vent Squad's automated assistant</span>
+          <span>{contactStep === 'email' ? `🔒 ${EMAIL_PRIVACY_SHORT}` : "BOB is Dryer Vent Squad's automated assistant"}</span>
           <button className="font-bold text-slate-200 hover:text-white disabled:text-slate-400" onClick={() => send('Request a callback')} disabled={!ready || !!receipt || !!contactStep}>Contact the team</button>
         </div>
       </div>
