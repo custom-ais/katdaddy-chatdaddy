@@ -1144,7 +1144,9 @@ export function BookingBot({ embedded = false, preview = false }: { embedded?: b
       if (stored) { try { r = await api('/api/session', { token: stored }); r.token = stored; } catch { r = null; } }
       // On the commercial side, an earlier home-service chat (nothing booked) gives way to a commercial one.
       if (r && commercialPage && !r.session?.commercial && !r.receipt && !r.session?.bookingId) r = null;
-      if (!r) r = await api('/api/session', { method: 'POST', body: commercialPage ? { audience: 'commercial' } : {} });
+      // Which website the chat was opened on (the page around the widget), for BOB activity.
+      const site = (() => { try { const o = new URL(document.referrer).origin; return o !== window.location.origin ? o : ''; } catch { return ''; } })();
+      if (!r) r = await api('/api/session', { method: 'POST', body: { ...(commercialPage ? { audience: 'commercial' } : {}), ...(site ? { site } : {}) } });
       if (!mounted.current) return;
       setToken(r.token);
       try { sessionStorage.setItem(storageKey, r.token); } catch {}

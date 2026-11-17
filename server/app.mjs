@@ -943,6 +943,12 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
     if (!pending) {
       await step("owner_text", () => notifyOwner(appt, c));
       appt.notifications = await step("confirmations", () => sendConfirmations(appt, c));
+      // Whether the customer was told, and why not: otherwise a skipped confirmation leaves no trace.
+      {
+        const n = appt.notifications || {}, sent = (v) => ["accepted", "sent"].includes(v);
+        await store.log("confirmation.result", { appointmentId: appt.id, sms: n.sms || "skipped", smsReason: n.smsReason || "", email: n.email || "skipped", emailReason: n.emailReason || "" },
+          { sessionId: String(token || "").slice(0, 16), level: sent(n.sms) || sent(n.email) ? "info" : "warning" }).catch(() => {});
+      }
       await store.updateAppointment(appt);
       await step("report", () => sendBookingReport(appt, c));
       await step("dispatch", () => dispatch());
@@ -1026,7 +1032,10 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         if (body?.audience === "commercial") Object.assign(s, { commercial: "page", stage: "review", history: [{ role: "assistant", text: COMMERCIAL_WELCOME }] });
         await store.createSession(digest(token), s);
         req.bobActivity.sessionId = digest(token).slice(0, 16);
-        await record(req, "conversation.started", { stage: s.stage, ...(s.commercial ? { audience: "commercial" } : {}) });
+        // Where it was opened: the website around the chat (sent by the page) and the address it was
+        // loaded from. A deployment's own address is usually Vercel's automatic check, not a customer.
+        const site = typeof body?.site === "string" && /^https?:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(body.site) ? body.site.toLowerCase().slice(0, 200) : "";
+        await record(req, "conversation.started", { stage: s.stage, ...(s.commercial ? { audience: "commercial" } : {}), ...(site ? { site } : {}), host: String(req.headers.host || "").slice(0, 120) });
         if (s.commercial) await record(req, "conversation.message", { role: "assistant", text: COMMERCIAL_WELCOME, stage: s.stage, via: "rules" }, "info", clock() + 1);
         return send(201, { token, session: s, config: await publicConfig() });
       }
@@ -1094,7 +1103,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         const place = data.pending === "serviceAddress" || data.stage === "out_of_area" ? await lookupPlace(body.message, c) : null;
         // A reply is always stamped after the message it answers, so the conversation reads in order.
         const saidAt = clock();
-        await record(req, "conversation.message", { role: "user", text: redactCode(body.message), stage: data.stage }, "info", saidAt);
+        await record(req, "conversation.message", { role: "user", text: redactCode(body.message), stage: data.stage, ...(place?.found ? { address: place.formatted } : {}) }, "info", saidAt);
         const result = await chatTurn({ message: body.message, session: data, config: c, faqs: await store.get("faqs"), assistant: aiReady(c) ? selectedAssistant(c) : null, place });
         // Same-day emergency availability checks are gone: emergencies go to the office by phone.
         await store.saveSession(token, result.session);
@@ -1205,7 +1214,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
         data.driveFromBaseMin = where.driveFromBaseMin;
         data.driveFromBaseMiles = where.driveFromBaseMiles ?? null;
         data.coverageFingerprint = coverageFingerprint(c);
-        await record(req, "coverage.checked", { area, miles: data.driveFromBaseMiles, minutes: data.driveFromBaseMin, mode: c.serviceAreaMode });
+        await record(req, "coverage.checked", { area, miles: data.driveFromBaseMiles, minutes: data.driveFromBaseMin, mode: c.serviceAreaMode, address: String(where.location?.formatted || "").replace(/,? USA$/, "") });
         data.travelFeeCents = travelZone ? Math.max(c.travelZoneFeeCents || 0, where.travelFeeCents || 0) : where.travelFeeCents;
         data.travelZone = travelZone;
         let verification = { required: false };
@@ -1758,6 +1767,7 @@ export function createBobHandler({ store, jobber, geo, scheduler, assistant = nu
           await checkJobberAccounts(await currentJobberAccount());
           return send(200, await snapshot());
         }
+        if (method === "GET" && pathname === "/api/admin/conversations") return send(200, await store.conversations({ cursor: (url.searchParams.get("cursor") || "").slice(0, 80), limit: 20 }));
         if (method === "GET" && pathname === "/api/admin/activity") return send(200, await store.activity({ sessionId: (url.searchParams.get("session") || "").slice(0, 32), level: url.searchParams.get("level") || "", cursor: url.searchParams.get("cursor") || "", limit: 100 }));
         // The browser Maps key is separate from the server key: it's restricted to the dashboard's web
         // address in Google Cloud, so it's safe to send to the browser. Without it the map uses OpenStreetMap.

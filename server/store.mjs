@@ -266,6 +266,39 @@ export function createStore(db, { clock = Date.now } = {}) {
       return { items, nextCursor: rows.length > size && last ? `${last.created}:${last.id}` : null };
     },
 
+    /**
+     * The most recent conversations (by latest activity), each with every record oldest first, plus
+     * the records about its booking or request that aren't filed under it (texts, emails, alerts).
+     */
+    async conversations({ cursor = "", limit = 20 } = {}) {
+      const [before = "", beforeId = ""] = String(cursor).split(":");
+      const ms = /^\d+$/.test(before) ? Number(before) : null;
+      const size = Math.max(1, Math.min(50, Number(limit) || 20));
+      const heads = await q(`select sid, max(created) as last from (
+          select data->>'sessionId' as sid, created from bob.events where kind like 'activity.%' and coalesce(data->>'sessionId', '') <> ''
+        ) e group by sid having ($1::bigint is null or max(created) < $1 or (max(created) = $1 and sid < $2))
+        order by last desc, sid desc limit $3`, [ms, beforeId, size + 1]);
+      const page = heads.slice(0, size);
+      if (!page.length) return { conversations: [], nextCursor: null };
+      const shape = (r) => ({ id: r.id, kind: r.kind.slice(9), created: num(r.created), ...r.data });
+      const ids = page.map((h) => String(h.sid));
+      const rows = (await q(`select id,kind,created,data from bob.events where kind like 'activity.%' and data->>'sessionId' in (${ids.map((_, i) => `$${i + 1}`).join(",")}) order by created asc, id asc limit 5000`, ids)).map(shape);
+      // Texts, emails and alerts about a conversation's booking or request are filed by its ID.
+      const refs = [...new Set(rows.flatMap((r) => [r.details?.appointmentId, r.details?.approvalId, r.details?.requestId]).filter((v) => typeof v === "string" && v))].slice(0, 200);
+      const related = refs.length ? (await q(`select id,kind,created,data from bob.events where kind like 'activity.%' and coalesce(data->>'sessionId', '') = ''
+          and (data->'details'->>'appointmentId' in (${refs.map((_, i) => `$${i + 1}`).join(",")}) or data->'details'->>'approvalId' in (${refs.map((_, i) => `$${i + 1}`).join(",")}) or data->'details'->>'recordId' in (${refs.map((_, i) => `$${i + 1}`).join(",")}))
+          order by created asc, id asc limit 2000`, refs)).map(shape) : [];
+      const conversations = page.map((h) => {
+        const mine = rows.filter((r) => r.sessionId === h.sid);
+        const keys = new Set(mine.flatMap((r) => [r.details?.appointmentId, r.details?.approvalId, r.details?.requestId]).filter(Boolean));
+        const extra = related.filter((r) => [r.details?.appointmentId, r.details?.approvalId, r.details?.recordId].some((k) => k && keys.has(k)));
+        const items = [...mine, ...extra].sort((a, b) => a.created - b.created || (a.id < b.id ? -1 : 1));
+        return { sessionId: h.sid, last: num(h.last), items };
+      });
+      const tail = page.at(-1);
+      return { conversations, nextCursor: heads.length > size ? `${num(tail.last)}:${tail.sid}` : null };
+    },
+
     // ---- key/value: cache, locks, rate limits ---------------------------------------
     async kvGet(key) {
       const rows = await q("select value from bob.kv where key=$1 and (expires is null or expires>$2)", [key, clock()]);
