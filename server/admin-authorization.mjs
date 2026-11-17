@@ -25,6 +25,7 @@ const routes = [
   ['GET', /^\/api\/admin\/jobber\/(?:connect|users)$/, ['integrations.manage']],
   ['POST', /^\/api\/admin\/jobber\/(?:disconnect|client-hub|client-hub\/identity)$/, ['integrations.manage']],
   ['GET', /^\/api\/admin\/activity$/, ['activity.view','finance.view']],
+  ['GET', /^\/api\/admin\/conversations$/, ['activity.view','finance.view']],
   ['POST', /^\/api\/admin\/service-area\/map$/, ['settings.coverage.view','settings.coverage.manage']],
   ['POST', /^\/api\/admin\/geo\/check$/, ['settings.coverage.view','settings.coverage.manage']],
   ['POST', /^\/api\/admin\/templates\/preview$/, ['settings.templates.view','settings.templates.manage','finance.view']],
@@ -341,6 +342,7 @@ export function projectAdminResponse(principal,method,path,body) {
   if (path === '/api/admin/password') return pick(body,['changed']);
   if (path === '/api/admin/integration-accounts') return projectIntegrations({accounts:body},principal).accounts || {};
   if (path === '/api/admin/activity' && hasAll(principal,['activity.view','finance.view'])) return clone(body);
+  if (path === '/api/admin/conversations' && hasAll(principal,['activity.view','finance.view'])) return clone(body);
   if (path === '/api/admin/templates/preview' && hasAll(principal,['settings.templates.manage','finance.view'])) return pick(body,['html','text','subject']);
   if (path === '/api/admin/service-area/map') return {base:{...point(body?.base),...pick(body?.base,['formatted'])},points:list(body?.points).map(row => ({...point(row),...pick(row,['miles','area'])})),generatedAt:body?.generatedAt,limits:pick(body?.limits,['standard','travel'])};
   if (path === '/api/admin/geo/check') return {...pick(body,['ok','reason','zipApproved','area','driveFromBaseMiles','driveFromBaseMin','distanceMethod']),location:point(body?.location),territory:pick(body?.territory,['city','zone','micro','corridor']),...(finance(principal)?pick(body,['travelFeeCents']):{})};

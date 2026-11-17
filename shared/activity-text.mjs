@@ -282,6 +282,21 @@ function describeKind(kind, d) {
   switch (kind) {
     case "jobber.calendar_unavailable":
       return { title: "BOB couldn't read tasks and events from Jobber", detail: `${str(d.reason) ? `${str(d.reason)} ` : ""}Until this is fixed, BOB still avoids Jobber visits and assessments, but not tasks or events (like time off or meetings). Send this to support.`, tone: "problem" };
+    case "confirmation.result": {
+      const sent = (v) => ["accepted", "sent"].includes(v);
+      const why = {
+        no_consent: "the customer didn't agree to texts", not_configured_or_disabled: "confirmation texts are off or texting isn't set up", missing_phone: "no phone number",
+        sms_scope_owner_alerts_only: "texting is limited to owner alerts", no_email: "no email given", email_confirmations_off: "confirmation emails are off in Settings",
+        disabled_or_not_configured: "email isn't set up", configuration_unavailable: "BOB couldn't read its settings", not_confirmed: "the booking isn't confirmed yet",
+      };
+      const state = (v, reason, what) => sent(v) ? `${what}: sent` : v === "failed_or_uncertain" ? `${what}: may not have gone out` : v === "rejected" ? `${what}: refused by the ${what.toLowerCase()} service` : `${what}: not sent${why[reason] ? ` (${why[reason]})` : reason ? ` (${plainCode(reason)})` : ""}`;
+      const texted = sent(d.sms), emailed = sent(d.email);
+      return {
+        title: texted && emailed ? "The customer was sent a booking confirmation by text and email" : texted ? "The customer was sent a booking confirmation by text" : emailed ? "The customer was sent a booking confirmation by email" : "The customer wasn't sent a booking confirmation",
+        detail: `${state(d.sms, d.smsReason, "Text")}. ${state(d.email, d.emailReason, "Email")}.${texted || emailed ? "" : " Consider calling them to confirm."}`,
+        tone: texted || emailed ? "good" : "attention",
+      };
+    }
     case "conversation.started":
       return d.audience === "commercial"
         ? { title: "A customer opened BOB on the commercial side of the website", detail: "BOB doesn't book commercial jobs. It only collects their details and needs for the team.", tone: "info" }

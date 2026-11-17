@@ -109,11 +109,28 @@ test('the saved level decides how serious an entry looks, and odd records never 
 async function loadPage() {
   const code = ts.transpileModule(await source('src/admin/ActivityLogPage.tsx'), { compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText;
   const ui = { ErrorNote: ({ children }) => React.createElement('p', null, children), Field: ({ label, children }) => React.createElement('label', null, label, children), inputClass: '', secondaryButton: '' };
-  const deps = { '../lib/api': { api: async () => ({}), saveText: () => {} }, '../../shared/activity-text.mjs': activityText, './ui': ui };
+  const deps = { '../lib/api': { api: async () => ({}), saveText: () => {} }, '../../shared/activity-text.mjs': activityText, '../../shared/conversation-summary.mjs': await import('../shared/conversation-summary.mjs'), './ui': ui };
   const out = {};
   new Function('require', 'exports', code)((id) => deps[id] || require(id), out);
   return out;
 }
+
+test('a conversation card shows when, where, how it ended and where the customer stopped', async () => {
+  const { ConversationCard } = await loadPage();
+  const { summarizeConversation } = await import('../shared/conversation-summary.mjs');
+  const at = Date.parse('2026-11-16T23:12:00Z');
+  const items = [
+    { id: 'a', kind: 'conversation.started', created: at, details: { stage: 'welcome', site: 'https://dryerventsquadaz.com' } },
+    { id: 'b', kind: 'conversation.message', created: at + 1000, details: { role: 'user', text: '15420 W Bell Rd, Surprise', stage: 'evaluating' } },
+    { id: 'c', kind: 'conversation.message', created: at + 2000, details: { role: 'assistant', text: 'What is your callback phone number?', stage: 'contact' } },
+  ];
+  const html = renderToStaticMarkup(React.createElement(ConversationCard, { sessionId: 's1', items, summary: summarizeConversation(items), open: false, onToggle: () => {} }));
+  assert.match(html, /Mon, Nov 16, 4:12 PM · 15420 W Bell Rd, Surprise/);
+  assert.match(html, />Not booked</);
+  assert.match(html, /Stopped while entering contact details\. BOB(&#x27;|')s last message: “What is your callback phone number\?”/);
+  assert.match(html, /opened on dryerventsquadaz\.com/);
+  assert.doesNotMatch(html, /conversation\.message/, 'closed: no raw records');
+});
 
 test('the Activity page shows the plain sentence and keeps the raw record under technical details', async () => {
   const { ActivityEntry, dayHeading } = await loadPage();

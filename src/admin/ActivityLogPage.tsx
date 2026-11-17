@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AlertTriangle, CheckCircle2, Copy, Download, Info, Loader2, MessageSquare, RefreshCw, Search, X, XCircle } from 'lucide-react';
+import { Activity, AlertTriangle, CheckCircle2, ChevronDown, Copy, Download, Info, Loader2, MessageSquare, RefreshCw, Search, X, XCircle } from 'lucide-react';
 import { api, saveText } from '../lib/api';
 import { describeActivity } from '../../shared/activity-text.mjs';
+import { summarizeConversation, conversationTitle } from '../../shared/conversation-summary.mjs';
 import { ErrorNote, Field, inputClass, secondaryButton } from './ui';
 
 const AZ = 'America/Phoenix';
@@ -78,7 +79,8 @@ export function ActivityEntry({ item, showConversation, onShowConversation }: { 
   </article>;
 }
 
-export function ActivityLogPage() {
+/** Every record, newest first, with filters: the original view. */
+function EverythingView() {
   const [items, setItems] = useState<Item[]>([]), [cursor, setCursor] = useState<string | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const [session, setSession] = useState(''), [filter, setFilter] = useState(''), [level, setLevel] = useState(''), [showRoutine, setShowRoutine] = useState(false);
   const generation = useRef(0);
@@ -110,8 +112,8 @@ export function ActivityLogPage() {
     return out;
   }, [shown]);
   const download = () => saveText(`bob-activity-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ exportedAt: new Date().toISOString(), loadedRecords: items.length, hasMore: Boolean(cursor), items: items.map((item) => ({ summary: describeActivity(item).title, ...item })) }, null, 2), 'application/json');
-  return <div className="space-y-5 animate-in">
-    <div className="flex flex-wrap justify-between gap-3 items-start"><div><h1 className="text-2xl font-black text-slate-900 flex items-center gap-2"><Activity className="text-orange-500" />BOB activity</h1><p className="text-sm text-slate-500 mt-1 max-w-2xl">Everything BOB has done: customer chats, bookings, texts and emails it sent, and anything that went wrong. Newest first, in Arizona time.</p></div><div className="flex gap-2"><button className={secondaryButton} onClick={() => void load()} disabled={busy}><RefreshCw size={16} />Refresh</button><button className={secondaryButton} disabled={!items.length} onClick={download} title="Saves what's loaded below as a file you can send to support"><Download size={16} />Download for support</button></div></div>
+  return <div className="space-y-5">
+    <div className="flex flex-wrap justify-between gap-3 items-center"><p className="text-sm text-slate-500">Every record, newest first.</p><div className="flex gap-2"><button className={secondaryButton} onClick={() => void load()} disabled={busy}><RefreshCw size={16} />Refresh</button><button className={secondaryButton} disabled={!items.length} onClick={download} title="Saves what's loaded below as a file you can send to support"><Download size={16} />Download for support</button></div></div>
     <form className="flex flex-wrap items-end gap-3 bg-white border border-slate-200 p-4 rounded-2xl" onSubmit={(e) => { e.preventDefault(); setFilter(session.trim()); }}>
       <div className="min-w-0 w-full sm:w-auto sm:flex-1"><Field label="Conversation" hint={'Leave blank to see everything, or choose "See this whole conversation" on any entry.'}><input className={inputClass} value={session} onChange={(e) => setSession(e.target.value)} placeholder="All conversations" /></Field></div>
       <Field label="Show"><select className={inputClass} value={level} onChange={(e) => setLevel(e.target.value)}><option value="">Everything</option><option value="error">Problems only</option><option value="warning">Things worth a look</option><option value="info">Normal activity</option></select></Field>
@@ -126,5 +128,79 @@ export function ActivityLogPage() {
     {days.map((day) => <section key={day.heading} className="space-y-3"><h2 className="text-xs font-extrabold uppercase tracking-wide text-slate-500 pt-2">{day.heading}</h2>{day.items.map((item) => <ActivityEntry key={item.id} item={item} showConversation={!filter} onShowConversation={openConversation} />)}</section>)}
     {hidden > 0 && !!shown.length && <p className="text-xs text-slate-500 text-center">{hidden} behind-the-scenes step{hidden === 1 ? '' : 's'} hidden. <button type="button" className="font-bold text-blue-700 hover:underline" onClick={() => setShowRoutine(true)}>Show them</button></p>}
     {cursor && <button className={secondaryButton} disabled={busy} onClick={() => void load(cursor)}>{busy ? 'Loading…' : 'Load older activity'}</button>}
+  </div>;
+}
+
+type Conversation = { sessionId: string; last: number; items: Item[] };
+type Summary = ReturnType<typeof summarizeConversation>;
+
+/** One conversation: its title, how it ended, and (opened) everything said and done, in order. */
+export function ConversationCard({ sessionId, items, summary, open, onToggle }: { sessionId: string; items: Item[]; summary: Summary; open: boolean; onToggle: () => void }) {
+  const tone = TONES[summary.result.tone as keyof typeof TONES] || TONES.info;
+  const [showRoutine, setShowRoutine] = useState(false), [copied, setCopied] = useState(false);
+  const shown = items.filter((item) => showRoutine || !describeActivity(item).routine);
+  const told = summary.confirmation ? describeActivity({ kind: 'confirmation.result', details: summary.confirmation }).detail : '';
+  const minutes = Number.isFinite(summary.start) && Number.isFinite(summary.end) ? Math.max(1, Math.round((summary.end - summary.start) / 60_000)) : null;
+  const copy = async () => { try { await navigator.clipboard.writeText(`${conversationTitle(summary)}\n${summary.result.title}\n\n${conversationText(shown)}`); setCopied(true); setTimeout(() => setCopied(false), 2500); } catch {} };
+  return <article className={`border rounded-2xl ${tone.card}`}>
+    <button type="button" aria-expanded={open} aria-controls={`conversation-${sessionId}`} onClick={onToggle} className="w-full text-left p-4 flex items-start gap-3">
+      <tone.Icon size={20} className={`mt-0.5 shrink-0 ${tone.icon}`} aria-hidden="true" />
+      <span className="min-w-0 flex-1 space-y-1 block">
+        <span className="block text-sm font-extrabold text-slate-900">{conversationTitle(summary)}</span>
+        <span className="block text-sm font-bold text-slate-800">{summary.result.title}</span>
+        {summary.stopped && <span className="block text-sm text-slate-600">Stopped {summary.stopped.where}.{summary.stopped.lastBot && <> BOB's last message: “{summary.stopped.lastBot}”</>}</span>}
+        {told && <span className="block text-sm text-slate-600">{told}</span>}
+        <span className="block text-xs text-slate-500">{[summary.name, `${summary.messages} message${summary.messages === 1 ? '' : 's'}`, minutes && `${minutes} min`, summary.openedFrom && `opened on ${summary.openedFrom}`].filter(Boolean).join(' · ')}</span>
+      </span>
+      <ChevronDown size={18} className={`mt-0.5 shrink-0 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} aria-hidden="true" />
+    </button>
+    {open && <div id={`conversation-${sessionId}`} className="border-t border-slate-200 bg-white/60 rounded-b-2xl p-3 sm:p-4 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        <label className="flex items-center gap-2 text-slate-600 cursor-pointer"><input type="checkbox" className="size-4 accent-orange-500" checked={showRoutine} onChange={(e) => setShowRoutine(e.target.checked)} />Show behind-the-scenes steps</label>
+        <button type="button" className="inline-flex items-center gap-1 font-bold text-blue-700 hover:underline" onClick={() => void copy()}><Copy size={14} />{copied ? 'Copied' : 'Copy conversation'}</button>
+      </div>
+      {shown.map((item) => <ActivityEntry key={item.id} item={item} />)}
+    </div>}
+  </article>;
+}
+
+/** Customer conversations, most recent first, one card each. */
+function ConversationsView() {
+  const [list, setList] = useState<Conversation[]>([]), [cursor, setCursor] = useState<string | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [open, setOpen] = useState(''), [showEmpty, setShowEmpty] = useState(false);
+  const generation = useRef(0);
+  const load = useCallback(async (more = '') => {
+    const current = ++generation.current;
+    setBusy(true); setError('');
+    try { const r = await api(`/api/admin/conversations${more ? `?cursor=${encodeURIComponent(more)}` : ''}`); if (current !== generation.current) return; setList((old) => more ? [...old, ...r.conversations] : r.conversations); setCursor(r.nextCursor); }
+    catch (e) { if (current === generation.current) setError((e as Error).message); } finally { if (current === generation.current) setBusy(false); }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+  const rows = useMemo(() => list.map((c) => ({ ...c, summary: summarizeConversation(c.items) })), [list]);
+  const used = rows.filter((r) => r.summary.result.kind !== 'empty'), unused = rows.filter((r) => r.summary.result.kind === 'empty');
+  const download = () => saveText(`bob-conversations-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ exportedAt: new Date().toISOString(), conversations: rows.map((r) => ({ title: conversationTitle(r.summary), ...r.summary, sessionId: r.sessionId, items: r.items.map((item) => ({ summary: describeActivity(item).title, ...item })) })) }, null, 2), 'application/json');
+  return <div className="space-y-3">
+    <div className="flex flex-wrap justify-between gap-3 items-center"><p className="text-sm text-slate-500">Each customer chat, most recent first. Open one to read it start to finish.</p><div className="flex gap-2"><button className={secondaryButton} onClick={() => void load()} disabled={busy}><RefreshCw size={16} />Refresh</button><button className={secondaryButton} disabled={!rows.length} onClick={download} title="Saves the conversations below as a file you can send to support"><Download size={16} />Download for support</button></div></div>
+    {error && <ErrorNote>{error}</ErrorNote>}
+    {busy && !rows.length && <p role="status" className="flex items-center gap-2 text-slate-500"><Loader2 className="animate-spin" size={18} />Loading conversations…</p>}
+    {!busy && !rows.length && !error && <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-slate-500">No conversations yet. They appear here as customers use BOB.</div>}
+    {used.map((r) => <ConversationCard key={r.sessionId} sessionId={r.sessionId} items={r.items} summary={r.summary} open={open === r.sessionId} onToggle={() => setOpen(open === r.sessionId ? '' : r.sessionId)} />)}
+    {unused.length > 0 && <div className="bg-white border border-slate-200 rounded-2xl p-4 text-sm text-slate-600">
+      <button type="button" className="font-bold text-slate-800 inline-flex items-center gap-1" aria-expanded={showEmpty} onClick={() => setShowEmpty(!showEmpty)}><ChevronDown size={16} className={showEmpty ? 'rotate-180' : ''} aria-hidden="true" />{unused.length} chat{unused.length === 1 ? ' was' : 's were'} opened but never used</button>
+      <p className="text-xs text-slate-500 mt-1">Nothing was typed or tapped. Usually an automatic check (Vercel opens each new version of the site once) or someone who opened the chat and closed it.</p>
+      {showEmpty && <ul className="mt-2 space-y-1 text-xs">{unused.map((r) => <li key={r.sessionId}>{conversationTitle(r.summary)}{r.summary.openedFrom ? ` · opened on ${r.summary.openedFrom}` : ''}</li>)}</ul>}
+    </div>}
+    {cursor && <button className={secondaryButton} disabled={busy} onClick={() => void load(cursor)}>{busy ? 'Loading…' : 'Load older conversations'}</button>}
+  </div>;
+}
+
+export function ActivityLogPage() {
+  const [view, setView] = useState<'conversations' | 'everything'>(() => { try { return localStorage.getItem('bob.activity.view') === 'everything' ? 'everything' : 'conversations'; } catch { return 'conversations'; } });
+  const choose = (next: 'conversations' | 'everything') => { setView(next); try { localStorage.setItem('bob.activity.view', next); } catch {} };
+  const tab = (key: 'conversations' | 'everything', label: string) => <button type="button" role="tab" aria-selected={view === key} onClick={() => choose(key)} className={`px-4 py-2 rounded-lg text-sm font-bold transition-colors ${view === key ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}>{label}</button>;
+  return <div className="space-y-5 animate-in">
+    <div><h1 className="text-2xl font-black text-slate-900 flex items-center gap-2"><Activity className="text-orange-500" />BOB activity</h1><p className="text-sm text-slate-500 mt-1 max-w-2xl">Customer chats, bookings, texts and emails BOB sent, and anything that went wrong. Arizona time.</p></div>
+    <div role="tablist" aria-label="Activity view" className="inline-flex gap-1 rounded-xl border border-slate-200 bg-white p-1">{tab('conversations', 'Conversations')}{tab('everything', 'Everything')}</div>
+    {view === 'conversations' ? <ConversationsView /> : <EverythingView />}
   </div>;
 }
