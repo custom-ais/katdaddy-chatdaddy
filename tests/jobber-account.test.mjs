@@ -178,7 +178,7 @@ test("the Inbox shows only requests and approvals from the connected account's t
   await h.store.audit("jobber.connected", "jobber");
   h.advance(3_600_000);
   await h.store.insertRequest(request("REQ-NEW-UNSTAMPED"), "s2", "idem-new-request-0002");
-  const sent = await h.call("/api/requests", { method: "POST", token: await h.fresh(), body: { name: "Jane Doe", phone: "6235550188", message: "Please call me about a vent.", idempotencyKey: "account-test-request-0003" } });
+  const sent = await h.call("/api/requests", { method: "POST", token: await h.fresh(), body: { name: "Jane Doe", phone: "6235550188", email: "jane@example.test", message: "Please call me about a vent.", idempotencyKey: "account-test-request-0003" } });
   assert.ok([200, 201].includes(sent.status), JSON.stringify(sent.data));
   const stamped = (await h.store.requests()).find((r) => r.name === "Jane Doe");
   assert.equal(stamped.jobberAccountId, "ACCOUNT-A", "new requests record the account");

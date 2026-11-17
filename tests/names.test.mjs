@@ -52,7 +52,7 @@ test("a booking typed in lowercase is saved, sent to Jobber and shown capitalize
 test("a callback request keeps the capitalized name too", async (t) => {
   const h = await harness(t);
   const token = await h.fresh();
-  const sent = await h.call("/api/requests", { method: "POST", token, body: { name: "JANE DOE", phone: "6235550188", message: "Please call me about a vent.", idempotencyKey: "names-test-request-0001" } });
+  const sent = await h.call("/api/requests", { method: "POST", token, body: { name: "JANE DOE", phone: "6235550188", email: "jane@example.test", message: "Please call me about a vent.", idempotencyKey: "names-test-request-0001" } });
   assert.ok([200, 201].includes(sent.status), JSON.stringify(sent.data));
   assert.equal((await h.store.requests()).at(-1).name, "Jane Doe");
 });

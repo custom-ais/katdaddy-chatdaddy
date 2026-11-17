@@ -1,6 +1,7 @@
 import { DEFAULT_MESSAGE_TEMPLATES, validateMessageTemplates } from './message-templates.mjs';
 import {SERVICE_CATALOG,RETIRED_FAMILIES,effectiveFamily,lineForService,addOnLines,RECENT_SERVICE_DISCOUNT,RECENT_SERVICE_DISCOUNT_CENTS,DEFAULT_UPSELLS,bundleSavings} from './catalog.mjs';
 import {difficultyMinutes} from './airflow.mjs';
+import {EMAIL_REQUIRED} from './email-privacy.mjs';
 import {ARRIVAL_SPACINGS,validOpenWeek} from './business-hours.mjs';
 import {COVERAGE_VERSION,COVERAGE_IN,COVERAGE_TRAVEL,validPoint,customCoverage} from './coverage.mjs';
 // Cleaning packages get extra time when the answers point to a restricted or severe vent.
@@ -241,11 +242,14 @@ export function properName(value) {
   return capWord(word);
  }).join(' ');
 }
-export function validateContact(data,{address=true}={}) {
+// requireEmail: customers booking or sending a request must give one (office entries needn't).
+export function validateContact(data,{address=true,requireEmail=false}={}) {
  const errors=[];
  if(typeof data.name!=='string'||data.name.trim().length<2||data.name.length>100)errors.push('Enter your full name.');
  if(!normalizePhone(data.phone))errors.push('Enter a valid 10-digit callback number.');
- if(data.email && (typeof data.email!=='string'||data.email.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)))errors.push('Enter a valid email or leave it blank.');
+ const email=typeof data.email==='string'?data.email.trim():data.email;
+ if(requireEmail&&!email)errors.push(EMAIL_REQUIRED);
+ else if(email && (typeof email!=='string'||email.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)))errors.push(requireEmail?'Enter a valid email address.':'Enter a valid email or leave it blank.');
  if(address){
   if(typeof data.address!=='string'||!/^\d+\s+\S/.test(data.address.trim())||data.address.length>250)errors.push('Enter the service street address, including unit if applicable.');
   if(typeof data.city!=='string'||data.city.trim().length<2||data.city.length>100)errors.push('Enter the service city.');
