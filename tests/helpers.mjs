@@ -87,6 +87,11 @@ export function fakeJobber({ connected = true } = {}) {
       if (!j.isConnected) throw new JobberNotConnected();
       return j.visits.filter((v) => v.start >= from && v.start < to).map((v) => ({ ...v }));
     },
+    calendar: [],
+    async readCalendarItems(from, to) {
+      if (j.calendarError) throw j.calendarError;
+      return j.calendar.filter((v) => v.end > from && v.start < to).map((v) => ({ ...v }));
+    },
     assessments: [],
     async readAssessments(from, to) {
       if (!j.isConnected) throw new JobberNotConnected();

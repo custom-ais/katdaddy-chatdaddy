@@ -280,6 +280,8 @@ function describeKind(kind, d) {
   const [family, ...rest] = kind.split(".");
   const status = rest.join(".");
   switch (kind) {
+    case "jobber.calendar_unavailable":
+      return { title: "BOB couldn't read tasks and events from Jobber", detail: `${str(d.reason) ? `${str(d.reason)} ` : ""}Until this is fixed, BOB still avoids Jobber visits and assessments, but not tasks or events (like time off or meetings). Send this to support.`, tone: "problem" };
     case "conversation.started":
       return d.audience === "commercial"
         ? { title: "A customer opened BOB on the commercial side of the website", detail: "BOB doesn't book commercial jobs. It only collects their details and needs for the team.", tone: "info" }
