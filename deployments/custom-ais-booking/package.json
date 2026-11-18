@@ -1,0 +1,1 @@
+{"name":"custom-ais-dvswest-booking","private":true,"type":"module","scripts":{"build":"node build.mjs","test":"node build.mjs && node --test test/*.test.mjs"}}
