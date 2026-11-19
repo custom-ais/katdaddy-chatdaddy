@@ -55,7 +55,10 @@ test('tight CSP permits only the bot frame; web share is delegated without secre
   assert.match(c,/default-src 'none'/);assert.match(c,/frame-src https:\/\/katdaddy-bookingbot\.vercel\.app/);
   assert.match(c,/script-src 'self'/);assert.match(c,/connect-src 'none'/);assert.doesNotMatch(c,/unsafe-inline|unsafe-eval/);
   assert.match(r.headers.get('permissions-policy'),/web-share=\(self "https:\/\/katdaddy-bookingbot\.vercel\.app"\)/);
-  assert.deepEqual(config.compatibility_flags,['global_fetch_strictly_public','nodejs_compat']);
+  assert.deepEqual(config.compatibility_flags,['nodejs_compat']);
+  // global_fetch_strictly_public would send pass-through fetches back through this same wildcard route
+  // (Cloudflare error 1019) instead of to the main custom-ais-studio Worker, breaking sibling paths.
+  assert.ok(!config.compatibility_flags.includes('global_fetch_strictly_public'));
   assert.deepEqual(config.routes.map(r=>r.pattern),['custom-ais.com/dvswest/booking*']);
   assert.equal(config.observability.enabled,false);assert.equal(config.name,'custom-ais-dvswest-booking');
   assert.equal(config.bindings,undefined);assert.equal(config.vars,undefined);

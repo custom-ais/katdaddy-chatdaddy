@@ -3,7 +3,7 @@
   "main": "dist/worker.mjs",
   "account_id": "c0d77f921e906893f30b4ed560ff2280",
   "compatibility_date": "2026-11-18",
-  "compatibility_flags": ["global_fetch_strictly_public", "nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "preview_urls": false,
   "build": {"command":"node build.mjs"},

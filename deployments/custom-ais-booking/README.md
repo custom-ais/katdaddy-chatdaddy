@@ -18,7 +18,7 @@ Only known `start` values (`cleaning`, `repair`, `emergency`, `pest`, `question`
 
 ## Verification after deployment
 
-Check the page and slash form, scoped CSS/JS, CSP, and original Vercel URL. Check desktop/mobile sizing, opening, FAQ, deterministic chat answers/back, minimize/reopen, refresh restoration, and assets. Do not submit contact data, verification codes, callback requests, holds, or bookings in this limited smoke test. Verify an unrelated Custom-AIs page and similarly prefixed sibling still reach the existing site. The existing main Worker settings, including `global_fetch_strictly_public` and `nodejs_compat`, must remain intact; the same flags are specified on this separate Worker.
+Check the page and slash form, scoped CSS/JS, CSP, and original Vercel URL. Check desktop/mobile sizing, opening, FAQ, deterministic chat answers/back, minimize/reopen, refresh restoration, and assets. Do not submit contact data, verification codes, callback requests, holds, or bookings in this limited smoke test. Verify an unrelated Custom-AIs page and similarly prefixed sibling still reach the existing site. Leave the main `custom-ais-studio` Worker and its settings intact. Do not add `global_fetch_strictly_public` to this Worker: with it, the pass-through `fetch(request)` re-enters this same `/dvswest/booking*` route and fails with Cloudflare error 1019 ("Compute server error") instead of reaching the main site. Without it, same-zone pass-through goes to the `custom-ais-studio` Custom Domain Worker, as it already does for the `sms-consent` and `chatdaddy-landing` route Workers.
 
 ## Rollback
 
